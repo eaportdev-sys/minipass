@@ -379,7 +379,6 @@ app.post('/api/panel/upgrade', async (req, res) => {
     ], { cwd: REPO_DIR, detached: true, stdio: 'ignore' });
     builder.unref();
     res.json({ ok: true, pulled: pulled.trim(), target: sha, building: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/panel/upgrade-log', (req, res) => {
   try {
