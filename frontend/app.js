@@ -159,18 +159,17 @@ async function createApp() {
     name: v('name'), type: typeEl ? typeEl.value : 'static', dbs,
     repoUrl: v('repo'), domain: access === 'domain' ? v('domain') : ''
   };
+  // site-owned connection: fresh token travels with this build only
+  const ghSel = document.getElementById('ghrepo');
+  if (ghSel.value) {
+    body.ghRepo = { repo: ghSel.value };
+    body.gitToken = document.getElementById('ghModalToken').value.trim();
+  } else if (v('repo')) {
+    const tok = document.getElementById('ghModalToken').value.trim();
+    if (tok) body.gitToken = tok;
+  }
   const r = await (await fetch('/api/apps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
   document.getElementById('out').textContent = JSON.stringify(r, null, 2);
-  // github repo picked: link it (sets repoUrl + auto-creates the push webhook)
-  const ghSel = document.getElementById('ghrepo');
-  const ghrepo = ghSel.value;
-  const ghlogin = ghSel.selectedOptions.length ? ghSel.selectedOptions[0].dataset.login : undefined;
-  if (!r.error && ghrepo) {
-    const link = await (await fetch('/api/github/link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appId: r.id, repo: ghrepo, login: ghlogin }) })).json();
-    document.getElementById('out').textContent = JSON.stringify({ app: r, github: link }, null, 2);
-    // code wasn't cloned at create (no URL yet) - pull it now via redeploy
-    if (link.ok) await fetch('/api/apps/' + r.id + '/deploy', { method: 'POST' });
-  }
   refresh();
   if (!r.error) closeCreate();
 }
@@ -198,39 +197,6 @@ async function detectType() {
     } else {
       toast((r.detected ? r.detected + ' has no template yet. ' : 'could not detect type. ') + (r.reason || r.error || ''), false);
     }
-  } catch {}
-}
-async function loadGhRepos() {
-  const sel = document.getElementById('ghrepo');
-  const row = document.getElementById('ghConnectRow');
-  const repoRow = document.getElementById('ghRepoRow');
-  const state = document.getElementById('ghConnState');
-  sel.innerHTML = '<option value="">GitHub repo…</option>';
-  row.style.display = 'none';
-  repoRow.style.display = 'none';
-  state.textContent = 'checking…';
-  try {
-    const st = await (await fetch('/api/github/status')).json().catch(() => null);
-    if (st && st.connected) {
-      state.textContent = 'connected: ' + st.logins.join(', ');
-      repoRow.style.display = 'block';
-    } else {
-      state.textContent = st ? 'not connected' : 'panel predates github support - upgrade first';
-      row.style.display = st ? 'block' : 'none';
-      return;
-    }
-  } catch { state.textContent = 'panel predates github support - upgrade first'; return; }
-  try {
-    const r = await fetch('/api/github/repos');
-    if (r.status === 404) return;
-    const data = await r.json();
-    if (data.error) { row.style.display = 'block'; repoRow.style.display = 'none'; return; }
-    const byAcct = {};
-    for (const x of (data.repos || [])) { (byAcct[x.account] = byAcct[x.account] || []).push(x); }
-    sel.innerHTML = '<option value="">GitHub repo…</option>' + Object.keys(byAcct).map(a =>
-      `<optgroup label="${a}">` + byAcct[a].map(x =>
-        `<option value="${x.full_name}" data-login="${a}">${x.full_name}${x.private ? ' (private)' : ''}</option>`).join('') + '</optgroup>').join('');
-    if ((data.errors || []).length) toast('some accounts failed: ' + data.errors.map(e => e.account).join(', '), false);
   } catch {}
 }
 async function ghStatus() {
@@ -276,11 +242,19 @@ async function saveToken(token) {
   if (!token) return null;
   return await (await fetch('/api/github/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })).json();
 }
-async function modalTokenSave() {
-  const input = document.getElementById('ghModalToken');
-  const r = await saveToken(input.value);
-  if (r && r.ok) { input.value = ''; toast('github connected as ' + r.login); loadGhRepos(); }
-  else if (r) toast(r.error || 'failed', false);
+let modalLogin = null;
+async function modalListRepos() {
+  // fresh token every build - preview WITHOUT saving to the shared pool
+  const token = document.getElementById('ghModalToken').value.trim();
+  if (!token) { toast('paste a token first', false); return; }
+  const r = await (await fetch('/api/github/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })).json();
+  if (r.error) { toast(r.error, false); return; }
+  modalLogin = r.login;
+  const sel = document.getElementById('ghrepo');
+  sel.innerHTML = '<option value="">GitHub repo…</option>' + (r.repos || []).map(x =>
+    `<option value="${x.full_name}" data-login="${r.login}">${x.full_name}${x.private ? ' (private)' : ''}</option>`).join('');
+  document.getElementById('ghRepoRow').style.display = 'block';
+  toast('token ok as ' + r.login + ' - pick a repo');
 }
 async function ghDisconnect(login) {
   await fetch('/api/github/disconnect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: login || undefined }) });
@@ -306,12 +280,17 @@ function openCreate() {
   document.getElementById('domain').value = '';
   document.getElementById('out').textContent = '';
   document.querySelector('input[name=access][value=local]').checked = true;
-  // never inherit the previous app: reset type, dbs and repo picker every open
+  // never inherit the previous app: reset type, dbs, token and repo picker every open.
+  // Every build connects fresh - the pool is never consulted here.
   document.querySelector('input[name=apptype][value=static]').checked = true;
   document.querySelectorAll('input[name=appdb]').forEach(c => { c.checked = false; });
-  document.getElementById('ghrepo').value = '';
+  document.getElementById('ghModalToken').value = '';
+  document.getElementById('ghrepo').innerHTML = '<option value="">GitHub repo…</option>';
+  document.getElementById('ghRepoRow').style.display = 'none';
+  document.getElementById('ghConnectRow').style.display = 'block';
+  document.getElementById('ghConnState').textContent = 'paste a fresh token for this site';
+  modalLogin = null;
   accessChanged();
-  loadGhRepos();
 }
 function closeCreate() { document.getElementById('modal').classList.remove('open'); }
 function toggleTheme() {

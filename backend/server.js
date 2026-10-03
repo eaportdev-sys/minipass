@@ -148,16 +148,57 @@ app.post('/api/apps', async (req, res) => {
     const used = new Set(existing.map(a => a.hostPort).filter(Boolean));
     let hostPort = parseInt(req.body.hostPort, 10) || 8000;
     while (used.has(hostPort) && hostPort < 9000) hostPort++;
+    // site-owned git connection: fresh token per build, validated BEFORE anything
+    // is created, stored on the site only - never the shared pool.
+    let finalRepoUrl = repoUrl || '';
+    let siteToken = String(req.body.gitToken || '').trim() || null;
+    let ghLink = null;
+    const ghRepo = req.body.ghRepo;
+    if (ghRepo && ghRepo.repo) {
+      if (!siteToken) return res.status(400).json({ error: 'repo picked but no site token pasted' });
+      const me = await gh.apiWith(siteToken, '/user')
+        .catch(() => { throw new Error('site token rejected by github - regenerate and repaste'); });
+      const parts = String(ghRepo.repo).split('/');
+      const info = await gh.apiWith(siteToken, `/repos/${parts[0]}/${parts[1]}`)
+        .catch(() => { throw new Error('token cannot read ' + ghRepo.repo + ' - check repo access on the token'); });
+      let head = null;
+      try {
+        const c = await gh.apiWith(siteToken, `/repos/${parts[0]}/${parts[1]}/commits/${encodeURIComponent(info.default_branch)}`);
+        head = c && c.sha;
+      } catch {}
+      finalRepoUrl = info.clone_url;
+      ghLink = { repo: info.full_name, branch: info.default_branch, login: me.login, sha: head, pollMinutes: 5, token: siteToken };
+    } else if (siteToken && finalRepoUrl) {
+      const m = finalRepoUrl.match(/github\.com[:/]([^/]+)\/([^/]+?)(\.git)?\/?$/i);
+      if (m) ghLink = { repo: `${m[1]}/${m[2]}`, branch: null, login: null, sha: null, pollMinutes: 5, token: siteToken };
+      else siteToken = null;
+    }
     const dbs = normDbs(req.body.dbs !== undefined ? req.body.dbs : db);
-    createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl, db: dbs, port, domain, hostPort });
+    createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain, hostPort, gitToken: siteToken });
     const db_ = load();
-    const meta = { id, type, repoUrl: repoUrl || '', db: dbs, domain: domain || '', token, hostPort, createdAt: new Date().toISOString() };
+    const meta = { id, type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: domain || '', token, hostPort, createdAt: new Date().toISOString() };
     db_.apps = db_.apps.filter(a => a.id !== id).concat([meta]);
     save(db_);
+    // auto webhook for site-token links (best effort - needs PANEL_URL reachable)
+    let webhookNote = 'manual - paste the webhook URL into repo Settings → Webhooks';
+    const base = (process.env.PANEL_URL || '').replace(/\/$/, '');
+    if (ghLink && ghLink.repo && siteToken && base) {
+      try {
+        const [o, n] = ghLink.repo.split('/');
+        await gh.apiWith(siteToken, `/repos/${o}/${n}/hooks`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: 'web', active: true, events: ['push'],
+            config: { url: `${base}/webhook/${id}?token=${token}`, content_type: 'json', secret: token, insecure_ssl: '0' }
+          })
+        });
+        webhookNote = 'auto-created - push to deploy';
+      } catch {}
+    }
     // build async so UI returns fast
     sh(`${COMPOSE_BIN} up --build -d`, appDir(APPS_DIR, id)).catch(e => console.error(e.message));
-    res.json({ ...pubApp(meta), localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}` });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    res.json({ ...pubApp(meta), localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote });
+  } catch (e) { res.status(500).json({ error: redactUrl(e.message) }); }
 });
 
 const redactUrl = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
@@ -235,6 +276,17 @@ app.get('/api/github/callback', async (req, res) => {
   } catch (e) { res.status(500).send('github connect failed: ' + e.message); }
 });
 app.post('/api/github/disconnect', (req, res) => { gh.clearAuth(req.body && req.body.login); res.json({ ok: true }); });
+// Preview a pasted token WITHOUT saving it: validates + lists repos for the
+// create flow, where every build brings a fresh, site-owned connection.
+app.post('/api/github/preview', async (req, res) => {
+  try {
+    const token = String((req.body && req.body.token) || '').trim();
+    if (!token) return res.status(400).json({ error: 'empty token' });
+    const me = await gh.apiWith(token, '/user');
+    const repos = await gh.apiWith(token, '/user/repos?per_page=100&sort=updated');
+    res.json({ login: me.login, repos: repos.map(r => ({ full_name: r.full_name, private: r.private, default_branch: r.default_branch, https: r.clone_url })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.post('/api/github/token', async (req, res) => {
   // LAN path: no OAuth App / callback / public URL needed. Fine-grained PAT with
   // Contents read-only + Webhooks read+write (+Metadata read-only) per account.

@@ -82,7 +82,7 @@ function dbService(db, name, svc, vol) {
   return { lines: [], compose: '', vol, url: null, info: null };
 }
 
-function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', port, domain, hostPort }) {
+function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', port, domain, hostPort, gitToken }) {
   const dir = appDir(appsDir, name);
   // resume allowed when a previous create died before writing compose (keys preserved)
   const resume = fs.existsSync(dir) && !fs.existsSync(path.join(dir, 'docker-compose.yml'));
@@ -93,10 +93,11 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   if (repoUrl) {
     const isSsh = /^(git@|ssh:\/\/)/i.test(repoUrl);
     // token injected in-memory only (stored repo URLs stay clean)
-    const { authUrl } = require('./github');
+    const { authUrl, authUrlWith } = require('./github');
+    const cloneUrl = isSsh ? repoUrl : (gitToken ? authUrlWith(repoUrl, gitToken) : authUrl(repoUrl));
     const redact = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
     try {
-      execSync(`git clone --depth 1 ${isSsh ? repoUrl : authUrl(repoUrl)} "${dir}/code"`, { stdio: 'pipe', env: isSsh ? appGitEnv(dir) : process.env });
+      execSync(`git clone --depth 1 ${cloneUrl} "${dir}/code"`, { stdio: 'pipe', env: isSsh ? appGitEnv(dir) : process.env });
     } catch (e) {
       // don't leave a half-created app behind (retry would hit "app exists");
       // keep per-app deploy keys so the key can still be shown + registered

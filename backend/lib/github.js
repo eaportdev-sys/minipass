@@ -68,9 +68,15 @@ function clearAuth(login) {
 function authUrl(url, login) {
   const a = getAuth(login);
   if (!a || !url) return url;
-  const m = String(url).match(/^https:\/\/([^@]+@)?github\.com\/(.+)$/i);
-  if (!m || m[1]) return url;
-  return `https://x-access-token:${a.access_token}@github.com/${m[2]}`;
+  return authUrlWith(url, a.access_token);
+}
+
+// Inject an explicit token (site-owned connection at create time).
+function authUrlWith(url, token) {
+  if (!token || !url) return url;
+  const m = String(url).match(/^https:\/\/github\.com\/(.+)$/i);
+  if (!m) return url;
+  return `https://x-access-token:${token}@github.com/${m[1]}`;
 }
 
 async function apiAs(login, p, opts = {}) {
@@ -119,4 +125,4 @@ async function api(p, opts = {}) {
   return apiAs(null, p, opts);
 }
 
-module.exports = { getAuth, getLogins, saveAuth, clearAuth, authUrl, authUrlFor, api, apiAs, apiWith, apiFor, tokenFor, tokenFile };
+module.exports = { getAuth, getLogins, saveAuth, clearAuth, authUrl, authUrlWith, authUrlFor, api, apiAs, apiWith, apiFor, tokenFor, tokenFile };
