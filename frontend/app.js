@@ -95,15 +95,44 @@ async function createApp() {
   const body = { name: v('name'), type: typeEl ? typeEl.value : 'static', dbs, repoUrl: v('repo'), domain: v('domain') };
   const r = await (await fetch('/api/apps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
   document.getElementById('out').textContent = JSON.stringify(r, null, 2);
+  // github repo picked: link it (sets repoUrl + auto-creates the push webhook)
+  const ghrepo = document.getElementById('ghrepo').value;
+  if (!r.error && ghrepo) {
+    const link = await (await fetch('/api/github/link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appId: r.id, repo: ghrepo }) })).json();
+    document.getElementById('out').textContent = JSON.stringify({ app: r, github: link }, null, 2);
+    // code wasn't cloned at create (no URL yet) - pull it now via redeploy
+    if (link.ok) await fetch('/api/apps/' + r.id + '/deploy', { method: 'POST' });
+  }
   refresh();
   if (!r.error) closeCreate();
+}
+async function loadGhRepos() {
+  const sel = document.getElementById('ghrepo');
+  sel.innerHTML = '<option value="">—</option>';
+  try {
+    const repos = await (await fetch('/api/github/repos')).json();
+    if (repos.error) return;
+    sel.innerHTML = '<option value="">—</option>' + repos.map(r =>
+      `<option value="${r.full_name}">${r.full_name}${r.private ? ' (private)' : ''}</option>`).join('');
+  } catch {}
+}
+async function ghStatus() {
+  try {
+    const s = await (await fetch('/api/github/status')).json();
+    document.getElementById('ghStatus').textContent = s.connected ? ('connected as ' + s.login) : 'not connected';
+  } catch { document.getElementById('ghStatus').textContent = 'unknown'; }
+}
+function ghConnect() { location.href = '/api/github/login'; }
+async function ghDisconnect() {
+  await fetch('/api/github/disconnect', { method: 'POST' });
+  ghStatus();
 }
 function dbLabel(a) { return [].concat(a.db || []).join('+') || 'none'; }
 function showView(view) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + view));
   document.querySelectorAll('.navitem').forEach(n => n.classList.toggle('active', n.dataset.view === view));
 }
-function openCreate() { document.getElementById('modal').classList.add('open'); }
+function openCreate() { document.getElementById('modal').classList.add('open'); loadGhRepos(); }
 function closeCreate() { document.getElementById('modal').classList.remove('open'); }
 function toggleTheme() {
   const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
@@ -354,3 +383,9 @@ function openTermGlobal() {
 }
 refresh();
 version();
+ghStatus();
+if (new URLSearchParams(location.search).get('github') === 'connected') {
+  toast('github connected - pick a repo at create time');
+  showView('panel');
+  history.replaceState(null, '', location.pathname);
+}

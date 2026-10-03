@@ -84,19 +84,30 @@ function dbService(db, name, svc, vol) {
 
 function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', port, domain, hostPort }) {
   const dir = appDir(appsDir, name);
-  if (fs.existsSync(dir)) throw new Error('app exists');
+  // resume allowed when a previous create died before writing compose (keys preserved)
+  const resume = fs.existsSync(dir) && !fs.existsSync(path.join(dir, 'docker-compose.yml'));
+  if (fs.existsSync(dir) && !resume) throw new Error('app exists');
   fs.mkdirSync(dir, { recursive: true });
 
   // 1. code: clone or copy template starter
   if (repoUrl) {
     const isSsh = /^(git@|ssh:\/\/)/i.test(repoUrl);
+    // token injected in-memory only (stored repo URLs stay clean)
+    const { authUrl } = require('./github');
+    const redact = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
     try {
-      execSync(`git clone --depth 1 ${repoUrl} "${dir}/code"`, { stdio: 'pipe', env: isSsh ? appGitEnv(dir) : process.env });
+      execSync(`git clone --depth 1 ${isSsh ? repoUrl : authUrl(repoUrl)} "${dir}/code"`, { stdio: 'pipe', env: isSsh ? appGitEnv(dir) : process.env });
     } catch (e) {
-      // don't leave a half-created app behind (retry would hit "app exists")
-      try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
-      const detail = String((e.stderr || e.message || '')).split('\n').filter(Boolean).slice(-4).join(' | ');
-      throw new Error(`git clone failed (${isSsh ? 'SSH remote - is the app deploy key registered on that repo?' : 'HTTPS remote - private repo? embed a token or use SSH'}): ${detail}`);
+      // don't leave a half-created app behind (retry would hit "app exists");
+      // keep per-app deploy keys so the key can still be shown + registered
+      try {
+        for (const f of fs.readdirSync(dir)) {
+          if (f === 'deploy-key' || f === 'deploy-key.pub') continue;
+          fs.rmSync(path.join(dir, f), { recursive: true, force: true });
+        }
+      } catch {}
+      const detail = redact(String((e.stderr || e.message || '')).split('\n').filter(Boolean).slice(-4).join(' | '));
+      throw new Error(`git clone failed (${isSsh ? 'SSH remote - is the app deploy key registered on that repo?' : 'HTTPS remote - private repo? connect GitHub or embed a token'}): ${detail}`);
     }
   } else {
     const tpl = path.join(templatesDir, type);

@@ -7,7 +7,7 @@ const { exec, execSync, spawn } = require('child_process');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const { createApp, appDir, normDbs } = require('./lib/generator');
-const { gitEnv, pubKey, appPubKey } = require('./lib/ssh');
+const { gitEnv, pubKey, appPubKey, appGitEnv } = require('./lib/ssh');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -20,6 +20,21 @@ fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
 
 const app = express();
 app.use(cors());
+// GitHub push webhook FIRST with a raw body: HMAC verification needs exact bytes,
+// and the global json parser would already have consumed them.
+const gh = require('./lib/github');
+app.post('/webhook/:id', express.raw({ type: '*/*' }), async (req, res) => {
+  const meta = load().apps.find(a => a.id === req.params.id);
+  if (!meta || req.query.token !== meta.token) return res.status(401).send('bad token');
+  const sig = req.headers['x-hub-signature-256'];
+  if (sig && meta.github) {
+    const expect = 'sha256=' + crypto.createHmac('sha256', meta.token).update(req.body).digest('hex');
+    const ok = sig.length === expect.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expect));
+    if (!ok) return res.status(401).send('bad signature');
+  }
+  try { await deploy(req.params.id); res.send('deployed'); }
+  catch (e) { res.status(500).send(e.message); }
+});
 app.use(express.json());
 // serve wizard UI (works locally and in docker). No-store so upgrades show instantly.
 app.use((req, res, next) => {
@@ -91,11 +106,35 @@ app.post('/api/apps', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+const redactUrl = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
 async function deploy(id) {
   const dir = appDir(APPS_DIR, id);
   const meta = load().apps.find(a => a.id === id);
-  if (meta && meta.repoUrl && fs.existsSync(path.join(dir, 'code', '.git'))) {
-    await sh('git pull --ff-only', path.join(dir, 'code'), appGitEnv(dir));
+  const codeDir = path.join(dir, 'code');
+  if (meta && meta.repoUrl) {
+    const isSsh = /^(git@|ssh:\/\/)/i.test(meta.repoUrl);
+    const url = isSsh ? meta.repoUrl : gh.authUrl(meta.repoUrl);
+    const env = isSsh ? appGitEnv(dir) : process.env;
+    try {
+      if (!fs.existsSync(path.join(codeDir, '.git'))) {
+        // first sync: repo linked after a template create - replace starter with repo,
+        // keeping managed build files the container needs
+        execSync(`git clone --depth 1 "${url}" "${codeDir}.new"`, { stdio: 'pipe', env });
+        for (const f of ['Dockerfile', 'nginx.conf']) {
+          const dst = path.join(codeDir + '.new', f);
+          const src = path.join(TEMPLATES_DIR, meta.type || 'static', f);
+          if (!fs.existsSync(dst) && fs.existsSync(src)) fs.copyFileSync(src, dst);
+        }
+        fs.rmSync(codeDir, { recursive: true, force: true });
+        fs.renameSync(codeDir + '.new', codeDir);
+      } else {
+        let branch = (meta.github && meta.github.branch) || 'main';
+        try { branch = execSync('git branch --show-current', { cwd: codeDir }).toString().trim() || branch; } catch {}
+        await sh(`git pull --ff-only "${url}" "${branch}"`, codeDir, env);
+      }
+    } catch (e) {
+      throw new Error(redactUrl(e.stderr ? String(e.stderr) : e.message));
+    }
   }
   await sh(`${COMPOSE_BIN} up --build -d`, dir);
   return true;
@@ -106,12 +145,73 @@ app.post('/api/apps/:id/deploy', async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Git auto-deploy: GitHub webhook -> this URL. Connect once, push = redeploy.
-app.post('/webhook/:id', async (req, res) => {
-  const meta = load().apps.find(a => a.id === req.params.id);
-  if (!meta || req.query.token !== meta.token) return res.status(401).send('bad token');
-  try { await deploy(req.params.id); res.send('deployed'); }
-  catch (e) { res.status(500).send(e.message); }
+// GitHub handshake: one OAuth connect, then every repo works with auto-webhooks.
+app.get('/api/github/status', (req, res) => {
+  const a = gh.getAuth();
+  res.json(a ? { connected: true, login: a.login } : { connected: false });
+});
+app.get('/api/github/login', (req, res) => {
+  const { GITHUB_CLIENT_ID, PANEL_URL } = process.env;
+  if (!GITHUB_CLIENT_ID || !PANEL_URL) {
+    return res.status(500).send('GitHub not configured: set GITHUB_CLIENT_ID (+SECRET) and PANEL_URL in backend .env - see .env.example');
+  }
+  const cb = `${PANEL_URL.replace(/\/$/, '')}/api/github/callback`;
+  const url = `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(GITHUB_CLIENT_ID)}` +
+    `&redirect_uri=${encodeURIComponent(cb)}&scope=${encodeURIComponent('repo admin:repo_hook')}`;
+  res.redirect(url);
+});
+app.get('/api/github/callback', async (req, res) => {
+  const { GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, PANEL_URL } = process.env;
+  const base = (PANEL_URL || '').replace(/\/$/, '');
+  try {
+    const r = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: GITHUB_CLIENT_ID, client_secret: GITHUB_CLIENT_SECRET, code: req.query.code })
+    });
+    const tok = await r.json();
+    if (tok.error || !tok.access_token) throw new Error((tok.error_description || tok.error || 'oauth exchange failed'));
+    const me = await fetch('https://api.github.com/user', {
+      headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${tok.access_token}` }
+    }).then(x => x.json());
+    gh.saveAuth({ access_token: tok.access_token, login: me.login, scope: tok.scope, createdAt: new Date().toISOString() });
+    res.redirect(base + '/?github=connected');
+  } catch (e) { res.status(500).send('github connect failed: ' + e.message); }
+});
+app.post('/api/github/disconnect', (req, res) => { gh.clearAuth(); res.json({ ok: true }); });
+app.get('/api/github/repos', async (req, res) => {
+  try {
+    const repos = await gh.api('/user/repos?per_page=100&sort=updated');
+    res.json(repos.map(r => ({ full_name: r.full_name, private: r.private, default_branch: r.default_branch, https: r.clone_url })));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/github/link', async (req, res) => {
+  // { appId, repo: "owner/name" } -> set repoUrl + auto-create push webhook (needs PANEL_URL reachable)
+  try {
+    const { appId, repo } = req.body;
+    const parts = String(repo || '').split('/');
+    if (parts.length !== 2) return res.status(400).json({ error: 'repo must be owner/name' });
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === appId);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const info = await gh.api(`/repos/${parts[0]}/${parts[1]}`);
+    meta.repoUrl = info.clone_url;
+    meta.github = { repo: info.full_name, branch: info.default_branch };
+    save(db_);
+    const base = (process.env.PANEL_URL || '').replace(/\/$/, '');
+    if (base) {
+      try {
+        await gh.api(`/repos/${parts[0]}/${parts[1]}/hooks`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: 'web', active: true, events: ['push'],
+            config: { url: `${base}/webhook/${meta.id}?token=${meta.token}`, content_type: 'json', secret: meta.token, insecure_ssl: '0' }
+          })
+        });
+        return res.json({ ok: true, repoUrl: meta.repoUrl, webhook: 'auto-created - push to deploy' });
+      } catch (e) { /* panel unreachable from github or no hook rights: manual flow still works */ }
+    }
+    res.json({ ok: true, repoUrl: meta.repoUrl, webhook: 'manual - paste the webhook URL into repo Settings → Webhooks' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 // Push-to-deploy: bare repo per app on the host. `git push` to it checks out
 // into code/ and triggers a rebuild - no GitHub needed on localhost/LAN.

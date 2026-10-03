@@ -7,7 +7,10 @@ services:
       args:
         GIT_SHA: ${GIT_SHA:-dev}
     restart: unless-stopped
-    env_file: ./backend/.env.example
+    env_file:
+      - path: ./backend/.env
+        required: false
+      - ./backend/.env.example
     environment:
       - APPS_DIR=/srv/apps
       - DATA_FILE=/data/apps.json
