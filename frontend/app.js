@@ -121,6 +121,25 @@ async function uploadZip() {
     document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2); listFiles('');
   } catch (e) { document.getElementById('fileOut').textContent = 'upload failed: ' + e.message; }
 }
+async function uploadPicked(folder) {
+  const id = document.getElementById('fileApp').value;
+  const input = document.getElementById(folder ? 'pickFolder' : 'pickFiles');
+  const files = [...input.files];
+  if (!id || !files.length) { document.getElementById('fileOut').textContent = 'pick an app and ' + (folder ? 'a folder' : 'one or more files'); return; }
+  const fd = new FormData();
+  for (const f of files) {
+    // folder mode: drop the picked folder's own name so contents land at site root
+    const rel = folder ? (f.webkitRelativePath.split('/').slice(1).join('/') || f.name) : f.name;
+    fd.append('files', f);
+    fd.append('paths', rel);
+  }
+  document.getElementById('fileOut').textContent = `uploading ${files.length} file(s) + redeploying…`;
+  try {
+    const r = await (await fetch(`/api/apps/${id}/upload-files`, { method: 'POST', body: fd })).json();
+    document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2); listFiles('');
+  } catch (e) { document.getElementById('fileOut').textContent = 'upload failed: ' + e.message; }
+  input.value = '';
+}
 const logsEl = document.getElementById('logs');
 let term, ws;
 function openTerm() {

@@ -167,6 +167,7 @@ app.post('/api/panel/scan', (req, res) => {
 
 // File manager for apps without git (static default page etc.)
 function codeDir(id) { return path.join(appDir(APPS_DIR, id), 'code'); }
+const JUNK = new Set(['__MACOSX', '.DS_Store', 'Thumbs.db']);
 function safeRel(base, rel) {
   const resolved = path.resolve(base, '.' + path.sep + (rel || ''));
   if (resolved !== base && !resolved.startsWith(base + path.sep)) throw new Error('bad path');
@@ -197,9 +198,9 @@ app.put('/api/apps/:id/file', async (req, res) => {
     const f = safeRel(codeDir(req.params.id), req.body.path || '');
     fs.mkdirSync(path.dirname(f), { recursive: true });
     fs.writeFileSync(f, req.body.content || '');
-    await deploy(req.params.id);
-    res.json({ ok: true, redeployed: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+  try { await deploy(req.params.id); res.json({ ok: true, redeployed: true }); }
+  catch (e) { res.json({ ok: true, saved: true, redeployError: e.message }); }
 });
 app.delete('/api/apps/:id/file', async (req, res) => {
   try {
@@ -211,9 +212,42 @@ app.delete('/api/apps/:id/file', async (req, res) => {
     res.json({ ok: true, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-const upload = require('multer')({ dest: '/tmp/minipass-uploads/', limits: { fileSize: 50 * 1024 * 1024 } });
+const uploadMany = require('multer')({ dest: '/tmp/minipass-uploads/', limits: { fileSize: 50 * 1024 * 1024, files: 100 } });
+app.post('/api/apps/:id/upload-files', uploadMany.array('files', 100), async (req, res) => {
+  try {
+    if (!req.files || !req.files.length) return res.status(400).json({ error: 'no files attached' });
+    let paths = req.body.paths;
+    if (!Array.isArray(paths)) paths = [paths];
+    const code = codeDir(req.params.id);
+    let n = 0;
+    const skipped = [];
+    req.files.forEach((f, i) => {
+      const rel = String(paths[i] || f.originalname || '').replace(/\\/g, '/');
+      const base = rel.split('/').pop();
+      if (!rel || rel.includes('..') || !base || JUNK.has(base) || base.startsWith('._') || base === 'Dockerfile' || base === 'nginx.conf') {
+        skipped.push(rel || f.originalname || '?');
+        try { fs.unlinkSync(f.path); } catch {}
+        return;
+      }
+      try {
+        const dest = safeRel(code, rel);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.renameSync(f.path, dest);
+        n++;
+      } catch {
+        skipped.push(rel);
+        try { fs.unlinkSync(f.path); } catch {}
+      }
+    });
+    if (!n) return res.status(400).json({ error: 'nothing usable uploaded', skipped });
+    try { await deploy(req.params.id); res.json({ ok: true, redeployed: true, files: n, skipped }); }
+    catch (e) { res.json({ ok: true, files: n, skipped, redeployError: e.message }); }
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 fs.mkdirSync('/tmp/minipass-uploads', { recursive: true });
+const upload = require('multer')({ dest: '/tmp/minipass-uploads/', limits: { fileSize: 50 * 1024 * 1024 } });
 app.post('/api/apps/:id/upload', upload.single('zip'), async (req, res) => {
+  let merged = false;
   try {
     if (!req.file) return res.status(400).json({ error: 'no zip attached (field name: zip)' });
     const code = codeDir(req.params.id);
@@ -221,7 +255,6 @@ app.post('/api/apps/:id/upload', upload.single('zip'), async (req, res) => {
     await sh(`unzip -o "${req.file.path}" -d "${tmpBase}"`, '/tmp');
     fs.unlinkSync(req.file.path);
     // smart flatten: descend through single wrapper folders until index.html level (max 3)
-    const JUNK = new Set(['__MACOSX', '.DS_Store', 'Thumbs.db']);
     let src = tmpBase;
     for (let d = 0; d < 3; d++) {
       const kids = fs.readdirSync(src).filter(e => !JUNK.has(e) && !e.startsWith('._'));
@@ -262,9 +295,14 @@ app.post('/api/apps/:id/upload', upload.single('zip'), async (req, res) => {
         ? `no index.html at site root - found at ${foundAt}. Move that folder's contents to the top (or re-zip so index.html is at root).`
         : `no index.html found anywhere in the zip. Static sites need an index.html - showing: ${rootFiles.slice(0, 8).join(', ')}`;
     }
+    merged = true;
     await deploy(req.params.id);
     res.json({ ok: true, redeployed: true, files: n, index: hasIndex ? 'index.html' : null, warning });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    // files already merged - report deploy failure separately so upload isn't mistaken as lost
+    if (merged) return res.json({ ok: true, files: 'merged', saved: true, warning, redeployError: e.message });
+    return res.status(500).json({ error: e.message });
+  }
 });
 
 // Panel self-upgrade from UI: git pull + rebuild (needs ./:/repo mount + docker sock).
