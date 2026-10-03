@@ -76,11 +76,15 @@ function authUrl(url, login) {
 async function apiAs(login, p, opts = {}) {
   const a = getAuth(login);
   if (!a) throw new Error('github not connected' + (login ? ` (${login})` : ''));
+  return apiWith(a.access_token, p, opts);
+}
+
+async function apiWith(token, p, opts = {}) {
   const r = await fetch(`https://api.github.com${p}`, {
     ...opts,
     headers: {
       Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${a.access_token}`,
+      Authorization: `Bearer ${token}`,
       'X-GitHub-Api-Version': '2022-11-28',
       ...(opts.headers || {})
     }
@@ -89,8 +93,30 @@ async function apiAs(login, p, opts = {}) {
   return r.json();
 }
 
+// Per-site resolution: site token first, then linked panel account, then default.
+function tokenFor(meta) {
+  if (meta && meta.github && meta.github.token) return meta.github.token;
+  const a = getAuth(meta && meta.github && meta.github.login);
+  return a ? a.access_token : null;
+}
+
+async function apiFor(meta, p, opts = {}) {
+  const t = meta && meta.github && meta.github.token;
+  if (t) return apiWith(t, p, opts);
+  return apiAs(meta && meta.github && meta.github.login, p, opts);
+}
+
+function authUrlFor(meta, url) {
+  const t = meta && meta.github && meta.github.token;
+  if (t && url) {
+    const m = String(url).match(/^https:\/\/github\.com\/(.+)$/i);
+    if (m) return `https://x-access-token:${t}@github.com/${m[1]}`;
+  }
+  return authUrl(url, meta && meta.github && meta.github.login);
+}
+
 async function api(p, opts = {}) {
   return apiAs(null, p, opts);
 }
 
-module.exports = { getAuth, getLogins, saveAuth, clearAuth, authUrl, api, apiAs, tokenFile };
+module.exports = { getAuth, getLogins, saveAuth, clearAuth, authUrl, authUrlFor, api, apiAs, apiWith, apiFor, tokenFor, tokenFile };

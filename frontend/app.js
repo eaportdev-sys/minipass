@@ -38,6 +38,7 @@ function fillSiteHeader(a) {
   document.getElementById('siteStart').onclick = () => startApp(a.id);
   document.getElementById('siteDelete').onclick = () => rmApp(a.id);
   document.getElementById('hookUrl').textContent = `${location.origin}/webhook/${a.id}?token=${a.token}`;
+  fillGitConn(a);
   const ps = document.getElementById('pollSel');
   if (ps) ps.value = String((a.github && a.github.pollMinutes) || 0);
   const pst = document.getElementById('pollState');
@@ -64,6 +65,41 @@ async function initLocalGit() {
 }
 async function copyHook() {
   try { await navigator.clipboard.writeText(document.getElementById('hookUrl').textContent); } catch {}
+}
+async function fillGitConn(a) {
+  const g = a.github || {};
+  const state = document.getElementById('gitConnState');
+  if (g.hasToken) state.textContent = 'site token stored •••• (used first)';
+  else if (g.login) state.textContent = 'panel account: ' + g.login + (g.repo ? ' → ' + g.repo : '');
+  else if (a.repoUrl && /^(git@|ssh:\/\/)/i.test(a.repoUrl)) state.textContent = 'ssh deploy key (see repo key in webhook section)';
+  else state.textContent = 'not connected';
+  try {
+    const s = await (await fetch('/api/github/status')).json();
+    const sel = document.getElementById('gitAccount');
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">—</option>' + (s.logins || []).map(l => `<option value="${l}">${l}</option>`).join('');
+    sel.value = [...sel.options].some(o => o.value === (prev || g.login)) ? (prev || g.login) : '';
+  } catch {}
+}
+async function useAccount() {
+  if (!currentApp) return;
+  const login = document.getElementById('gitAccount').value;
+  const r = await (await fetch(`/api/apps/${currentApp}/git-account`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login }) })).json();
+  toast(r.ok ? (login ? 'using account ' + login : 'account unlinked') : (r.error || 'failed'), !!r.ok);
+  refresh();
+}
+async function saveSiteToken() {
+  if (!currentApp) return;
+  const input = document.getElementById('gitSiteToken');
+  const r = await (await fetch(`/api/apps/${currentApp}/git-token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: input.value }) })).json();
+  if (r.ok) { input.value = ''; toast('site token saved'); refresh(); }
+  else toast(r.error || 'failed', false);
+}
+async function clearSiteToken() {
+  if (!currentApp) return;
+  const r = await (await fetch(`/api/apps/${currentApp}/git-token`, { method: 'DELETE' })).json();
+  toast(r.ok ? 'site token cleared' : (r.error || 'failed'), !!r.ok);
+  refresh();
 }
 async function setPoll() {
   if (!currentApp) return;

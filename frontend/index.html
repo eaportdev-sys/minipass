@@ -39,6 +39,16 @@
         </div>
       </div>
       <div class="card">
+        <b>git connection</b> <span class="meta" id="gitConnState"></span>
+        <div class="meta">Use a shared account:
+          <select id="gitAccount"><option value="">—</option></select>
+          <button onclick="useAccount()">use account</button></div>
+        <div class="meta">Or store a token on this site only (wins over accounts):
+          <input id="gitSiteToken" type="password" placeholder="github_pat_…" style="width:220px">
+          <button onclick="saveSiteToken()">save</button>
+          <button onclick="clearSiteToken()">clear</button></div>
+      </div>
+      <div class="card">
         <b>auto-deploy webhook</b>
         <div class="meta">GitHub push (the trigger) → panel git pull + rebuild (the action). Paste the URL into repo Settings → Webhooks, push events.</div>
         <div class="meta"><code id="hookUrl"></code></div>
@@ -102,7 +112,7 @@
         <pre id="keyOut"></pre>
       </div>
       <div class="card"><b>github</b> <span id="ghStatus">…</span><br>
-        <div class="meta">Localhost path (no OAuth App, no public URL): GitHub → Settings → Developer settings → Personal access tokens → Fine-grained → Contents <b>read-only</b> + Webhooks <b>read+write</b>, then paste. One token per account — repeat for each of your 10.</div>
+        <div class="meta">Shared account pool (optional) — each site can also keep its own token on its page. Token paste works on localhost; OAuth needs a public panel.</div>
         <input id="ghToken" type="password" placeholder="github_pat_…" style="width:280px"><button onclick="ghSaveToken()">save token</button>
         <div class="meta">Public-panel path: OAuth App (callback <code>/api/github/callback</code>, GITHUB_CLIENT_ID/SECRET + PANEL_URL in backend .env), then:</div>
         <button onclick="ghConnect()">connect via oauth</button>

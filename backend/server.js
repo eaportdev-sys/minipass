@@ -58,6 +58,12 @@ function load() {
   catch { return { apps: [] }; }
 }
 function save(d) { fs.writeFileSync(DATA_FILE, JSON.stringify(d, null, 2)); }
+// Strip secrets for every API response - tokens stay server-side only.
+function pubApp(a) {
+  const g = a.github || null;
+  const pub = g ? { repo: g.repo, branch: g.branch, login: g.login, sha: g.sha, pollMinutes: g.pollMinutes, hasToken: !!g.token } : g;
+  return { ...a, github: pub };
+}
 // Portable compose: prefer `docker compose` (v2), fallback to `docker-compose` (v1).
 // Override with COMPOSE_BIN env, e.g. COMPOSE_BIN="docker-compose".
 let COMPOSE_BIN = process.env.COMPOSE_BIN || 'docker compose';
@@ -97,7 +103,7 @@ async function pollGithub() {
     pollState.set(meta.id, now);
     try {
       const parts = String(g.repo).split('/');
-      const c = await gh.apiAs(g.login || undefined, `/repos/${parts[0]}/${parts[1]}/commits/${encodeURIComponent(g.branch || 'main')}`);
+      const c = await gh.apiFor(meta, `/repos/${parts[0]}/${parts[1]}/commits/${encodeURIComponent(g.branch || 'main')}`);
       const sha = c && c.sha;
       if (!sha || sha === g.sha) continue;
       await deploy(meta.id);
@@ -129,7 +135,7 @@ app.get('/api/types', (req, res) => {
   ]);
 });
 
-app.get('/api/apps', (req, res) => res.json(load().apps));
+app.get('/api/apps', (req, res) => res.json(load().apps.map(pubApp)));
 
 app.post('/api/apps', async (req, res) => {
   try {
@@ -150,7 +156,7 @@ app.post('/api/apps', async (req, res) => {
     save(db_);
     // build async so UI returns fast
     sh(`${COMPOSE_BIN} up --build -d`, appDir(APPS_DIR, id)).catch(e => console.error(e.message));
-    res.json({ ...meta, localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}` });
+    res.json({ ...pubApp(meta), localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}` });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -161,8 +167,7 @@ async function deploy(id) {
   const codeDir = path.join(dir, 'code');
   if (meta && meta.repoUrl) {
     const isSsh = /^(git@|ssh:\/\/)/i.test(meta.repoUrl);
-    const acct = meta.github && meta.github.login;
-    const url = isSsh ? meta.repoUrl : gh.authUrl(meta.repoUrl, acct);
+    const url = isSsh ? meta.repoUrl : gh.authUrlFor(meta, meta.repoUrl);
     const env = isSsh ? appGitEnv(dir) : process.env;
     try {
       if (!fs.existsSync(path.join(codeDir, '.git'))) {
@@ -341,6 +346,46 @@ app.post('/api/apps/:id/git-init', (req, res) => {
     const meta = db_.apps.find(a => a.id === id);
     if (meta) { meta.localGit = true; save(db_); }
     res.json({ ok: true, remote: `ssh://root@<server>:${path.join(dir, 'repo.git')}` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/apps/:id/git-account', (req, res) => {
+  try {
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const login = String((req.body && req.body.login) || '').trim();
+    if (!meta.github) meta.github = {};
+    if (!login) delete meta.github.login;
+    else {
+      if (!gh.getAuth(login)) return res.status(400).json({ error: 'account not connected: ' + login });
+      meta.github.login = login;
+    }
+    save(db_);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/apps/:id/git-token', async (req, res) => {
+  try {
+    const token = String((req.body && req.body.token) || '').trim();
+    if (!token) return res.status(400).json({ error: 'empty token' });
+    await gh.apiWith(token, '/user');
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    if (!meta.github) meta.github = {};
+    meta.github.token = token;
+    save(db_);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/apps/:id/git-token', (req, res) => {
+  try {
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    if (meta.github) delete meta.github.token;
+    save(db_);
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/regenerate', (req, res) => {
