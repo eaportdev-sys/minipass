@@ -78,12 +78,25 @@ fi
 # 6. self-upgrade applier: the panel only BUILDS + flags (.pending-restart).
 #    The recreate must run from OUTSIDE the container - a container that
 #    `up -d`s itself gets SIGKILLed mid-recreate and never comes back.
+if ! command -v crontab >/dev/null; then
+  msg "installing cron"
+  if command -v apt-get >/dev/null; then apt-get install -y cron || true
+  elif command -v dnf >/dev/null; then dnf install -y cronie || true
+  elif command -v yum >/dev/null; then yum install -y cronie || true
+  elif command -v pacman >/dev/null; then pacman -S --noconfirm cronie || true
+  elif command -v zypper >/dev/null; then zypper install -y cron || true
+  fi
+  if command -v systemctl >/dev/null; then systemctl enable --now cron 2>/dev/null || systemctl enable --now crond 2>/dev/null || true
+  elif command -v service >/dev/null; then service cron start 2>/dev/null || service crond start 2>/dev/null || true
+  fi
+fi
 if command -v crontab >/dev/null; then
   CRON="* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin cd /opt/minipass && [ -f .pending-restart ] && GIT_SHA=\$(cat .pending-restart) docker compose -p minipass up -d >> upgrade.log 2>&1 && rm -f .pending-restart .upgrade-lock"
   (crontab -l 2>/dev/null | grep -v 'pending-restart'; echo "$CRON") | crontab -
-  msg "upgrade cron installed"
+  if crontab -l 2>/dev/null | grep -q 'pending-restart'; then msg "upgrade cron installed + verified"
+  else msg "WARNING: cron entry did not stick - upgrades need manual 'docker compose up -d'"; fi
 else
-  msg "no crontab - panel self-upgrade needs manual 'docker compose up -d'"
+  msg "no crontab available - panel self-upgrade needs manual 'docker compose up -d'"
 fi
 
 # 7. start docker (systemd or openrc/service)
