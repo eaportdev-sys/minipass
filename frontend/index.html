@@ -102,9 +102,11 @@
         <pre id="keyOut"></pre>
       </div>
       <div class="card"><b>github</b> <span id="ghStatus">…</span><br>
-        <div class="meta">Connect each GitHub account once — every site links to any of them. Needs GITHUB_CLIENT_ID/SECRET + PANEL_URL in backend .env (OAuth App callback <code>/api/github/callback</code>).</div>
+        <div class="meta">Localhost path (no OAuth App, no public URL): GitHub → Settings → Developer settings → Personal access tokens → Fine-grained → Contents <b>read-only</b> + Webhooks <b>read+write</b>, then paste. One token per account — repeat for each of your 10.</div>
+        <input id="ghToken" type="password" placeholder="github_pat_…" style="width:280px"><button onclick="ghSaveToken()">save token</button>
+        <div class="meta">Public-panel path: OAuth App (callback <code>/api/github/callback</code>, GITHUB_CLIENT_ID/SECRET + PANEL_URL in backend .env), then:</div>
+        <button onclick="ghConnect()">connect via oauth</button>
         <div id="ghAccounts"></div>
-        <button onclick="ghConnect()">connect account</button>
       </div>
     </section>
   </main>

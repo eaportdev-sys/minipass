@@ -151,6 +151,14 @@ async function ghStatus() {
   }
 }
 function ghConnect() { location.href = '/api/github/login'; }
+async function ghSaveToken() {
+  const input = document.getElementById('ghToken');
+  const token = input.value.trim();
+  if (!token) return;
+  const r = await (await fetch('/api/github/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })).json();
+  if (r.ok) { input.value = ''; toast('github connected as ' + r.login); ghStatus(); }
+  else toast(r.error || 'failed', false);
+}
 async function ghDisconnect(login) {
   await fetch('/api/github/disconnect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: login || undefined }) });
   ghStatus();

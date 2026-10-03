@@ -228,6 +228,22 @@ app.get('/api/github/callback', async (req, res) => {
   } catch (e) { res.status(500).send('github connect failed: ' + e.message); }
 });
 app.post('/api/github/disconnect', (req, res) => { gh.clearAuth(req.body && req.body.login); res.json({ ok: true }); });
+app.post('/api/github/token', async (req, res) => {
+  // LAN path: no OAuth App / callback / public URL needed. Fine-grained PAT with
+  // Contents read-only + Webhooks read+write (+Metadata read-only) per account.
+  try {
+    const token = String((req.body && req.body.token) || '').trim();
+    if (!token) return res.status(400).json({ error: 'empty token' });
+    const me = await fetch('https://api.github.com/user', {
+      headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}` }
+    }).then(async r => {
+      if (!r.ok) throw new Error(`github rejected token (${r.status}) - check scopes and expiry`);
+      return r.json();
+    });
+    gh.saveAuth({ access_token: token, login: me.login });
+    res.json({ ok: true, login: me.login });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.get('/api/github/repos', async (req, res) => {
   // aggregate every connected account so 10 sites can live on 10 different githubs
   try {
