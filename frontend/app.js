@@ -293,7 +293,11 @@ function showView(view) {
 }
 function accessChanged() {
   const accessEl = document.querySelector('input[name=access]:checked');
-  document.getElementById('domain').style.display = (accessEl && accessEl.value === 'domain') ? 'block' : 'none';
+  const isDomain = accessEl && accessEl.value === 'domain';
+  document.getElementById('domain').style.display = isDomain ? 'block' : 'none';
+  // OAuth redirect only exists on the public path - hide it on localhost
+  const ob = document.getElementById('oauthBtnRow');
+  if (ob) ob.style.display = isDomain ? 'block' : 'none';
 }
 function openCreate() {
   document.getElementById('modal').classList.add('open');
