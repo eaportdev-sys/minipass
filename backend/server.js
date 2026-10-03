@@ -303,34 +303,36 @@ app.post('/api/github/token', async (req, res) => {
     res.json({ ok: true, login: me.login });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+// Stack detection. Token-first and pool-NEVER: the create flow always carries its
+// own fresh token, so a revoked pool credential can never poison detection.
+async function detectRepo(repo, { login, token } = {}) {
+  const m = String(repo || '').match(/^([^/]+)\/([^/]+?)(\.git)?$/);
+  if (!m) throw new Error('repo must be owner/name');
+  if (!token && !login) throw new Error('paste a token first - detection never uses stored accounts');
+  const get = token
+    ? (p) => gh.apiWith(token, p)
+    : (p) => gh.apiAs(login, p);
+  const t = await get(`/repos/${m[1]}/${m[2]}/git/trees/HEAD?recursive=1`)
+    .catch(e => { throw new Error('cannot read repo (token access?): ' + e.message); });
+  const tree = (t.tree || []).filter(e => e.type === 'blob').map(e => e.path);
+  let pkg = null;
+  const pkgPath = tree.filter(p => /(^|\/)package\.json$/.test(p)).sort((a, b) => a.length - b.length)[0];
+  if (pkgPath) {
+    try {
+      const blob = await get(`/repos/${m[1]}/${m[2]}/contents/${pkgPath}`);
+      if (blob && blob.content) pkg = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8'));
+    } catch {}
+  }
+  const { decideType } = require('./lib/detect');
+  return decideType(tree, pkg);
+}
 app.get('/api/github/detect', async (req, res) => {
-  // ?repo=owner/name&login= - inspect tree + package.json, auto-select the template
-  try {
-    const m = String(req.query.repo || '').match(/^([^/]+)\/([^/]+?)(\.git)?$/);
-    if (!m) return res.status(400).json({ error: 'repo must be owner/name' });
-    const logins = req.query.login ? [req.query.login] : gh.getLogins();
-    if (!logins.length) return res.status(500).json({ error: 'github not connected' });
-    let tree = null, used = null, lastErr = 'no access';
-    for (const login of logins) {
-      try {
-        const t = await gh.apiAs(login, `/repos/${m[1]}/${m[2]}/git/trees/HEAD?recursive=1`);
-        tree = (t.tree || []).filter(e => e.type === 'blob').map(e => e.path);
-        used = login;
-        break;
-      } catch (e) { lastErr = e.message; }
-    }
-    if (!tree) return res.status(500).json({ error: 'cannot read repo: ' + lastErr });
-    let pkg = null;
-    const pkgPath = tree.filter(p => /(^|\/)package\.json$/.test(p)).sort((a, b) => a.length - b.length)[0];
-    if (pkgPath) {
-      try {
-        const blob = await gh.apiAs(used, `/repos/${m[1]}/${m[2]}/contents/${pkgPath}`);
-        if (blob && blob.content) pkg = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8'));
-      } catch {}
-    }
-    const { decideType } = require('./lib/detect');
-    res.json({ ...decideType(tree, pkg), login: used });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  try { res.json({ ...(await detectRepo(req.query.repo, { login: req.query.login })), via: 'account' }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/github/detect', async (req, res) => {
+  try { res.json({ ...(await detectRepo(req.body.repo, { login: req.body.login, token: req.body.token })), via: 'token' }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/github/repos', async (req, res) => {
   // aggregate every connected account so 10 sites can live on 10 different githubs

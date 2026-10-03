@@ -82,7 +82,16 @@ function authUrlWith(url, token) {
 async function apiAs(login, p, opts = {}) {
   const a = getAuth(login);
   if (!a) throw new Error('github not connected' + (login ? ` (${login})` : ''));
-  return apiWith(a.access_token, p, opts);
+  try {
+    return await apiWith(a.access_token, p, opts);
+  } catch (e) {
+    // revoked on github: drop it so a dead credential stops poisoning every call
+    if (/api 401/.test(e.message)) {
+      clearAuth(a.login);
+      throw new Error(`github revoked the token for ${a.login} - account removed, reconnect to restore`);
+    }
+    throw e;
+  }
 }
 
 async function apiWith(token, p, opts = {}) {
@@ -108,7 +117,14 @@ function tokenFor(meta) {
 
 async function apiFor(meta, p, opts = {}) {
   const t = meta && meta.github && meta.github.token;
-  if (t) return apiWith(t, p, opts);
+  if (t) {
+    try {
+      return await apiWith(t, p, opts);
+    } catch (e) {
+      if (/api 401/.test(e.message)) throw new Error('site token invalid (revoked?) - paste a fresh token on the site page');
+      throw e;
+    }
+  }
   return apiAs(meta && meta.github && meta.github.login, p, opts);
 }
 

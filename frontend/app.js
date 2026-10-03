@@ -176,15 +176,17 @@ async function createApp() {
 async function detectType() {
   const sel = document.getElementById('ghrepo');
   const opt = sel.selectedOptions.length ? sel.selectedOptions[0] : null;
-  let repo = sel.value, login = opt && opt.dataset.login;
+  let repo = sel.value;
+  // create flow always uses the fresh pasted token - stored accounts are never consulted
+  const token = document.getElementById('ghModalToken').value.trim();
   if (!repo) {
     const m = document.getElementById('repo').value.trim().match(/github\.com[:/]([^/]+)\/([^/]+?)(\.git)?\/?$/i);
     if (!m) return;
     repo = m[1] + '/' + m[2];
-    login = undefined;
   }
+  if (!token) { toast('paste a token first - detection never uses stored accounts', false); return; }
   try {
-    const r = await (await fetch(`/api/github/detect?repo=${encodeURIComponent(repo)}${login ? `&login=${encodeURIComponent(login)}` : ''}`)).json();
+    const r = await (await fetch('/api/github/detect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo, token }) })).json();
     if (r.type) {
       const radio = document.querySelector(`input[name=apptype][value=${r.type}]`);
       if (radio) radio.checked = true;
@@ -254,6 +256,8 @@ async function modalListRepos() {
   sel.innerHTML = '<option value="">GitHub repo…</option>' + (r.repos || []).map(x =>
     `<option value="${x.full_name}" data-login="${r.login}">${x.full_name}${x.private ? ' (private)' : ''}</option>`).join('');
   document.getElementById('ghRepoRow').style.display = 'block';
+  const nm = document.getElementById('name').value.trim() || 'the new site';
+  document.getElementById('ghStoreNote').textContent = `Stored on "${nm}" only — never shared, never pooled.`;
   toast('token ok as ' + r.login + ' - pick a repo');
 }
 async function ghDisconnect(login) {
