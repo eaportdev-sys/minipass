@@ -213,7 +213,25 @@ async function ghStatus() {
     document.getElementById('ghAccounts').innerHTML = '';
   }
 }
-function ghConnect() { location.href = '/api/github/login'; }
+let ghPoll = null;
+function ghConnect() {
+  // new tab: panel stays open; poll until the handshake lands, then refresh state
+  window.open('/api/github/login', '_blank');
+  if (ghPoll) clearInterval(ghPoll);
+  const end = Date.now() + 180000;
+  ghPoll = setInterval(async () => {
+    try {
+      const s = await (await fetch('/api/github/status')).json();
+      if (s.connected) {
+        clearInterval(ghPoll); ghPoll = null;
+        ghStatus();
+        toast('github connected: ' + s.logins.join(', '));
+        return;
+      }
+    } catch {}
+    if (Date.now() > end) { clearInterval(ghPoll); ghPoll = null; }
+  }, 3000);
+}
 async function ghSaveToken() {
   const input = document.getElementById('ghToken');
   const token = input.value.trim();
