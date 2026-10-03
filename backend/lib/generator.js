@@ -54,7 +54,11 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   } else {
     const tpl = path.join(templatesDir, type);
     fs.cpSync(path.join(tpl, 'starter'), path.join(dir, 'code'), { recursive: true });
-    fs.copyFileSync(path.join(tpl, 'Dockerfile'), path.join(dir, 'code', 'Dockerfile'));
+    // copy all template top-level files (Dockerfile, nginx.conf, etc.) into build context
+    for (const f of fs.readdirSync(tpl)) {
+      const src = path.join(tpl, f);
+      if (fs.statSync(src).isFile()) fs.copyFileSync(src, path.join(dir, 'code', f));
+    }
   }
 
   // 2. .env auto-generated
