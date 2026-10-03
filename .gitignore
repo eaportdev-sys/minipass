@@ -3,4 +3,5 @@ apps/*/
 !.gitkeep
 backend/data.json
 backend/.env
+panel-key*
 AGENTS.md

@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
+const { gitEnv } = require('./ssh');
 
 const DB_IMAGES = {
   postgres: 'postgres:16-alpine',
@@ -50,7 +51,7 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
 
   // 1. code: clone or copy template starter
   if (repoUrl) {
-    execSync(`git clone --depth 1 ${repoUrl} "${dir}/code"`, { stdio: 'inherit' });
+    execSync(`git clone --depth 1 ${repoUrl} "${dir}/code"`, { stdio: 'inherit', env: gitEnv() });
   } else {
     const tpl = path.join(templatesDir, type);
     fs.cpSync(path.join(tpl, 'starter'), path.join(dir, 'code'), { recursive: true });

@@ -7,6 +7,7 @@ const { exec, execSync, spawn } = require('child_process');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const { createApp, appDir } = require('./lib/generator');
+const { gitEnv, pubKey } = require('./lib/ssh');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -45,13 +46,11 @@ function sh(cmd, cwd, env) {
     });
   });
 }
-// git over SSH needs the mounted deploy key + non-interactive host-key acceptance
-function gitEnv() {
-  const keys = ['/root/.ssh/minipass-deploy', '/root/.ssh/id_ed25519', '/root/.ssh/id_rsa'];
-  const key = keys.find(k => { try { return fs.existsSync(k); } catch { return false; } });
-  if (!key) return process.env;
-  return { ...process.env, GIT_SSH_COMMAND: `ssh -i ${key} -o StrictHostKeyChecking=accept-new` };
-}
+app.get('/api/panel/pubkey', (req, res) => {
+  const k = pubKey();
+  if (!k) return res.status(500).json({ error: 'no panel key (ssh-keygen unavailable?)' });
+  res.json({ pubkey: k });
+});
 
 app.get('/api/types', (req, res) => {
   res.json([
@@ -90,7 +89,7 @@ async function deploy(id) {
   const dir = appDir(APPS_DIR, id);
   const meta = load().apps.find(a => a.id === id);
   if (meta && meta.repoUrl && fs.existsSync(path.join(dir, 'code', '.git'))) {
-    await sh('git pull --ff-only', path.join(dir, 'code'));
+    await sh('git pull --ff-only', path.join(dir, 'code'), gitEnv());
   }
   await sh(`${COMPOSE_BIN} up --build -d`, dir);
   return true;

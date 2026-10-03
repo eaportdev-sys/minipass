@@ -16,8 +16,6 @@ services:
       - /srv/panel-data:/data
       - /var/run/docker.sock:/var/run/docker.sock
       - ./:/repo
-      # deploy key for private-repo pulls (host ~/.ssh/minipass-deploy, read-only)
-      - ${HOME}/.ssh:/root/.ssh:ro
     ports:
       - "3001:3001"
   # Set TUNNEL_TOKEN, then uncomment. One tunnel serves all apps.

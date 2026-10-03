@@ -114,6 +114,11 @@ async function scan() {
   const r = await (await fetch('/api/panel/scan', { method: 'POST' })).json();
   document.getElementById('upOut').textContent = JSON.stringify(r, null, 2); refresh();
 }
+async function showKey() {
+  const r = await (await fetch('/api/panel/pubkey')).json();
+  document.getElementById('keyOut').textContent =
+    (r.pubkey || r.error) + '\n\nAdd this as a read-only deploy key on GitHub (repo Settings → Deploy keys) so the panel can pull.';
+}
 let curDir = '';
 async function listFiles(dir) {
   curDir = dir || '';
