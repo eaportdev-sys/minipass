@@ -43,6 +43,8 @@
         <div class="meta">GitHub push (the trigger) → panel git pull + rebuild (the action). Paste the URL into repo Settings → Webhooks, push events.</div>
         <div class="meta"><code id="hookUrl"></code></div>
         <div class="actions"><button onclick="copyHook()">copy</button><button onclick="regenHook()">regenerate</button></div>
+        <div class="meta">repo deploy key (SSH remotes only — add to that repo, read-only): <button onclick="showRepoKey()">show key</button></div>
+        <div class="meta"><code id="repoKeyOut"></code></div>
       </div>
       <div class="card">
         <b>local git push</b>
@@ -113,6 +115,7 @@
     <label class="typepill"><input type="checkbox" name="appdb" value="redis"><b>Redis</b>cache / kv</label>
   </div>
   <label>Git repo url (optional)<input id="repo" placeholder="https://github.com/you/site.git"></label>
+  <div class="meta">Private repo? Use SSH (<code>git@github.com:you/site.git</code>) + the repo deploy key below, or paste HTTPS with a token embedded.</div>
   <label>Domain (optional)<input id="domain" placeholder="app.example.com"></label>
   <div class="modalbtns"><button class="btn primary" onclick="createApp()">Build</button><button onclick="closeCreate()">Cancel</button></div>
   <pre id="out"></pre>

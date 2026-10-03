@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
-const { gitEnv } = require('./ssh');
+const { appGitEnv } = require('./ssh');
 
 const DB_IMAGES = {
   postgres: 'postgres:16-alpine',
@@ -89,7 +89,15 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
 
   // 1. code: clone or copy template starter
   if (repoUrl) {
-    execSync(`git clone --depth 1 ${repoUrl} "${dir}/code"`, { stdio: 'inherit', env: gitEnv() });
+    const isSsh = /^(git@|ssh:\/\/)/i.test(repoUrl);
+    try {
+      execSync(`git clone --depth 1 ${repoUrl} "${dir}/code"`, { stdio: 'pipe', env: isSsh ? appGitEnv(dir) : process.env });
+    } catch (e) {
+      // don't leave a half-created app behind (retry would hit "app exists")
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+      const detail = String((e.stderr || e.message || '')).split('\n').filter(Boolean).slice(-4).join(' | ');
+      throw new Error(`git clone failed (${isSsh ? 'SSH remote - is the app deploy key registered on that repo?' : 'HTTPS remote - private repo? embed a token or use SSH'}): ${detail}`);
+    }
   } else {
     const tpl = path.join(templatesDir, type);
     fs.cpSync(path.join(tpl, 'starter'), path.join(dir, 'code'), { recursive: true });

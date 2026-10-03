@@ -59,6 +59,15 @@ async function initLocalGit() {
 async function copyHook() {
   try { await navigator.clipboard.writeText(document.getElementById('hookUrl').textContent); } catch {}
 }
+async function showRepoKey() {
+  if (!currentApp) return;
+  const el = document.getElementById('repoKeyOut');
+  el.textContent = 'loading…';
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/repokey`)).json();
+    el.textContent = r.pubkey || r.error;
+  } catch (e) { el.textContent = 'failed: ' + e.message; }
+}
 async function regenHook() {
   if (!currentApp) return;
   const ok = await uiConfirm({

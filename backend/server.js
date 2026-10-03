@@ -7,7 +7,7 @@ const { exec, execSync, spawn } = require('child_process');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const { createApp, appDir, normDbs } = require('./lib/generator');
-const { gitEnv, pubKey } = require('./lib/ssh');
+const { gitEnv, pubKey, appPubKey } = require('./lib/ssh');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -51,6 +51,11 @@ app.get('/api/panel/pubkey', (req, res) => {
   if (!k) return res.status(500).json({ error: 'no panel key (ssh-keygen unavailable?)' });
   res.json({ pubkey: k });
 });
+app.get('/api/apps/:id/repokey', (req, res) => {
+  const k = appPubKey(appDir(APPS_DIR, req.params.id));
+  if (!k) return res.status(500).json({ error: 'no repo key (ssh-keygen unavailable?)' });
+  res.json({ pubkey: k });
+});
 
 app.get('/api/types', (req, res) => {
   res.json([
@@ -90,7 +95,7 @@ async function deploy(id) {
   const dir = appDir(APPS_DIR, id);
   const meta = load().apps.find(a => a.id === id);
   if (meta && meta.repoUrl && fs.existsSync(path.join(dir, 'code', '.git'))) {
-    await sh('git pull --ff-only', path.join(dir, 'code'), gitEnv());
+    await sh('git pull --ff-only', path.join(dir, 'code'), appGitEnv(dir));
   }
   await sh(`${COMPOSE_BIN} up --build -d`, dir);
   return true;
