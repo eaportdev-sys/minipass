@@ -1,3 +1,4 @@
+let currentApp = null;
 async function refresh() {
   const apps = await (await fetch('/api/apps')).json();
   document.getElementById('apps').innerHTML = apps.map(a =>
@@ -5,14 +6,44 @@ async function refresh() {
     <div class="badges"><span class="badge type">${a.type}</span><span class="badge">db: ${a.db}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}</div>
     <div class="meta">local: ${a.hostPort ? `<a href="http://${location.hostname}:${a.hostPort}" target="_blank">http://${location.hostname}:${a.hostPort}</a>` : 'recreate app to get localhost port'}</div>
     <div class="meta">webhook: <code>POST /webhook/${a.id}?token=${a.token}</code></div>
-    <div class="actions"><button onclick="deploy('${a.id}')">redeploy</button><button class="btn danger" onclick="rmApp('${a.id}')">delete</button></div></div>`).join('') || '<div class="card">No websites yet - hit + Create.</div>';
-  // keep terminal/logs/files dropdowns in sync
-  for (const selId of ['termApp', 'logApp', 'fileApp']) {
-    const sel = document.getElementById(selId);
-    const prev = sel.value;
-    sel.innerHTML = apps.map(a => `<option value="${a.id}">${a.id}</option>`).join('');
-    if (apps.some(a => a.id === prev)) sel.value = prev;
+    <div class="actions"><button class="btn primary" onclick="openSite('${a.id}')">open</button><button onclick="deploy('${a.id}')">redeploy</button><button class="btn danger" onclick="rmApp('${a.id}')">delete</button></div></div>`).join('') || '<div class="card">No websites yet - hit + Create.</div>';
+  // keep detail header + global terminal picker in sync
+  if (currentApp && !apps.some(a => a.id === currentApp)) backToSites();
+  else if (currentApp) fillSiteHeader(apps.find(a => a.id === currentApp));
+  const tsel = document.getElementById('termApp');
+  if (tsel) {
+    const prev = tsel.value;
+    tsel.innerHTML = apps.map(a => `<option value="${a.id}">${a.id}</option>`).join('');
+    if (apps.some(a => a.id === prev)) tsel.value = prev;
   }
+}
+function openSite(id) {
+  currentApp = id;
+  showView('site');
+  document.getElementById('filePath').value = '';
+  document.getElementById('fileEdit').value = '';
+  document.getElementById('fileOut').textContent = '';
+  refresh().then(() => showSiteTab('files'));
+}
+function backToSites() { currentApp = null; showView('websites'); refresh(); }
+function fillSiteHeader(a) {
+  if (!a) return;
+  document.getElementById('siteName').textContent = a.id;
+  document.getElementById('siteBadges').innerHTML =
+    `<span class="badge type">${a.type}</span><span class="badge">db: ${a.db}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}${a.hostPort ? `<span class="badge">:${a.hostPort}</span>` : ''}`;
+  document.getElementById('siteMeta').innerHTML =
+    `${a.hostPort ? `local: <a href="http://${location.hostname}:${a.hostPort}" target="_blank">http://${location.hostname}:${a.hostPort}</a><br>` : ''}
+    webhook: <code>POST /webhook/${a.id}?token=${a.token}</code>`;
+  document.getElementById('siteRedeploy').onclick = () => deploy(a.id);
+  document.getElementById('siteDelete').onclick = () => rmApp(a.id);
+}
+function showSiteTab(t) {
+  document.querySelectorAll('.sitetab').forEach(s => s.style.display = 'none');
+  document.getElementById('tab-' + t).style.display = 'block';
+  document.querySelectorAll('.tabbtn').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
+  if (!currentApp) return;
+  if (t === 'files') listFiles('');
+  if (t === 'logs') showLogs();
 }
 async function createApp() {
   const v = id => document.getElementById(id).value;
@@ -38,10 +69,9 @@ try { document.documentElement.dataset.theme = localStorage.getItem('mp-theme') 
 async function deploy(id) { await fetch('/api/apps/' + id + '/deploy', { method: 'POST' }); alert('deploying'); }
 async function rmApp(id) { if (confirm('delete?')) { await fetch('/api/apps/' + id, { method: 'DELETE' }); refresh(); } }
 async function showLogs() {
-  const id = document.getElementById('logApp').value.trim();
-  if (!id) { logsEl.textContent = 'no apps yet - build one first'; return; }
+  if (!currentApp) { logsEl.textContent = 'open a website first'; return; }
   logsEl.textContent = 'loading…';
-  logsEl.textContent = await (await fetch('/api/apps/' + id + '/logs')).text();
+  logsEl.textContent = await (await fetch('/api/apps/' + currentApp + '/logs')).text();
 }
 async function version() {
   try {
@@ -88,8 +118,7 @@ let curDir = '';
 async function listFiles(dir) {
   curDir = dir || '';
   if (!dir) { document.getElementById('filePath').value = ''; document.getElementById('fileEdit').value = ''; }
-  const id = document.getElementById('fileApp').value;
-  if (!id) return;
+  if (!currentApp) return;
   const files = await (await fetch(`/api/apps/${id}/files?path=${encodeURIComponent(curDir)}`)).json();
   const up = curDir ? `<button onclick="listFiles('${curDir.split('/').slice(0, -1).join('/')}')">.. up</button><br>` : '';
   document.getElementById('fileList').innerHTML = up + (files.error || files.map(f =>
@@ -97,7 +126,7 @@ async function listFiles(dir) {
           : `<button onclick="openFile('${(curDir ? curDir + '/' : '') + f.name}')">${f.name}</button>`).join(' ') || '(empty)');
 }
 async function openFile(p) {
-  const id = document.getElementById('fileApp').value;
+  const id = currentApp;
   const fp = p || document.getElementById('filePath').value.trim() || 'index.html';
   if (!id) { document.getElementById('fileEdit').value = 'no app selected'; return; }
   document.getElementById('filePath').value = fp;
@@ -107,7 +136,7 @@ async function openFile(p) {
   } catch (e) { document.getElementById('fileEdit').value = 'open failed: ' + e.message; }
 }
 async function saveFile() {
-  const id = document.getElementById('fileApp').value;
+  const id = currentApp;
   const body = { path: document.getElementById('filePath').value, content: document.getElementById('fileEdit').value };
   document.getElementById('fileOut').textContent = 'saving + redeploying…';
   try {
@@ -116,7 +145,7 @@ async function saveFile() {
   } catch (e) { document.getElementById('fileOut').textContent = 'save failed: ' + e.message; }
 }
 async function deleteFile() {
-  const id = document.getElementById('fileApp').value;
+  const id = currentApp;
   const fp = document.getElementById('filePath').value;
   if (!id || !fp || !confirm('delete ' + fp + '?')) return;
   document.getElementById('fileOut').textContent = 'deleting + redeploying…';
@@ -128,7 +157,7 @@ async function deleteFile() {
   } catch (e) { document.getElementById('fileOut').textContent = 'delete failed: ' + e.message; }
 }
 async function uploadZip() {
-  const id = document.getElementById('fileApp').value;
+  const id = currentApp;
   const f = document.getElementById('zipFile').files[0];
   if (!id || !f) { document.getElementById('fileOut').textContent = 'pick an app and a zip file'; return; }
   const fd = new FormData(); fd.append('zip', f);
@@ -139,7 +168,7 @@ async function uploadZip() {
   } catch (e) { document.getElementById('fileOut').textContent = 'upload failed: ' + e.message; }
 }
 async function uploadPicked(folder) {
-  const id = document.getElementById('fileApp').value;
+  const id = currentApp;
   const input = document.getElementById(folder ? 'pickFolder' : 'pickFiles');
   const files = [...input.files];
   if (!id || !files.length) { document.getElementById('fileOut').textContent = 'pick an app and ' + (folder ? 'a folder' : 'one or more files'); return; }
@@ -160,12 +189,20 @@ async function uploadPicked(folder) {
 const logsEl = document.getElementById('logs');
 let term, ws;
 function openTerm() {
-  const id = document.getElementById('termApp').value.trim();
-  if (!id) return;
+  if (!currentApp) return;
+  const id = currentApp;
   term = new Terminal(); term.open(document.getElementById('term')); term.clear();
   ws = new WebSocket(`ws://${location.host}/terminal?app=${id}`);
   ws.onmessage = e => term.write(e.data);
   term.onData = d => ws.send(d);
+}
+function openTermGlobal() {
+  const id = document.getElementById('termApp').value;
+  if (!id) return;
+  const t = new Terminal(); t.open(document.getElementById('termGlobal'));
+  const w = new WebSocket(`ws://${location.host}/terminal?app=${id}`);
+  w.onmessage = e => t.write(e.data);
+  t.onData = d => w.send(d);
 }
 refresh();
 version();

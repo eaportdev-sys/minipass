@@ -12,9 +12,7 @@
     <div class="brand">mini<span>pass</span></div>
     <nav>
       <button class="navitem active" data-view="websites" onclick="showView('websites')">Websites</button>
-      <button class="navitem" data-view="files" onclick="showView('files')">Files</button>
       <button class="navitem" data-view="terminal" onclick="showView('terminal')">Terminal</button>
-      <button class="navitem" data-view="logs" onclick="showView('logs')">Logs</button>
       <button class="navitem" data-view="panel" onclick="showView('panel')">Upgrade</button>
     </nav>
     <div class="sidefoot"><button onclick="toggleTheme()" title="dark / light mode">Theme</button></div>
@@ -24,37 +22,48 @@
       <div class="pagehead"><h1>Websites</h1><button class="btn primary" onclick="openCreate()">+ Create</button></div>
       <div id="apps"></div>
     </section>
-    <section id="view-files" class="view">
-      <div class="pagehead"><h1>Files</h1></div>
+    <section id="view-site" class="view">
+      <div class="pagehead"><h1 id="siteName">site</h1><button onclick="backToSites()">&larr; all sites</button></div>
       <div class="card">
-        <select id="fileApp" onchange="listFiles('')"></select>
-        <button onclick="listFiles('')">list files</button>
-        <div id="fileList"></div>
-        <input id="filePath" placeholder="path (index.html)" style="width:240px">
-        <button onclick="openFile()">open</button>
-        <button onclick="saveFile()">save + redeploy</button>
-        <button class="btn danger" onclick="deleteFile()">delete + redeploy</button><br>
-        <textarea id="fileEdit" rows="12"></textarea><br>
-        <input type="file" id="zipFile" accept=".zip"><button onclick="uploadZip()">upload zip + redeploy</button><br>
-        <input type="file" id="pickFiles" multiple><button onclick="uploadPicked(false)">upload files + redeploy</button><br>
-        <input type="file" id="pickFolder" webkitdirectory><button onclick="uploadPicked(true)">upload folder + redeploy</button>
-        <pre id="fileOut"></pre>
+        <div class="badges" id="siteBadges"></div>
+        <div class="meta" id="siteMeta"></div>
+        <div class="actions">
+          <button class="tabbtn" data-tab="files" onclick="showSiteTab('files')">Files</button>
+          <button class="tabbtn" data-tab="logs" onclick="showSiteTab('logs')">Logs</button>
+          <button class="tabbtn" data-tab="terminal" onclick="showSiteTab('terminal')">Terminal</button>
+          <span style="flex:1"></span>
+          <button id="siteRedeploy">redeploy</button>
+          <button class="btn danger" id="siteDelete">delete</button>
+        </div>
+      </div>
+      <div id="tab-files" class="sitetab">
+        <div class="card">
+          <button onclick="listFiles('')">list files</button>
+          <div id="fileList"></div>
+          <input id="filePath" placeholder="path (index.html)" style="width:240px">
+          <button onclick="openFile()">open</button>
+          <button onclick="saveFile()">save + redeploy</button>
+          <button class="btn danger" onclick="deleteFile()">delete + redeploy</button><br>
+          <textarea id="fileEdit" rows="12"></textarea><br>
+          <input type="file" id="zipFile" accept=".zip"><button onclick="uploadZip()">upload zip + redeploy</button><br>
+          <input type="file" id="pickFiles" multiple><button onclick="uploadPicked(false)">upload files + redeploy</button><br>
+          <input type="file" id="pickFolder" webkitdirectory><button onclick="uploadPicked(true)">upload folder + redeploy</button>
+          <pre id="fileOut"></pre>
+        </div>
+      </div>
+      <div id="tab-logs" class="sitetab" style="display:none">
+        <div class="card"><button onclick="showLogs()">refresh logs</button><pre id="logs"></pre></div>
+      </div>
+      <div id="tab-terminal" class="sitetab" style="display:none">
+        <div class="card"><button onclick="openTerm()">connect ssh/terminal</button><div id="term"></div></div>
       </div>
     </section>
     <section id="view-terminal" class="view">
       <div class="pagehead"><h1>Terminal</h1></div>
       <div class="card">
         <select id="termApp"></select>
-        <button onclick="openTerm()">connect ssh/terminal</button>
-        <div id="term"></div>
-      </div>
-    </section>
-    <section id="view-logs" class="view">
-      <div class="pagehead"><h1>Logs</h1></div>
-      <div class="card">
-        <select id="logApp"></select>
-        <button onclick="showLogs()">logs</button>
-        <pre id="logs"></pre>
+        <button onclick="openTermGlobal()">connect ssh/terminal</button>
+        <div id="termGlobal"></div>
       </div>
     </section>
     <section id="view-panel" class="view">
