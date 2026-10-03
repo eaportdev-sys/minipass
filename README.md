@@ -1,16 +1,16 @@
-# minipaas - lean hPanel alternative for Debian
+# minipass - lightweight self-hosted app platform
 
 Click -> pick type -> container + DB + .env -> git auto-deploy -> Cloudflare Tunnel -> web terminal.
 
 ## Layout
 ```
 minipaas/
-  apps/               # generated per app: /srv/apps on Debian, ./apps locally
+  apps/               # generated per app: /srv/apps on Linux, ./apps locally
   backend/            # Node API :3001 + static frontend
   templates/          # Dockerfile starters per type
   frontend/           # wizard UI
   docker-compose.yml  # panel + cloudflared
-  install-debian.sh   # one-shot Debian setup
+  install-debian.sh   # backwards-compat alias for install-linux.sh
 ```
 
 ## Linux quickstart (any distro: Ubuntu 26 / Debian / Fedora / Arch / openSUSE)
