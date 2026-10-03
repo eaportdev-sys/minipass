@@ -10,15 +10,18 @@ const { createApp, appDir } = require('./lib/generator');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
-const TEMPLATES_DIR = path.resolve(__dirname, '../templates');
+function pickDir(cands) { for (const c of cands) { try { if (fs.existsSync(c)) return c; } catch {} } return cands[0]; }
+const TEMPLATES_DIR = pickDir([path.resolve(__dirname, '../templates'), path.join(__dirname, 'templates'), path.join(process.cwd(), 'templates')]);
+const FRONTEND_DIR = pickDir([path.resolve(__dirname, '../frontend'), path.join(__dirname, 'frontend'), path.join(process.cwd(), 'frontend')]);
 const DATA_FILE = path.join(__dirname, 'data.json');
 fs.mkdirSync(APPS_DIR, { recursive: true });
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-// serve wizard UI
-app.use(express.static(path.join(__dirname, '../frontend')));
+// serve wizard UI (works locally and in docker)
+app.use(express.static(FRONTEND_DIR));
+app.get('/health', (req, res) => res.send('ok'));
 
 function load() {
   try { return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); }

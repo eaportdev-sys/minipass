@@ -1,7 +1,9 @@
 FROM node:20-alpine
 WORKDIR /srv/panel
-COPY package.json ./
+COPY backend/package.json ./
 RUN npm i --omit=dev
-COPY . .
+COPY backend/. ./
+COPY frontend/ ./frontend/
+COPY templates/ ./templates/
 EXPOSE 3001
 CMD ["node", "server.js"]
