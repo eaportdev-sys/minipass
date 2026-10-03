@@ -92,7 +92,14 @@ if ! command -v crontab >/dev/null; then
 fi
 if command -v crontab >/dev/null; then
   CRON="* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin cd /opt/minipass && [ -f .pending-restart ] && GIT_SHA=\$(cat .pending-restart) docker compose -p minipass up -d >> upgrade.log 2>&1 && rm -f .pending-restart .upgrade-lock"
-  (crontab -l 2>/dev/null | grep -v 'pending-restart'; echo "$CRON") | crontab -
+  # NOTE: every stage carries `|| true` - under `set -e`, a bare
+  # `crontab -l | grep -v` on an empty crontab kills the subshell before echo runs,
+  # installing a headers-only (empty) crontab. That exact bug shipped once.
+  TMP_CRON=$(mktemp)
+  { crontab -l 2>/dev/null || true; } | grep -v 'pending-restart' > "$TMP_CRON" || true
+  echo "$CRON" >> "$TMP_CRON"
+  crontab "$TMP_CRON"
+  rm -f "$TMP_CRON"
   if crontab -l 2>/dev/null | grep -q 'pending-restart'; then msg "upgrade cron installed + verified"
   else msg "WARNING: cron entry did not stick - upgrades need manual 'docker compose up -d'"; fi
 else
