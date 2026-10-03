@@ -22,11 +22,12 @@
 <h3>logs</h3><select id="logApp"></select><button onclick="showLogs()">logs</button><pre id="logs"></pre>
 <h3>files</h3>
 <div class="card">
-<select id="fileApp"></select><button onclick="listFiles('')">list files</button>
+<select id="fileApp" onchange="listFiles('')"></select><button onclick="listFiles('')">list files</button>
 <div id="fileList"></div>
 <input id="filePath" placeholder="path (index.html)" style="width:240px">
 <button onclick="openFile()">open</button>
-<button onclick="saveFile()">save + redeploy</button><br>
+<button onclick="saveFile()">save + redeploy</button>
+<button onclick="deleteFile()">delete + redeploy</button><br>
 <textarea id="fileEdit" rows="12" style="width:100%;max-width:800px"></textarea><br>
 <input type="file" id="zipFile" accept=".zip"><button onclick="uploadZip()">upload zip + redeploy</button>
 <pre id="fileOut"></pre>

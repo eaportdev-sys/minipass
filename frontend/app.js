@@ -47,6 +47,7 @@ async function scan() {
 let curDir = '';
 async function listFiles(dir) {
   curDir = dir || '';
+  if (!dir) { document.getElementById('filePath').value = ''; document.getElementById('fileEdit').value = ''; }
   const id = document.getElementById('fileApp').value;
   if (!id) return;
   const files = await (await fetch(`/api/apps/${id}/files?path=${encodeURIComponent(curDir)}`)).json();
@@ -73,6 +74,18 @@ async function saveFile() {
     const r = await (await fetch(`/api/apps/${id}/file`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
     document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2); listFiles(curDir);
   } catch (e) { document.getElementById('fileOut').textContent = 'save failed: ' + e.message; }
+}
+async function deleteFile() {
+  const id = document.getElementById('fileApp').value;
+  const fp = document.getElementById('filePath').value;
+  if (!id || !fp || !confirm('delete ' + fp + '?')) return;
+  document.getElementById('fileOut').textContent = 'deleting + redeploying…';
+  try {
+    const r = await (await fetch(`/api/apps/${id}/file?path=${encodeURIComponent(fp)}`, { method: 'DELETE' })).json();
+    document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2);
+    document.getElementById('filePath').value = ''; document.getElementById('fileEdit').value = '';
+    listFiles(curDir);
+  } catch (e) { document.getElementById('fileOut').textContent = 'delete failed: ' + e.message; }
 }
 async function uploadZip() {
   const id = document.getElementById('fileApp').value;

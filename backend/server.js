@@ -201,6 +201,16 @@ app.put('/api/apps/:id/file', async (req, res) => {
     res.json({ ok: true, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+app.delete('/api/apps/:id/file', async (req, res) => {
+  try {
+    const base = codeDir(req.params.id);
+    const f = safeRel(base, req.query.path || '');
+    if (f === base) return res.status(400).json({ error: 'refusing to delete app root' });
+    fs.rmSync(f, { recursive: true, force: true });
+    await deploy(req.params.id);
+    res.json({ ok: true, redeployed: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 const upload = require('multer')({ dest: '/tmp/minipass-uploads/', limits: { fileSize: 50 * 1024 * 1024 } });
 fs.mkdirSync('/tmp/minipass-uploads', { recursive: true });
 app.post('/api/apps/:id/upload', upload.single('zip'), async (req, res) => {
