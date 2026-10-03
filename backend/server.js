@@ -19,8 +19,12 @@ fs.mkdirSync(APPS_DIR, { recursive: true });
 const app = express();
 app.use(cors());
 app.use(express.json());
-// serve wizard UI (works locally and in docker)
-app.use(express.static(FRONTEND_DIR));
+// serve wizard UI (works locally and in docker). No-store so upgrades show instantly.
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api') && !req.path.startsWith('/webhook') && !req.path.startsWith('/terminal')) res.set('Cache-Control', 'no-store');
+  next();
+});
+app.use(express.static(FRONTEND_DIR, { maxAge: 0, etag: false }));
 app.get('/health', (req, res) => res.send('ok'));
 
 function load() {
