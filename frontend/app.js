@@ -286,6 +286,10 @@ function openCreate() {
   document.getElementById('domain').value = '';
   document.getElementById('out').textContent = '';
   document.querySelector('input[name=access][value=local]').checked = true;
+  // never inherit the previous app: reset type, dbs and repo picker every open
+  document.querySelector('input[name=apptype][value=static]').checked = true;
+  document.querySelectorAll('input[name=appdb]').forEach(c => { c.checked = false; });
+  document.getElementById('ghrepo').value = '';
   accessChanged();
   loadGhRepos();
 }
