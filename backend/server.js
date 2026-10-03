@@ -202,7 +202,13 @@ app.post('/api/apps', async (req, res) => {
 });
 
 const redactUrl = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
+const deployLocks = new Set();
 async function deploy(id) {
+  // one build per app at a time: overlapping `up --build` runs fight over
+  // container names and lose ("is already in use")
+  if (deployLocks.has(id)) throw new Error('deploy already in progress - wait for it to finish');
+  deployLocks.add(id);
+  try {
   const dir = appDir(APPS_DIR, id);
   const meta = load().apps.find(a => a.id === id);
   const codeDir = path.join(dir, 'code');
@@ -242,6 +248,9 @@ async function deploy(id) {
     throw new Error((tail || e.message).trim());
   }
   return true;
+  } finally {
+    deployLocks.delete(id);
+  }
 }
 
 app.get('/api/apps/:id/build-log', (req, res) => {
