@@ -136,31 +136,37 @@
 <div id="modal" class="modal"><div class="modalbox">
   <h2>New website</h2>
   <div class="msec"><div class="mlabel">1 · Name</div><input id="name" placeholder="myapp"></div>
-  <div class="msec"><div class="mlabel">2 · Type</div>
+  <div class="msec"><div class="mlabel">2 · Connect to git</div>
+  <div class="meta" id="ghConnState">checking…</div>
+  <div id="ghConnectRow" style="display:none">
+    <button onclick="window.open('https://github.com/settings/tokens?type=beta','_blank')">connect github</button>
+    <div class="meta">Sign in if asked → Generate new token (fine-grained) → Contents <b>read-only</b> + Webhooks <b>read+write</b> → copy, paste here:</div>
+    <input id="ghModalToken" type="password" placeholder="github_pat_…" style="width:220px">
+    <button onclick="modalTokenSave()">save</button></div>
+  </div>
+  <div class="msec"><div class="mlabel">3 · Code source</div>
+  <div id="ghRepoRow" style="display:none">
+  <div class="meta">Pick a repo — type + databases below set themselves:</div>
+  <select id="ghrepo" onchange="detectType()"><option value="">GitHub repo…</option></select>
+  </div>
+  <input id="repo" placeholder="…or paste git url (private: SSH + repo key, or HTTPS with token)" onchange="detectType()">
+  <div class="meta">Leave everything empty to start from a template and upload files later.</div>
+  </div>
+  <div class="msec"><div class="mlabel">4 · Type</div>
   <div class="typerow">
     <label class="typepill"><input type="radio" name="apptype" value="static" checked><b>Static</b>html / files</label>
     <label class="typepill"><input type="radio" name="apptype" value="react"><b>React</b>build + serve</label>
     <label class="typepill"><input type="radio" name="apptype" value="node"><b>Node.js</b>server app</label>
     <label class="typepill"><input type="radio" name="apptype" value="php"><b>PHP</b>apache app</label>
   </div></div>
-  <div class="msec"><div class="mlabel">3 · Databases (pick any)</div>
+  <div class="msec"><div class="mlabel">5 · Databases (auto-suggested, adjust freely)</div>
   <div class="typerow">
     <label class="typepill"><input type="checkbox" name="appdb" value="postgres"><b>Postgres</b>sql db</label>
     <label class="typepill"><input type="checkbox" name="appdb" value="mysql"><b>MySQL</b>sql db</label>
     <label class="typepill"><input type="checkbox" name="appdb" value="mongo"><b>Mongo</b>nosql db</label>
     <label class="typepill"><input type="checkbox" name="appdb" value="redis"><b>Redis</b>cache / kv</label>
   </div></div>
-  <div class="msec"><div class="mlabel">4 · Code source</div>
-  <select id="ghrepo" onchange="detectType()"><option value="">GitHub repo…</option></select>
-  <div class="meta" id="ghConnectRow" style="display:none">GitHub isn't connected.
-    <button onclick="window.open('https://github.com/settings/tokens?type=beta','_blank')">connect github</button>
-    <div class="meta">Sign in if asked → Generate new token (fine-grained) → Contents <b>read-only</b> + Webhooks <b>read+write</b> → copy, paste here:</div>
-    <input id="ghModalToken" type="password" placeholder="github_pat_…" style="width:220px">
-    <button onclick="modalTokenSave()">save</button></div>
-  <input id="repo" placeholder="…or paste git url (private: SSH + repo key, or HTTPS with token)" onchange="detectType()">
-  <div class="meta">Leave both empty to start from a template and upload files later.</div>
-  </div>
-  <div class="msec"><div class="mlabel">5 · Access</div>
+  <div class="msec"><div class="mlabel">6 · Access</div>
   <label class="radiorow"><input type="radio" name="access" value="local" checked onchange="accessChanged()"> <b>Localhost</b> <span class="meta">auto port 8000+, works immediately</span></label>
   <label class="radiorow"><input type="radio" name="access" value="domain" onchange="accessChanged()"> <b>Custom domain</b> <span class="meta">needs DNS + tunnel</span></label>
   <input id="domain" placeholder="app.example.com" style="display:none">

@@ -200,18 +200,34 @@ async function detectType() {
     }
   } catch {}
 }
-async function loadGhRepos() {  const sel = document.getElementById('ghrepo');
+async function loadGhRepos() {
+  const sel = document.getElementById('ghrepo');
   const row = document.getElementById('ghConnectRow');
-  sel.innerHTML = '<option value="">—</option>';
+  const repoRow = document.getElementById('ghRepoRow');
+  const state = document.getElementById('ghConnState');
+  sel.innerHTML = '<option value="">GitHub repo…</option>';
   row.style.display = 'none';
+  repoRow.style.display = 'none';
+  state.textContent = 'checking…';
+  try {
+    const st = await (await fetch('/api/github/status')).json().catch(() => null);
+    if (st && st.connected) {
+      state.textContent = 'connected: ' + st.logins.join(', ');
+      repoRow.style.display = 'block';
+    } else {
+      state.textContent = st ? 'not connected' : 'panel predates github support - upgrade first';
+      row.style.display = st ? 'block' : 'none';
+      return;
+    }
+  } catch { state.textContent = 'panel predates github support - upgrade first'; return; }
   try {
     const r = await fetch('/api/github/repos');
-    if (r.status === 404) return; // panel predates github support - upgrade first
+    if (r.status === 404) return;
     const data = await r.json();
-    if (data.error) { row.style.display = 'block'; return; }
+    if (data.error) { row.style.display = 'block'; repoRow.style.display = 'none'; return; }
     const byAcct = {};
     for (const x of (data.repos || [])) { (byAcct[x.account] = byAcct[x.account] || []).push(x); }
-    sel.innerHTML = '<option value="">—</option>' + Object.keys(byAcct).map(a =>
+    sel.innerHTML = '<option value="">GitHub repo…</option>' + Object.keys(byAcct).map(a =>
       `<optgroup label="${a}">` + byAcct[a].map(x =>
         `<option value="${x.full_name}" data-login="${a}">${x.full_name}${x.private ? ' (private)' : ''}</option>`).join('') + '</optgroup>').join('');
     if ((data.errors || []).length) toast('some accounts failed: ' + data.errors.map(e => e.account).join(', '), false);
