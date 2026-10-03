@@ -102,10 +102,15 @@ function showSiteTab(t) {
   if (t === 'logs') showLogs();
 }
 async function createApp() {
-  const v = id => document.getElementById(id).value;
+  const v = id => document.getElementById(id).value.trim();
   const typeEl = document.querySelector('input[name=apptype]:checked');
   const dbs = [...document.querySelectorAll('input[name=appdb]:checked')].map(e => e.value);
-  const body = { name: v('name'), type: typeEl ? typeEl.value : 'static', dbs, repoUrl: v('repo'), domain: v('domain') };
+  const accessEl = document.querySelector('input[name=access]:checked');
+  const access = accessEl ? accessEl.value : 'local';
+  const body = {
+    name: v('name'), type: typeEl ? typeEl.value : 'static', dbs,
+    repoUrl: v('repo'), domain: access === 'domain' ? v('domain') : ''
+  };
   const r = await (await fetch('/api/apps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
   document.getElementById('out').textContent = JSON.stringify(r, null, 2);
   // github repo picked: link it (sets repoUrl + auto-creates the push webhook)
@@ -168,7 +173,20 @@ function showView(view) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + view));
   document.querySelectorAll('.navitem').forEach(n => n.classList.toggle('active', n.dataset.view === view));
 }
-function openCreate() { document.getElementById('modal').classList.add('open'); loadGhRepos(); }
+function accessChanged() {
+  const accessEl = document.querySelector('input[name=access]:checked');
+  document.getElementById('domain').style.display = (accessEl && accessEl.value === 'domain') ? 'block' : 'none';
+}
+function openCreate() {
+  document.getElementById('modal').classList.add('open');
+  document.getElementById('name').value = '';
+  document.getElementById('repo').value = '';
+  document.getElementById('domain').value = '';
+  document.getElementById('out').textContent = '';
+  document.querySelector('input[name=access][value=local]').checked = true;
+  accessChanged();
+  loadGhRepos();
+}
 function closeCreate() { document.getElementById('modal').classList.remove('open'); }
 function toggleTheme() {
   const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';

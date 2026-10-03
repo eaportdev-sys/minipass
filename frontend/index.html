@@ -113,26 +113,32 @@
 </div>
 <div id="modal" class="modal"><div class="modalbox">
   <h2>New website</h2>
-  <label>App name<input id="name" placeholder="myapp"></label>
-  <label>Type</label>
+  <div class="msec"><div class="mlabel">1 · Name</div><input id="name" placeholder="myapp"></div>
+  <div class="msec"><div class="mlabel">2 · Type</div>
   <div class="typerow">
     <label class="typepill"><input type="radio" name="apptype" value="static" checked><b>Static</b>html / files</label>
     <label class="typepill"><input type="radio" name="apptype" value="react"><b>React</b>build + serve</label>
     <label class="typepill"><input type="radio" name="apptype" value="node"><b>Node.js</b>server app</label>
     <label class="typepill"><input type="radio" name="apptype" value="php"><b>PHP</b>apache app</label>
-  </div>
-  <label>Databases (pick any)</label>
+  </div></div>
+  <div class="msec"><div class="mlabel">3 · Databases (pick any)</div>
   <div class="typerow">
     <label class="typepill"><input type="checkbox" name="appdb" value="postgres"><b>Postgres</b>sql db</label>
     <label class="typepill"><input type="checkbox" name="appdb" value="mysql"><b>MySQL</b>sql db</label>
     <label class="typepill"><input type="checkbox" name="appdb" value="mongo"><b>Mongo</b>nosql db</label>
     <label class="typepill"><input type="checkbox" name="appdb" value="redis"><b>Redis</b>cache / kv</label>
+  </div></div>
+  <div class="msec"><div class="mlabel">4 · Code source</div>
+  <select id="ghrepo"><option value="">GitHub repo…</option></select>
+  <div class="meta" id="ghConnectRow" style="display:none">GitHub isn't connected. <button onclick="ghConnect()">connect github</button> (see Upgrade view for token path)</div>
+  <input id="repo" placeholder="…or paste git url (private: SSH + repo key, or HTTPS with token)">
+  <div class="meta">Leave both empty to start from a template and upload files later.</div>
   </div>
-  <label>Git repo url (optional)<input id="repo" placeholder="https://github.com/you/site.git"></label>
-  <div class="meta">Or pick a connected GitHub repo (auto-webhook on build): <select id="ghrepo"><option value="">—</option></select></div>
-  <div class="meta" id="ghConnectRow" style="display:none">GitHub isn't connected. <button onclick="ghConnect()">connect github</button> (needs one-time OAuth setup, see Upgrade view)</div>
-  <div class="meta">Private repo and no GitHub connect? Use SSH (<code>git@github.com:you/site.git</code>) + the repo deploy key below, or paste HTTPS with a token embedded.</div>
-  <label>Domain (optional)<input id="domain" placeholder="app.example.com"></label>
+  <div class="msec"><div class="mlabel">5 · Access</div>
+  <label class="radiorow"><input type="radio" name="access" value="local" checked onchange="accessChanged()"> <b>Localhost</b> <span class="meta">auto port 8000+, works immediately</span></label>
+  <label class="radiorow"><input type="radio" name="access" value="domain" onchange="accessChanged()"> <b>Custom domain</b> <span class="meta">needs DNS + tunnel</span></label>
+  <input id="domain" placeholder="app.example.com" style="display:none">
+  </div>
   <div class="modalbtns"><button class="btn primary" onclick="createApp()">Build</button><button onclick="closeCreate()">Cancel</button></div>
   <pre id="out"></pre>
 </div></div>

@@ -98,8 +98,14 @@ a { color: var(--accent); }
 /* create modal */
 .modal { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, .55); z-index: 50; align-items: center; justify-content: center; }
 .modal.open { display: flex; }
-.modalbox { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 24px; width: 440px; max-width: 92vw; box-shadow: var(--shadow); }
+.modalbox { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 24px; width: 460px; max-width: 94vw; max-height: 92vh; overflow-y: auto; box-shadow: var(--shadow); }
 .modalbox h2 { margin-top: 0; }
+.msec { margin-bottom: 14px; }
+.mlabel { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin-bottom: 6px; }
+.msec input[type=text], .msec input:not([type]), .msec select { width: 100%; margin: 4px 0; }
+.radiorow { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; margin: 6px 0; cursor: pointer; }
+.radiorow:has(input:checked) { border-color: var(--accent); }
+.radiorow input { margin: 0; }
 .typerow { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 6px 0; }
 .typepill { border: 1px solid var(--border); border-radius: 10px; padding: 12px; text-align: center; cursor: pointer; color: var(--muted); }
 .typepill:has(input:checked) { border-color: var(--accent); color: var(--text); background: var(--input); }
