@@ -32,13 +32,36 @@ async function version() {
   try {
     const v = await (await fetch('/api/panel/version')).json();
     document.getElementById('ver').textContent =
-      `running ${v.running} · repo ${v.repo}` + (v.restarting ? ' (restarting… wait 30s and refresh)' : '') + (v.upgradeable ? '' : ' (mount ./:/repo to enable upgrade)');
+      `running ${v.running} · repo ${v.repo}` + (v.upgradeable ? '' : ' (mount ./:/repo to enable upgrade)');
+    // landed mid-restart (manual refresh) -> resume watching instead of sitting stale
+    if (v.restarting && !restartTimer) watchRestart(180000);
   } catch { document.getElementById('ver').textContent = 'unknown'; }
 }
 async function upgrade() {
   document.getElementById('upOut').textContent = 'pulling + rebuilding… panel will restart';
-  const r = await (await fetch('/api/panel/upgrade', { method: 'POST' })).json();
-  document.getElementById('upOut').textContent = JSON.stringify(r, null, 2);
+  try {
+    const r = await (await fetch('/api/panel/upgrade', { method: 'POST' })).json();
+    document.getElementById('upOut').textContent = JSON.stringify(r, null, 2);
+    if (r.restarting) watchRestart(180000);
+  } catch (e) { document.getElementById('upOut').textContent = 'upgrade failed: ' + e.message; }
+}
+let restartTimer = null;
+async function watchRestart(deadlineMs) {
+  if (restartTimer) clearInterval(restartTimer);
+  const out = document.getElementById('upOut');
+  const end = Date.now() + (deadlineMs || 180000);
+  restartTimer = setInterval(async () => {
+    const left = Math.max(0, Math.ceil((end - Date.now()) / 1000));
+    try {
+      const v = await (await fetch('/api/panel/version')).json();
+      document.getElementById('ver').textContent = `running ${v.running} · repo ${v.repo}`;
+      if (!v.restarting) { clearInterval(restartTimer); restartTimer = null; location.reload(); return; }
+      out.textContent = `restarting… running ${v.running}, target ${v.repo} (${left}s left)`;
+    } catch (e) {
+      out.textContent = `restarting… panel unreachable, retrying (${left}s left)`;
+    }
+    if (left <= 0) { clearInterval(restartTimer); restartTimer = null; out.textContent += '\nTimed out - refresh the page manually.'; }
+  }, 3000);
 }
 async function scan() {
   const r = await (await fetch('/api/panel/scan', { method: 'POST' })).json();
