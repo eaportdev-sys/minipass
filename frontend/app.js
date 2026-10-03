@@ -43,10 +43,16 @@ async function copyHook() {
   try { await navigator.clipboard.writeText(document.getElementById('hookUrl').textContent); } catch {}
 }
 async function regenHook() {
-  if (!currentApp || !confirm('Regenerate? The old webhook URL stops working.')) return;
+  if (!currentApp) return;
+  const ok = await uiConfirm({
+    title: 'Regenerate webhook?',
+    body: 'The old webhook URL stops working immediately. Update GitHub after.',
+    confirmLabel: 'Regenerate'
+  });
+  if (!ok) return;
   const r = await (await fetch(`/api/apps/${currentApp}/regenerate`, { method: 'POST' })).json();
-  if (r.token) refresh();
-  else alert(r.error || 'failed');
+  if (r.token) { refresh(); toast('webhook regenerated - update GitHub'); }
+  else toast(r.error || 'failed', false);
 }
 function showSiteTab(t) {
   document.querySelectorAll('.sitetab').forEach(s => s.style.display = 'none');
@@ -77,10 +83,81 @@ function toggleTheme() {
   try { localStorage.setItem('mp-theme', t); } catch {}
 }
 try { document.documentElement.dataset.theme = localStorage.getItem('mp-theme') || 'dark'; } catch {}
-async function deploy(id) { await fetch('/api/apps/' + id + '/deploy', { method: 'POST' }); alert('deploying'); }
-async function stopApp(id) { const r = await (await fetch('/api/apps/' + id + '/stop', { method: 'POST' })).json(); alert(r.ok ? 'stopped' : (r.error || 'failed')); }
-async function startApp(id) { const r = await (await fetch('/api/apps/' + id + '/start', { method: 'POST' })).json(); alert(r.ok ? 'started' : (r.error || 'failed')); }
-async function rmApp(id) { if (confirm('delete?')) { await fetch('/api/apps/' + id, { method: 'DELETE' }); refresh(); } }
+async function deploy(id) {
+  toast('redeploying ' + id + '…');
+  try {
+    const r = await (await fetch('/api/apps/' + id + '/deploy', { method: 'POST' })).json();
+    toast(r.ok ? id + ' redeployed' : ('redeploy failed: ' + (r.error || 'unknown')), !!r.ok);
+  } catch (e) { toast('redeploy failed: ' + e.message, false); }
+}
+function toast(msg, ok = true) {
+  const box = document.getElementById('toasts');
+  const d = document.createElement('div');
+  d.className = 'toast' + (ok ? '' : ' err');
+  d.textContent = msg;
+  box.appendChild(d);
+  setTimeout(() => d.remove(), 6000);
+}
+// In-app confirm modal (no browser dialogs). requireText forces typing to confirm.
+function uiConfirm({ title, body, requireText, confirmLabel, danger }) {
+  return new Promise(resolve => {
+    const m = document.getElementById('confirmModal');
+    document.getElementById('cmTitle').textContent = title || 'confirm';
+    document.getElementById('cmBody').textContent = body || '';
+    const label = document.getElementById('cmLabel');
+    const input = document.getElementById('cmInput');
+    const okBtn = document.getElementById('cmOk');
+    document.getElementById('cmNeed').textContent = requireText || '';
+    label.style.display = requireText ? 'block' : 'none';
+    input.value = '';
+    okBtn.textContent = confirmLabel || 'confirm';
+    okBtn.classList.toggle('danger', !!danger);
+    const done = val => {
+      document.getElementById('cmOk').onclick = null;
+      document.getElementById('cmCancel').onclick = null;
+      m.classList.remove('open');
+      resolve(val);
+    };
+    okBtn.onclick = () => {
+      if (requireText && input.value.trim() !== requireText) {
+        input.focus();
+        input.style.borderColor = 'var(--danger)';
+        return;
+      }
+      done(true);
+    };
+    document.getElementById('cmCancel').onclick = () => done(false);
+    m.classList.add('open');
+    (requireText ? input : okBtn).focus();
+  });
+}
+async function stopApp(id) {
+  toast('stopping ' + id + '…');
+  try {
+    const r = await (await fetch('/api/apps/' + id + '/stop', { method: 'POST' })).json();
+    toast(r.ok ? id + ' stopped' : ('stop failed: ' + (r.error || 'unknown')), !!r.ok);
+  } catch (e) { toast('stop failed: ' + e.message, false); }
+}
+async function startApp(id) {
+  toast('starting ' + id + '…');
+  try {
+    const r = await (await fetch('/api/apps/' + id + '/start', { method: 'POST' })).json();
+    toast(r.ok ? id + ' started' : ('start failed: ' + (r.error || 'unknown')), !!r.ok);
+  } catch (e) { toast('start failed: ' + e.message, false); }
+}
+async function rmApp(id) {
+  const ok = await uiConfirm({
+    title: 'Delete ' + id + '?',
+    body: 'Containers, volumes and files are removed. This cannot be undone.',
+    requireText: id, confirmLabel: 'Delete', danger: true
+  });
+  if (!ok) return;
+  try {
+    await fetch('/api/apps/' + id, { method: 'DELETE' });
+    toast(id + ' deleted');
+    if (id === currentApp) backToSites(); else refresh();
+  } catch (e) { toast('delete failed: ' + e.message, false); }
+}
 async function showLogs() {
   if (!currentApp) { logsEl.textContent = 'open a website first'; return; }
   logsEl.textContent = 'loading…';
@@ -165,7 +242,12 @@ async function saveFile() {
 async function deleteFile() {
   const id = currentApp;
   const fp = document.getElementById('filePath').value;
-  if (!id || !fp || !confirm('delete ' + fp + '?')) return;
+  if (!id || !fp) return;
+  const ok = await uiConfirm({
+    title: 'Delete ' + fp + '?', body: 'From ' + id + '. This cannot be undone.',
+    confirmLabel: 'Delete', danger: true
+  });
+  if (!ok) return;
   document.getElementById('fileOut').textContent = 'deleting + redeploying…';
   try {
     const r = await (await fetch(`/api/apps/${id}/file?path=${encodeURIComponent(fp)}`, { method: 'DELETE' })).json();

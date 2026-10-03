@@ -106,5 +106,12 @@
   <div class="modalbtns"><button class="btn primary" onclick="createApp()">Build</button><button onclick="closeCreate()">Cancel</button></div>
   <pre id="out"></pre>
 </div></div>
+<div id="toasts"></div>
+<div id="confirmModal" class="modal"><div class="modalbox">
+  <h2 id="cmTitle">confirm</h2>
+  <p id="cmBody" class="meta"></p>
+  <label id="cmLabel" style="display:none">Type <b id="cmNeed"></b> to confirm<input id="cmInput" autocomplete="off"></label>
+  <div class="modalbtns"><button id="cmOk" class="btn primary">confirm</button><button id="cmCancel">cancel</button></div>
+</div></div>
 <script src="app.js"></script>
 </body></html>

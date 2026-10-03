@@ -108,6 +108,13 @@ a { color: var(--accent); }
 .modalbtns { display: flex; gap: 8px; margin-top: 14px; }
 .view { display: none; }
 .view.active { display: block; }
+#toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 100; }
+.toast {
+  background: var(--card); border: 1px solid var(--ok); color: var(--text);
+  border-radius: 10px; padding: 10px 14px; box-shadow: var(--shadow); font-size: 14px;
+}
+.toast.err { border-color: var(--danger); }
+#cmOk.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 @media (max-width: 720px) {
   .sidebar { width: 64px; }
   .brand { font-size: 0; }
