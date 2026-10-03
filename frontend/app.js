@@ -15,7 +15,7 @@ async function createApp() {
 }
 async function deploy(id) { await fetch('/api/apps/' + id + '/deploy', { method: 'POST' }); alert('deploying'); }
 async function rmApp(id) { if (confirm('delete?')) { await fetch('/api/apps/' + id, { method: 'DELETE' }); refresh(); } }
-async function logs() { logsEl.textContent = await (await fetch('/api/apps/' + document.getElementById('logApp').value + '/logs')).text(); }
+async function showLogs() { logsEl.textContent = 'loading…'; logsEl.textContent = await (await fetch('/api/apps/' + document.getElementById('logApp').value.trim() + '/logs')).text(); }
 async function version() {
   try {
     const v = await (await fetch('/api/panel/version')).json();

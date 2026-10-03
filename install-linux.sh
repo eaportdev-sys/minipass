@@ -68,9 +68,9 @@ fi
 # 5. dirs + firewall (whichever exists)
 mkdir -p /srv/apps /opt/minipaas
 if command -v ufw >/dev/null; then
-  ufw allow 22/tcp || true; ufw allow 3001/tcp || true; yes | ufw enable || true
+  ufw allow 22/tcp || true; ufw allow 3001/tcp || true; ufw allow 8000:9000/tcp || true; yes | ufw enable || true
 elif command -v firewall-cmd >/dev/null; then
-  firewall-cmd --permanent --add-port=3001/tcp || true; firewall-cmd --reload || true
+  firewall-cmd --permanent --add-port=3001/tcp || true; firewall-cmd --permanent --add-port=8000-9000/tcp || true; firewall-cmd --reload || true
 else
   msg "no ufw/firewalld - open TCP 3001 manually if needed"
 fi
