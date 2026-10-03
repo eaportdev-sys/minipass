@@ -81,8 +81,8 @@ async function listFiles(dir) {
 }
 async function openFile(p) {
   const id = document.getElementById('fileApp').value;
-  const fp = p || document.getElementById('filePath').value;
-  if (!id || !fp) return;
+  const fp = p || document.getElementById('filePath').value.trim() || 'index.html';
+  if (!id) { document.getElementById('fileEdit').value = 'no app selected'; return; }
   document.getElementById('filePath').value = fp;
   try {
     const r = await (await fetch(`/api/apps/${id}/file?path=${encodeURIComponent(fp)}`)).json();
