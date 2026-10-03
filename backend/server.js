@@ -107,6 +107,25 @@ app.post('/webhook/:id', async (req, res) => {
   try { await deploy(req.params.id); res.send('deployed'); }
   catch (e) { res.status(500).send(e.message); }
 });
+// Push-to-deploy: bare repo per app on the host. `git push` to it checks out
+// into code/ and triggers a rebuild - no GitHub needed on localhost/LAN.
+app.post('/api/apps/:id/git-init', (req, res) => {
+  try {
+    const id = req.params.id;
+    const dir = appDir(APPS_DIR, id);
+    if (!fs.existsSync(path.join(dir, 'docker-compose.yml'))) return res.status(404).json({ error: 'unknown app' });
+    const repo = path.join(dir, 'repo.git');
+    const port = process.env.PORT || PORT;
+    if (!fs.existsSync(repo)) execSync(`git init --bare "${repo}"`, { stdio: 'ignore' });
+    const hook = `#!/bin/sh\n# minipass push-to-deploy: checkout pushed branch into code/, rebuild\nif GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f main 2>/dev/null; then\n  :\nelse\n  GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f master\nfi\ncurl -s -X POST http://localhost:${port}/api/apps/${id}/deploy >/dev/null\n`;
+    fs.writeFileSync(path.join(repo, 'hooks', 'post-receive'), hook);
+    fs.chmodSync(path.join(repo, 'hooks', 'post-receive'), 0o755);
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === id);
+    if (meta) { meta.localGit = true; save(db_); }
+    res.json({ ok: true, remote: `ssh://root@<server>:${path.join(dir, 'repo.git')}` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.post('/api/apps/:id/regenerate', (req, res) => {
   try {
     const db_ = load();

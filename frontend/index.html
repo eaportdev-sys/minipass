@@ -44,6 +44,11 @@
         <div class="meta"><code id="hookUrl"></code></div>
         <div class="actions"><button onclick="copyHook()">copy</button><button onclick="regenHook()">regenerate</button></div>
       </div>
+      <div class="card">
+        <b>local git push</b>
+        <div class="meta">Push straight from your machine to this box — no GitHub. Push checks out + rebuilds.</div>
+        <div class="meta" id="localGitBox"><button onclick="initLocalGit()">enable local git push</button></div>
+      </div>
       <div id="tab-files" class="sitetab">
         <div class="card">
           <button onclick="listFiles('')">list files</button>

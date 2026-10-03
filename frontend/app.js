@@ -38,6 +38,23 @@ function fillSiteHeader(a) {
   document.getElementById('siteStart').onclick = () => startApp(a.id);
   document.getElementById('siteDelete').onclick = () => rmApp(a.id);
   document.getElementById('hookUrl').textContent = `${location.origin}/webhook/${a.id}?token=${a.token}`;
+  const box = document.getElementById('localGitBox');
+  if (a.localGit) {
+    const remote = `root@${location.hostname}:/srv/apps/${a.id}/repo.git`;
+    box.innerHTML = `<code id="localRemote">${remote}</code> <button onclick="copyLocal()">copy</button>` +
+      `<div class="meta">on your machine:<br><code>git remote add minipass ${remote}</code><br><code>git push minipass main</code> (or master)</div>`;
+  } else {
+    box.innerHTML = `<button onclick="initLocalGit()">enable local git push</button>`;
+  }
+}
+async function copyLocal() {
+  try { await navigator.clipboard.writeText(document.getElementById('localRemote').textContent); } catch {}
+}
+async function initLocalGit() {
+  if (!currentApp) return;
+  const r = await (await fetch(`/api/apps/${currentApp}/git-init`, { method: 'POST' })).json();
+  if (r.ok) { toast('local git ready - push to deploy'); refresh(); }
+  else toast(r.error || 'failed', false);
 }
 async function copyHook() {
   try { await navigator.clipboard.writeText(document.getElementById('hookUrl').textContent); } catch {}
