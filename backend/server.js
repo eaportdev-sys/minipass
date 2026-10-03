@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const { exec, execSync, spawn } = require('child_process');
 const http = require('http');
 const { WebSocketServer } = require('ws');
-const { createApp, appDir } = require('./lib/generator');
+const { createApp, appDir, normDbs } = require('./lib/generator');
 const { gitEnv, pubKey } = require('./lib/ssh');
 
 const PORT = process.env.PORT || 3001;
@@ -74,9 +74,10 @@ app.post('/api/apps', async (req, res) => {
     const used = new Set(existing.map(a => a.hostPort).filter(Boolean));
     let hostPort = parseInt(req.body.hostPort, 10) || 8000;
     while (used.has(hostPort) && hostPort < 9000) hostPort++;
-    createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl, db: db || 'none', port, domain, hostPort });
+    const dbs = normDbs(req.body.dbs !== undefined ? req.body.dbs : db);
+    createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl, db: dbs, port, domain, hostPort });
     const db_ = load();
-    const meta = { id, type, repoUrl: repoUrl || '', db: db || 'none', domain: domain || '', token, hostPort, createdAt: new Date().toISOString() };
+    const meta = { id, type, repoUrl: repoUrl || '', db: dbs, domain: domain || '', token, hostPort, createdAt: new Date().toISOString() };
     db_.apps = db_.apps.filter(a => a.id !== id).concat([meta]);
     save(db_);
     // build async so UI returns fast
@@ -188,6 +189,8 @@ app.post('/api/panel/scan', (req, res) => {
       if (!fs.existsSync(path.join(dir, 'docker-compose.yml'))) continue;
       if (db_.apps.some(a => a.id === name)) { found.push(name + ' (kept)'); continue; }
       const env = parseEnvFile(path.join(dir, '.env'));
+      const detected = ['postgres', 'mysql', 'mongo', 'redis'].filter(t => env[t.toUpperCase() + '_HOST']);
+      const dbLabel = detected.length ? detected : (env.DB_HOST ? ['external'] : []);
       let hostPort = parseInt(env.HOST_PORT, 10);
       if (!hostPort || used.has(hostPort)) {
         hostPort = nextPort;
@@ -197,7 +200,7 @@ app.post('/api/panel/scan', (req, res) => {
       used.add(hostPort);
       db_.apps.push({
         id: name, type: env.APP_TYPE || 'static', repoUrl: '',
-        db: env.DB_HOST ? 'external' : 'none', domain: env.DOMAIN || '',
+        db: dbLabel, domain: env.DOMAIN || '',
         token: crypto.randomBytes(16).toString('hex'),
         hostPort, createdAt: new Date().toISOString(), recovered: true
       });

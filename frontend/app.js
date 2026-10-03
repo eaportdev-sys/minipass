@@ -3,7 +3,7 @@ async function refresh() {
   const apps = await (await fetch('/api/apps')).json();
   document.getElementById('apps').innerHTML = apps.map(a =>
     `<div class="card appcard"><h3>${a.id}</h3>
-    <div class="badges"><span class="badge type">${a.type}</span><span class="badge">db: ${a.db}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}</div>
+    <div class="badges"><span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}</div>
     <div class="meta">local: ${a.hostPort ? `<a href="http://${location.hostname}:${a.hostPort}" target="_blank">http://${location.hostname}:${a.hostPort}</a>` : 'recreate app to get localhost port'}</div>
     <div class="actions"><button class="btn primary" onclick="openSite('${a.id}')">open</button><button onclick="deploy('${a.id}')">redeploy</button><button onclick="stopApp('${a.id}')">stop</button><button onclick="startApp('${a.id}')">start</button><button class="btn danger" onclick="rmApp('${a.id}')">delete</button></div></div>`).join('') || '<div class="card">No websites yet - hit + Create.</div>';
   // keep detail header + global terminal picker in sync
@@ -29,7 +29,7 @@ function fillSiteHeader(a) {
   if (!a) return;
   document.getElementById('siteName').textContent = a.id;
   document.getElementById('siteBadges').innerHTML =
-    `<span class="badge type">${a.type}</span><span class="badge">db: ${a.db}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}${a.hostPort ? `<span class="badge">:${a.hostPort}</span>` : ''}`;
+    `<span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}${a.hostPort ? `<span class="badge">:${a.hostPort}</span>` : ''}`;
   document.getElementById('siteMeta').innerHTML =
     `${a.hostPort ? `local: <a href="http://${location.hostname}:${a.hostPort}" target="_blank">http://${location.hostname}:${a.hostPort}</a><br>` : ''}
     webhook: <code>POST /webhook/${a.id}?token=${a.token}</code>`;
@@ -82,12 +82,14 @@ function showSiteTab(t) {
 async function createApp() {
   const v = id => document.getElementById(id).value;
   const typeEl = document.querySelector('input[name=apptype]:checked');
-  const body = { name: v('name'), type: typeEl ? typeEl.value : 'static', db: v('db'), repoUrl: v('repo'), domain: v('domain') };
+  const dbs = [...document.querySelectorAll('input[name=appdb]:checked')].map(e => e.value);
+  const body = { name: v('name'), type: typeEl ? typeEl.value : 'static', dbs, repoUrl: v('repo'), domain: v('domain') };
   const r = await (await fetch('/api/apps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
   document.getElementById('out').textContent = JSON.stringify(r, null, 2);
   refresh();
   if (!r.error) closeCreate();
 }
+function dbLabel(a) { return [].concat(a.db || []).join('+') || 'none'; }
 function showView(view) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + view));
   document.querySelectorAll('.navitem').forEach(n => n.classList.toggle('active', n.dataset.view === view));

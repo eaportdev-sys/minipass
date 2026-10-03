@@ -105,7 +105,13 @@
     <label class="typepill"><input type="radio" name="apptype" value="node"><b>Node.js</b>server app</label>
     <label class="typepill"><input type="radio" name="apptype" value="php"><b>PHP</b>apache app</label>
   </div>
-  <label>Database<select id="db"><option value="none">no db</option><option value="postgres">postgres</option><option value="mysql">mysql</option><option value="mongo">mongo</option><option value="redis">redis</option></select></label>
+  <label>Databases (pick any)</label>
+  <div class="typerow">
+    <label class="typepill"><input type="checkbox" name="appdb" value="postgres"><b>Postgres</b>sql db</label>
+    <label class="typepill"><input type="checkbox" name="appdb" value="mysql"><b>MySQL</b>sql db</label>
+    <label class="typepill"><input type="checkbox" name="appdb" value="mongo"><b>Mongo</b>nosql db</label>
+    <label class="typepill"><input type="checkbox" name="appdb" value="redis"><b>Redis</b>cache / kv</label>
+  </div>
   <label>Git repo url (optional)<input id="repo" placeholder="https://github.com/you/site.git"></label>
   <label>Domain (optional)<input id="domain" placeholder="app.example.com"></label>
   <div class="modalbtns"><button class="btn primary" onclick="createApp()">Build</button><button onclick="closeCreate()">Cancel</button></div>
