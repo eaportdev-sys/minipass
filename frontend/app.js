@@ -71,7 +71,9 @@ async function watchRestart(deadlineMs) {
       const v = await (await fetch('/api/panel/version')).json();
       document.getElementById('ver').textContent = `running ${v.running} · repo ${v.repo}`;
       if (!v.restarting) { clearInterval(restartTimer); restartTimer = null; location.reload(); return; }
-      out.textContent = `restarting… running ${v.running}, target ${v.repo} (${left}s left)`;
+      let log = '';
+      try { log = await (await fetch('/api/panel/upgrade-log')).text(); } catch {}
+      out.textContent = `restarting… running ${v.running}, target ${v.repo} (${left}s left)\n--- build log ---\n${log}`;
     } catch (e) {
       out.textContent = `restarting… panel unreachable, retrying (${left}s left)`;
     }

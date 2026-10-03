@@ -325,11 +325,19 @@ app.post('/api/panel/upgrade', async (req, res) => {
   try {
     const pulled = await sh('git pull --ff-only', REPO_DIR);
     const sha = execSync('git rev-parse --short HEAD', { cwd: REPO_DIR }).toString().trim().replace(/[^a-z0-9]/gi, '');
-    // rebuild detached with baked sha: panel container restarts, so don't wait for it
-    const child = spawn('sh', ['-c', `GIT_SHA=${sha} ${COMPOSE_BIN} up -d --build`], { cwd: REPO_DIR, detached: true, stdio: 'ignore' });
+    // rebuild detached with baked sha: panel container restarts, so don't wait for it.
+    // Build output goes to upgrade.log so the UI can show failures (otherwise silent).
+    const child = spawn('sh', ['-c', `GIT_SHA=${sha} ${COMPOSE_BIN} up -d --build > "${REPO_DIR}/upgrade.log" 2>&1`], { cwd: REPO_DIR, detached: true, stdio: 'ignore' });
     child.unref();
     res.json({ ok: true, pulled: pulled.trim(), target: sha, restarting: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/panel/upgrade-log', (req, res) => {
+  try {
+    if (!REPO_DIR) return res.status(501).send('repo not mounted');
+    const log = fs.readFileSync(path.join(REPO_DIR, 'upgrade.log'), 'utf8');
+    res.type('text/plain').send(log.split('\n').slice(-40).join('\n'));
+  } catch { res.type('text/plain').send('(no upgrade log yet - hit Upgrade first)'); }
 });
 
 const server = http.createServer(app);
