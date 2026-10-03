@@ -383,6 +383,11 @@ async function showLogs() {
   logsEl.textContent = 'loading…';
   logsEl.textContent = await (await fetch('/api/apps/' + currentApp + '/logs')).text();
 }
+async function showBuildLog() {
+  if (!currentApp) { logsEl.textContent = 'open a website first'; return; }
+  logsEl.textContent = 'loading…';
+  logsEl.textContent = await (await fetch('/api/apps/' + currentApp + '/build-log')).text();
+}
 async function version() {
   try {
     const v = await (await fetch('/api/panel/version')).json();

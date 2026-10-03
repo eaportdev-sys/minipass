@@ -195,8 +195,8 @@ app.post('/api/apps', async (req, res) => {
         webhookNote = 'auto-created - push to deploy';
       } catch {}
     }
-    // build async so UI returns fast
-    sh(`${COMPOSE_BIN} up --build -d`, appDir(APPS_DIR, id)).catch(e => console.error(e.message));
+    // build async so UI returns fast (goes through deploy() so it lands in deploy.log)
+    deploy(id).catch(e => console.error(id, e.message));
     res.json({ ...pubApp(meta), localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote });
   } catch (e) { res.status(500).json({ error: redactUrl(e.message) }); }
 });
@@ -231,9 +231,25 @@ async function deploy(id) {
       throw new Error(redactUrl(e.stderr ? String(e.stderr) : e.message));
     }
   }
-  await sh(`${COMPOSE_BIN} up --build -d`, dir);
+  // every build streams to deploy.log (host-persisted, per app) so the UI can show
+  // the builder output; failures return the tail instead of a bare exit code
+  const buildLog = path.join(dir, 'deploy.log');
+  try {
+    await sh(`${COMPOSE_BIN} up --build -d > "${buildLog}" 2>&1`, dir);
+  } catch (e) {
+    let tail = '';
+    try { tail = fs.readFileSync(buildLog, 'utf8').split('\n').slice(-25).join('\n'); } catch {}
+    throw new Error((tail || e.message).trim());
+  }
   return true;
 }
+
+app.get('/api/apps/:id/build-log', (req, res) => {
+  try {
+    const log = fs.readFileSync(path.join(appDir(APPS_DIR, req.params.id), 'deploy.log'), 'utf8');
+    res.type('text/plain').send(log.split('\n').slice(-80).join('\n') || '(empty build log)');
+  } catch { res.type('text/plain').send('(no builds recorded yet)'); }
+});
 
 app.post('/api/apps/:id/deploy', async (req, res) => {
   try { await deploy(req.params.id); res.json({ ok: true }); }
