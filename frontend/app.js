@@ -31,7 +31,8 @@ async function showLogs() {
 async function version() {
   try {
     const v = await (await fetch('/api/panel/version')).json();
-    document.getElementById('ver').textContent = v.version + (v.upgradeable ? '' : ' (mount ./:/repo to enable upgrade)');
+    document.getElementById('ver').textContent =
+      `running ${v.running} · repo ${v.repo}` + (v.restarting ? ' (restarting… wait 30s and refresh)' : '') + (v.upgradeable ? '' : ' (mount ./:/repo to enable upgrade)');
   } catch { document.getElementById('ver').textContent = 'unknown'; }
 }
 async function upgrade() {

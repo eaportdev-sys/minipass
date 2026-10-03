@@ -128,20 +128,22 @@ const REPO_DIR = (() => {
   return null;
 })();
 app.get('/api/panel/version', (req, res) => {
-  if (!REPO_DIR) return res.json({ version: 'unknown', upgradeable: false });
+  const running = process.env.GIT_SHA || 'dev';
+  if (!REPO_DIR) return res.json({ running, repo: 'unknown', upgradeable: false });
   try {
-    const v = execSync('git rev-parse --short HEAD', { cwd: REPO_DIR }).toString().trim();
-    res.json({ version: v, upgradeable: true });
-  } catch (e) { res.json({ version: 'unknown', upgradeable: false }); }
+    const repo = execSync('git rev-parse --short HEAD', { cwd: REPO_DIR }).toString().trim();
+    res.json({ running, repo, upgradeable: true, restarting: running !== 'dev' && running !== repo });
+  } catch (e) { res.json({ running, repo: 'unknown', upgradeable: false }); }
 });
 app.post('/api/panel/upgrade', async (req, res) => {
   if (!REPO_DIR) return res.status(501).json({ error: 'repo not mounted (add ./:/repo volume)' });
   try {
     const pulled = await sh('git pull --ff-only', REPO_DIR);
-    // rebuild detached: panel container restarts, so don't wait for it
-    const child = spawn('sh', ['-c', `${COMPOSE_BIN} up -d --build`], { cwd: REPO_DIR, detached: true, stdio: 'ignore' });
+    const sha = execSync('git rev-parse --short HEAD', { cwd: REPO_DIR }).toString().trim().replace(/[^a-z0-9]/gi, '');
+    // rebuild detached with baked sha: panel container restarts, so don't wait for it
+    const child = spawn('sh', ['-c', `GIT_SHA=${sha} ${COMPOSE_BIN} up -d --build`], { cwd: REPO_DIR, detached: true, stdio: 'ignore' });
     child.unref();
-    res.json({ ok: true, pulled: pulled.trim(), restarting: true });
+    res.json({ ok: true, pulled: pulled.trim(), target: sha, restarting: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
