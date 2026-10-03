@@ -140,7 +140,11 @@
   </div></div>
   <div class="msec"><div class="mlabel">4 · Code source</div>
   <select id="ghrepo" onchange="detectType()"><option value="">GitHub repo…</option></select>
-  <div class="meta" id="ghConnectRow" style="display:none">GitHub isn't connected. <button onclick="closeCreate();showView('panel')">connect in upgrade view</button></div>
+  <div class="meta" id="ghConnectRow" style="display:none">GitHub isn't connected.
+    <button onclick="window.open('https://github.com/settings/tokens?type=beta','_blank')">connect github</button>
+    <div class="meta">Sign in if asked → Generate new token (fine-grained) → Contents <b>read-only</b> + Webhooks <b>read+write</b> → copy, paste here:</div>
+    <input id="ghModalToken" type="password" placeholder="github_pat_…" style="width:220px">
+    <button onclick="modalTokenSave()">save</button></div>
   <input id="repo" placeholder="…or paste git url (private: SSH + repo key, or HTTPS with token)" onchange="detectType()">
   <div class="meta">Leave both empty to start from a template and upload files later.</div>
   </div>

@@ -234,11 +234,20 @@ function ghConnect() {
 }
 async function ghSaveToken() {
   const input = document.getElementById('ghToken');
-  const token = input.value.trim();
-  if (!token) return;
-  const r = await (await fetch('/api/github/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })).json();
-  if (r.ok) { input.value = ''; toast('github connected as ' + r.login); ghStatus(); }
-  else toast(r.error || 'failed', false);
+  const r = await saveToken(input.value);
+  if (r && r.ok) { input.value = ''; toast('github connected as ' + r.login); ghStatus(); }
+  else if (r) toast(r.error || 'failed', false);
+}
+async function saveToken(token) {
+  token = String(token || '').trim();
+  if (!token) return null;
+  return await (await fetch('/api/github/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })).json();
+}
+async function modalTokenSave() {
+  const input = document.getElementById('ghModalToken');
+  const r = await saveToken(input.value);
+  if (r && r.ok) { input.value = ''; toast('github connected as ' + r.login); loadGhRepos(); }
+  else if (r) toast(r.error || 'failed', false);
 }
 async function ghDisconnect(login) {
   await fetch('/api/github/disconnect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: login || undefined }) });
