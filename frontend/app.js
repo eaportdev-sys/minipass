@@ -1,11 +1,11 @@
 async function refresh() {
   const apps = await (await fetch('/api/apps')).json();
   document.getElementById('apps').innerHTML = apps.map(a =>
-    `<div class="card"><b>${a.id}</b> [${a.type}] db:${a.db} ${a.domain||''}<br>
-    local: ${a.hostPort ? `<a href="http://${location.hostname}:${a.hostPort}" target="_blank">http://${location.hostname}:${a.hostPort}</a> (no domain needed)` : 'recreate app to get localhost port'}<br>
-    webhook: <code>POST /webhook/${a.id}?token=${a.token}</code> - paste into GitHub Settings-&gt;Webhooks for auto-deploy on push<br>
-    <button onclick="deploy('${a.id}')">redeploy</button>
-    <button onclick="rmApp('${a.id}')">delete</button></div>`).join('');
+    `<div class="card appcard"><h3>${a.id}</h3>
+    <div class="badges"><span class="badge type">${a.type}</span><span class="badge">db: ${a.db}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}</div>
+    <div class="meta">local: ${a.hostPort ? `<a href="http://${location.hostname}:${a.hostPort}" target="_blank">http://${location.hostname}:${a.hostPort}</a>` : 'recreate app to get localhost port'}</div>
+    <div class="meta">webhook: <code>POST /webhook/${a.id}?token=${a.token}</code></div>
+    <div class="actions"><button onclick="deploy('${a.id}')">redeploy</button><button class="btn danger" onclick="rmApp('${a.id}')">delete</button></div></div>`).join('') || '<div class="card">No websites yet - hit + Create.</div>';
   // keep terminal/logs/files dropdowns in sync
   for (const selId of ['termApp', 'logApp', 'fileApp']) {
     const sel = document.getElementById(selId);
@@ -16,10 +16,25 @@ async function refresh() {
 }
 async function createApp() {
   const v = id => document.getElementById(id).value;
-  const body = { name: v('name'), type: v('type'), db: v('db'), repoUrl: v('repo'), domain: v('domain') };
+  const typeEl = document.querySelector('input[name=apptype]:checked');
+  const body = { name: v('name'), type: typeEl ? typeEl.value : 'static', db: v('db'), repoUrl: v('repo'), domain: v('domain') };
   const r = await (await fetch('/api/apps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
-  document.getElementById('out').textContent = JSON.stringify(r, null, 2); refresh();
+  document.getElementById('out').textContent = JSON.stringify(r, null, 2);
+  refresh();
+  if (!r.error) closeCreate();
 }
+function showView(view) {
+  document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + view));
+  document.querySelectorAll('.navitem').forEach(n => n.classList.toggle('active', n.dataset.view === view));
+}
+function openCreate() { document.getElementById('modal').classList.add('open'); }
+function closeCreate() { document.getElementById('modal').classList.remove('open'); }
+function toggleTheme() {
+  const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem('mp-theme', t); } catch {}
+}
+try { document.documentElement.dataset.theme = localStorage.getItem('mp-theme') || 'dark'; } catch {}
 async function deploy(id) { await fetch('/api/apps/' + id + '/deploy', { method: 'POST' }); alert('deploying'); }
 async function rmApp(id) { if (confirm('delete?')) { await fetch('/api/apps/' + id, { method: 'DELETE' }); refresh(); } }
 async function showLogs() {
