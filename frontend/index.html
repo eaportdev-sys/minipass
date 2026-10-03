@@ -45,9 +45,13 @@
           <button onclick="saveFile()">save + redeploy</button>
           <button class="btn danger" onclick="deleteFile()">delete + redeploy</button><br>
           <textarea id="fileEdit" rows="12"></textarea><br>
-          <input type="file" id="zipFile" accept=".zip"><button onclick="uploadZip()">upload zip + redeploy</button><br>
-          <input type="file" id="pickFiles" multiple><button onclick="uploadPicked(false)">upload files + redeploy</button><br>
-          <input type="file" id="pickFolder" webkitdirectory><button onclick="uploadPicked(true)">upload folder + redeploy</button>
+          <select id="upMode" onchange="upModeChange()">
+            <option value="zip">zip file</option>
+            <option value="files">files</option>
+            <option value="folder">folder</option>
+          </select>
+          <input type="file" id="upPick" accept=".zip">
+          <button onclick="uploadUnified()">upload + redeploy</button>
           <pre id="fileOut"></pre>
         </div>
       </div>

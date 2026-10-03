@@ -38,12 +38,19 @@ function save(d) { fs.writeFileSync(DATA_FILE, JSON.stringify(d, null, 2)); }
 let COMPOSE_BIN = process.env.COMPOSE_BIN || 'docker compose';
 try { execSync('docker compose version', { stdio: 'ignore' }); }
 catch { try { execSync('docker-compose --version', { stdio: 'ignore' }); COMPOSE_BIN = 'docker-compose'; } catch {} }
-function sh(cmd, cwd) {
+function sh(cmd, cwd, env) {
   return new Promise((res, rej) => {
-    exec(cmd, { cwd, maxBuffer: 10 * 1024 * 1024 }, (e, stdout, stderr) => {
+    exec(cmd, { cwd, env: env || process.env, maxBuffer: 10 * 1024 * 1024 }, (e, stdout, stderr) => {
       if (e) rej(new Error(stderr || e.message)); else res(stdout);
     });
   });
+}
+// git over SSH needs the mounted deploy key + non-interactive host-key acceptance
+function gitEnv() {
+  const keys = ['/root/.ssh/minipass-deploy', '/root/.ssh/id_ed25519', '/root/.ssh/id_rsa'];
+  const key = keys.find(k => { try { return fs.existsSync(k); } catch { return false; } });
+  if (!key) return process.env;
+  return { ...process.env, GIT_SSH_COMMAND: `ssh -i ${key} -o StrictHostKeyChecking=accept-new` };
 }
 
 app.get('/api/types', (req, res) => {
@@ -323,7 +330,7 @@ app.get('/api/panel/version', (req, res) => {
 app.post('/api/panel/upgrade', async (req, res) => {
   if (!REPO_DIR) return res.status(501).json({ error: 'repo not mounted (add ./:/repo volume)' });
   try {
-    const pulled = await sh('git pull --ff-only', REPO_DIR);
+    const pulled = await sh('git pull --ff-only', REPO_DIR, gitEnv());
     const sha = execSync('git rev-parse --short HEAD', { cwd: REPO_DIR }).toString().trim().replace(/[^a-z0-9]/gi, '');
     // rebuild detached with baked sha: panel container restarts, so don't wait for it.
     // Build output goes to upgrade.log so the UI can show failures (otherwise silent).

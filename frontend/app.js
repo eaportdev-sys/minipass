@@ -156,34 +156,41 @@ async function deleteFile() {
     listFiles(curDir);
   } catch (e) { document.getElementById('fileOut').textContent = 'delete failed: ' + e.message; }
 }
-async function uploadZip() {
-  const id = currentApp;
-  const f = document.getElementById('zipFile').files[0];
-  if (!id || !f) { document.getElementById('fileOut').textContent = 'pick an app and a zip file'; return; }
-  const fd = new FormData(); fd.append('zip', f);
-  document.getElementById('fileOut').textContent = 'uploading + redeploying…';
-  try {
-    const r = await (await fetch(`/api/apps/${id}/upload`, { method: 'POST', body: fd })).json();
-    document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2); listFiles('');
-  } catch (e) { document.getElementById('fileOut').textContent = 'upload failed: ' + e.message; }
+function upModeChange() {
+  const mode = document.getElementById('upMode').value;
+  const pick = document.getElementById('upPick');
+  pick.value = '';
+  pick.removeAttribute('multiple');
+  pick.removeAttribute('webkitdirectory');
+  pick.removeAttribute('accept');
+  if (mode === 'zip') pick.setAttribute('accept', '.zip');
+  if (mode === 'files') pick.setAttribute('multiple', '');
+  if (mode === 'folder') pick.setAttribute('webkitdirectory', '');
 }
-async function uploadPicked(folder) {
+async function uploadUnified() {
   const id = currentApp;
-  const input = document.getElementById(folder ? 'pickFolder' : 'pickFiles');
+  const mode = document.getElementById('upMode').value;
+  const input = document.getElementById('upPick');
   const files = [...input.files];
-  if (!id || !files.length) { document.getElementById('fileOut').textContent = 'pick an app and ' + (folder ? 'a folder' : 'one or more files'); return; }
-  const fd = new FormData();
-  for (const f of files) {
-    // folder mode: drop the picked folder's own name so contents land at site root
-    const rel = folder ? (f.webkitRelativePath.split('/').slice(1).join('/') || f.name) : f.name;
-    fd.append('files', f);
-    fd.append('paths', rel);
-  }
-  document.getElementById('fileOut').textContent = `uploading ${files.length} file(s) + redeploying…`;
+  const out = document.getElementById('fileOut');
+  if (!id || !files.length) { out.textContent = 'open a website and pick something to upload'; return; }
+  out.textContent = `uploading ${mode} (${files.length} file(s)) + redeploying…`;
   try {
-    const r = await (await fetch(`/api/apps/${id}/upload-files`, { method: 'POST', body: fd })).json();
-    document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2); listFiles('');
-  } catch (e) { document.getElementById('fileOut').textContent = 'upload failed: ' + e.message; }
+    let url, fd = new FormData();
+    if (mode === 'zip') {
+      url = `/api/apps/${id}/upload`;
+      fd.append('zip', files[0]);
+    } else {
+      url = `/api/apps/${id}/upload-files`;
+      for (const f of files) {
+        const rel = mode === 'folder' ? (f.webkitRelativePath.split('/').slice(1).join('/') || f.name) : f.name;
+        fd.append('files', f);
+        fd.append('paths', rel);
+      }
+    }
+    const r = await (await fetch(url, { method: 'POST', body: fd })).json();
+    out.textContent = JSON.stringify(r, null, 2); listFiles('');
+  } catch (e) { out.textContent = 'upload failed: ' + e.message; }
   input.value = '';
 }
 const logsEl = document.getElementById('logs');
