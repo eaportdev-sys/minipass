@@ -244,6 +244,35 @@ app.post('/api/github/token', async (req, res) => {
     res.json({ ok: true, login: me.login });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+app.get('/api/github/detect', async (req, res) => {
+  // ?repo=owner/name&login= - inspect tree + package.json, auto-select the template
+  try {
+    const m = String(req.query.repo || '').match(/^([^/]+)\/([^/]+?)(\.git)?$/);
+    if (!m) return res.status(400).json({ error: 'repo must be owner/name' });
+    const logins = req.query.login ? [req.query.login] : gh.getLogins();
+    if (!logins.length) return res.status(500).json({ error: 'github not connected' });
+    let tree = null, used = null, lastErr = 'no access';
+    for (const login of logins) {
+      try {
+        const t = await gh.apiAs(login, `/repos/${m[1]}/${m[2]}/git/trees/HEAD?recursive=1`);
+        tree = (t.tree || []).filter(e => e.type === 'blob').map(e => e.path);
+        used = login;
+        break;
+      } catch (e) { lastErr = e.message; }
+    }
+    if (!tree) return res.status(500).json({ error: 'cannot read repo: ' + lastErr });
+    let pkg = null;
+    const pkgPath = tree.filter(p => /(^|\/)package\.json$/.test(p)).sort((a, b) => a.length - b.length)[0];
+    if (pkgPath) {
+      try {
+        const blob = await gh.apiAs(used, `/repos/${m[1]}/${m[2]}/contents/${pkgPath}`);
+        if (blob && blob.content) pkg = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8'));
+      } catch {}
+    }
+    const { decideType } = require('./lib/detect');
+    res.json({ ...decideType(tree, pkg), login: used });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.get('/api/github/repos', async (req, res) => {
   // aggregate every connected account so 10 sites can live on 10 different githubs
   try {

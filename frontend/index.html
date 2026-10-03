@@ -129,9 +129,9 @@
     <label class="typepill"><input type="checkbox" name="appdb" value="redis"><b>Redis</b>cache / kv</label>
   </div></div>
   <div class="msec"><div class="mlabel">4 · Code source</div>
-  <select id="ghrepo"><option value="">GitHub repo…</option></select>
-  <div class="meta" id="ghConnectRow" style="display:none">GitHub isn't connected. <button onclick="ghConnect()">connect github</button> (see Upgrade view for token path)</div>
-  <input id="repo" placeholder="…or paste git url (private: SSH + repo key, or HTTPS with token)">
+  <select id="ghrepo" onchange="detectType()"><option value="">GitHub repo…</option></select>
+  <div class="meta" id="ghConnectRow" style="display:none">GitHub isn't connected. <button onclick="closeCreate();showView('panel')">connect in upgrade view</button></div>
+  <input id="repo" placeholder="…or paste git url (private: SSH + repo key, or HTTPS with token)" onchange="detectType()">
   <div class="meta">Leave both empty to start from a template and upload files later.</div>
   </div>
   <div class="msec"><div class="mlabel">5 · Access</div>

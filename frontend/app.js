@@ -126,8 +126,28 @@ async function createApp() {
   refresh();
   if (!r.error) closeCreate();
 }
-async function loadGhRepos() {
+async function detectType() {
   const sel = document.getElementById('ghrepo');
+  const opt = sel.selectedOptions.length ? sel.selectedOptions[0] : null;
+  let repo = sel.value, login = opt && opt.dataset.login;
+  if (!repo) {
+    const m = document.getElementById('repo').value.trim().match(/github\.com[:/]([^/]+)\/([^/]+?)(\.git)?\/?$/i);
+    if (!m) return;
+    repo = m[1] + '/' + m[2];
+    login = undefined;
+  }
+  try {
+    const r = await (await fetch(`/api/github/detect?repo=${encodeURIComponent(repo)}${login ? `&login=${encodeURIComponent(login)}` : ''}`)).json();
+    if (r.type) {
+      const radio = document.querySelector(`input[name=apptype][value=${r.type}]`);
+      if (radio) radio.checked = true;
+      toast('detected ' + r.type + ' (' + r.reason + ')');
+    } else {
+      toast((r.detected ? r.detected + ' has no template yet. ' : 'could not detect type. ') + (r.reason || r.error || ''), false);
+    }
+  } catch {}
+}
+async function loadGhRepos() {  const sel = document.getElementById('ghrepo');
   const row = document.getElementById('ghConnectRow');
   sel.innerHTML = '<option value="">—</option>';
   row.style.display = 'none';
