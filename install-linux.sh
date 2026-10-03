@@ -75,7 +75,18 @@ else
   msg "no ufw/firewalld - open TCP 3001 manually if needed"
 fi
 
-# 6. start docker (systemd or openrc/service)
+# 6. self-upgrade applier: the panel only BUILDS + flags (.pending-restart).
+#    The recreate must run from OUTSIDE the container - a container that
+#    `up -d`s itself gets SIGKILLed mid-recreate and never comes back.
+if command -v crontab >/dev/null; then
+  CRON="* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin cd /opt/minipass && [ -f .pending-restart ] && GIT_SHA=\$(cat .pending-restart) docker compose -p minipass up -d >> upgrade.log 2>&1 && rm -f .pending-restart .upgrade-lock"
+  (crontab -l 2>/dev/null | grep -v 'pending-restart'; echo "$CRON") | crontab -
+  msg "upgrade cron installed"
+else
+  msg "no crontab - panel self-upgrade needs manual 'docker compose up -d'"
+fi
+
+# 7. start docker (systemd or openrc/service)
 if command -v systemctl >/dev/null; then systemctl enable --now docker || true
 elif command -v service >/dev/null; then service docker start || true
 elif command -v rc-service >/dev/null; then rc-service docker start || true

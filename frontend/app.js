@@ -92,7 +92,7 @@ async function version() {
     document.getElementById('ver').textContent =
       `running ${v.running} · repo ${v.repo}` + (v.upgradeable ? '' : ' (mount ./:/repo to enable upgrade)');
     // landed mid-restart (manual refresh) -> resume watching instead of sitting stale
-    if (v.restarting && !restartTimer) watchRestart(180000);
+    if (v.restarting && !restartTimer) watchRestart(300000);
   } catch { document.getElementById('ver').textContent = 'unknown'; }
 }
 async function upgrade() {
@@ -100,7 +100,7 @@ async function upgrade() {
   try {
     const r = await (await fetch('/api/panel/upgrade', { method: 'POST' })).json();
     document.getElementById('upOut').textContent = JSON.stringify(r, null, 2);
-    if (r.restarting) watchRestart(180000);
+    if (r.restarting || r.building) watchRestart(300000);
   } catch (e) { document.getElementById('upOut').textContent = 'upgrade failed: ' + e.message; }
 }
 let restartTimer = null;

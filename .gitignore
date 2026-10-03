@@ -6,4 +6,6 @@ backend/.env
 panel-key*
 upgrade.log
 .upgrade-lock
+.pending-restart
+.build-status
 AGENTS.md
