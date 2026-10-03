@@ -107,6 +107,16 @@ app.post('/webhook/:id', async (req, res) => {
   try { await deploy(req.params.id); res.send('deployed'); }
   catch (e) { res.status(500).send(e.message); }
 });
+app.post('/api/apps/:id/regenerate', (req, res) => {
+  try {
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    meta.token = crypto.randomBytes(16).toString('hex');
+    save(db_);
+    res.json({ ok: true, token: meta.token, webhook: `/webhook/${meta.id}?token=${meta.token}` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 app.get('/api/apps/:id/logs', async (req, res) => {
   try {

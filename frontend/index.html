@@ -36,6 +36,12 @@
           <button class="btn danger" id="siteDelete">delete</button>
         </div>
       </div>
+      <div class="card">
+        <b>auto-deploy webhook</b>
+        <div class="meta">GitHub push (the trigger) → panel git pull + rebuild (the action). Paste the URL into repo Settings → Webhooks, push events.</div>
+        <div class="meta"><code id="hookUrl"></code></div>
+        <div class="actions"><button onclick="copyHook()">copy</button><button onclick="regenHook()">regenerate</button></div>
+      </div>
       <div id="tab-files" class="sitetab">
         <div class="card">
           <button onclick="listFiles('')">list files</button>

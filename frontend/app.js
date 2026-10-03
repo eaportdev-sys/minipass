@@ -36,6 +36,16 @@ function fillSiteHeader(a) {
     webhook: <code>POST /webhook/${a.id}?token=${a.token}</code>`;
   document.getElementById('siteRedeploy').onclick = () => deploy(a.id);
   document.getElementById('siteDelete').onclick = () => rmApp(a.id);
+  document.getElementById('hookUrl').textContent = `${location.origin}/webhook/${a.id}?token=${a.token}`;
+}
+async function copyHook() {
+  try { await navigator.clipboard.writeText(document.getElementById('hookUrl').textContent); } catch {}
+}
+async function regenHook() {
+  if (!currentApp || !confirm('Regenerate? The old webhook URL stops working.')) return;
+  const r = await (await fetch(`/api/apps/${currentApp}/regenerate`, { method: 'POST' })).json();
+  if (r.token) refresh();
+  else alert(r.error || 'failed');
 }
 function showSiteTab(t) {
   document.querySelectorAll('.sitetab').forEach(s => s.style.display = 'none');
