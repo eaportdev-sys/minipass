@@ -220,23 +220,50 @@ app.post('/api/apps/:id/upload', upload.single('zip'), async (req, res) => {
     const tmpBase = fs.mkdtempSync(path.join('/tmp', 'minipass-extract-'));
     await sh(`unzip -o "${req.file.path}" -d "${tmpBase}"`, '/tmp');
     fs.unlinkSync(req.file.path);
-    // flatten: "zipped a folder" -> move its contents up
+    // smart flatten: descend through single wrapper folders until index.html level (max 3)
+    const JUNK = new Set(['__MACOSX', '.DS_Store', 'Thumbs.db']);
     let src = tmpBase;
-    const entries = fs.readdirSync(tmpBase);
-    if (entries.length === 1 && fs.statSync(path.join(tmpBase, entries[0])).isDirectory()) {
-      src = path.join(tmpBase, entries[0]);
+    for (let d = 0; d < 3; d++) {
+      const kids = fs.readdirSync(src).filter(e => !JUNK.has(e) && !e.startsWith('._'));
+      const hasIndex = kids.some(e => /^index\.html?$/i.test(e));
+      if (!hasIndex && kids.length === 1 && fs.statSync(path.join(src, kids[0])).isDirectory()) {
+        src = path.join(src, kids[0]);
+        continue;
+      }
+      break;
     }
     // merge into code, but keep managed infra files (Dockerfile, nginx.conf)
     let n = 0;
     for (const e of fs.readdirSync(src)) {
-      if (e === 'Dockerfile' || e === 'nginx.conf') continue;
+      if (e === 'Dockerfile' || e === 'nginx.conf' || JUNK.has(e) || e.startsWith('._')) continue;
       fs.cpSync(path.join(src, e), path.join(code, e), { recursive: true });
       n++;
     }
     fs.rmSync(tmpBase, { recursive: true, force: true });
     if (!n) return res.status(400).json({ error: 'zip was empty (or only contained infra files)' });
+    // validate: static hosting needs index.html at root - indicate, don't guess further
+    const rootFiles = fs.readdirSync(code);
+    const hasIndex = rootFiles.some(e => /^index\.html?$/i.test(e));
+    let warning;
+    if (!hasIndex) {
+      let foundAt = null;
+      const walk = (dir, rel, depth) => {
+        if (foundAt || depth > 2) return;
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (JUNK.has(e.name)) continue;
+          if (!e.isDirectory() && /^index\.html?$/i.test(e.name)) { foundAt = (rel ? rel + '/' : '') + e.name; return; }
+        }
+        if (depth < 2) for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (e.isDirectory() && !JUNK.has(e.name)) walk(path.join(dir, e.name), (rel ? rel + '/' : '') + e.name, depth + 1);
+        }
+      };
+      try { walk(code, '', 0); } catch {}
+      warning = foundAt
+        ? `no index.html at site root - found at ${foundAt}. Move that folder's contents to the top (or re-zip so index.html is at root).`
+        : `no index.html found anywhere in the zip. Static sites need an index.html - showing: ${rootFiles.slice(0, 8).join(', ')}`;
+    }
     await deploy(req.params.id);
-    res.json({ ok: true, redeployed: true, files: n });
+    res.json({ ok: true, redeployed: true, files: n, index: hasIndex ? 'index.html' : null, warning });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
