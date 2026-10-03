@@ -95,9 +95,9 @@
         <pre id="keyOut"></pre>
       </div>
       <div class="card"><b>github</b> <span id="ghStatus">…</span><br>
-        <div class="meta">One handshake: pick any repo at create time, push auto-deploys like Hostinger. Needs GITHUB_CLIENT_ID/SECRET + PANEL_URL in backend .env (register an OAuth App, callback <code>/api/github/callback</code>).</div>
-        <button onclick="ghConnect()">connect github</button>
-        <button onclick="ghDisconnect()">disconnect</button>
+        <div class="meta">Connect each GitHub account once — every site links to any of them. Needs GITHUB_CLIENT_ID/SECRET + PANEL_URL in backend .env (OAuth App callback <code>/api/github/callback</code>).</div>
+        <div id="ghAccounts"></div>
+        <button onclick="ghConnect()">connect account</button>
       </div>
     </section>
   </main>

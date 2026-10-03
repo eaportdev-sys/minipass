@@ -113,7 +113,8 @@ async function deploy(id) {
   const codeDir = path.join(dir, 'code');
   if (meta && meta.repoUrl) {
     const isSsh = /^(git@|ssh:\/\/)/i.test(meta.repoUrl);
-    const url = isSsh ? meta.repoUrl : gh.authUrl(meta.repoUrl);
+    const acct = meta.github && meta.github.login;
+    const url = isSsh ? meta.repoUrl : gh.authUrl(meta.repoUrl, acct);
     const env = isSsh ? appGitEnv(dir) : process.env;
     try {
       if (!fs.existsSync(path.join(codeDir, '.git'))) {
@@ -147,8 +148,9 @@ app.post('/api/apps/:id/deploy', async (req, res) => {
 
 // GitHub handshake: one OAuth connect, then every repo works with auto-webhooks.
 app.get('/api/github/status', (req, res) => {
-  const a = gh.getAuth();
-  res.json(a ? { connected: true, login: a.login } : { connected: false });
+  const logins = gh.getLogins();
+  const d = gh.getAuth();
+  res.json(logins.length ? { connected: true, logins, default: d && d.login } : { connected: false, logins: [] });
 });
 app.get('/api/github/login', (req, res) => {
   const { GITHUB_CLIENT_ID, PANEL_URL } = process.env;
@@ -177,30 +179,41 @@ app.get('/api/github/callback', async (req, res) => {
     res.redirect(base + '/?github=connected');
   } catch (e) { res.status(500).send('github connect failed: ' + e.message); }
 });
-app.post('/api/github/disconnect', (req, res) => { gh.clearAuth(); res.json({ ok: true }); });
+app.post('/api/github/disconnect', (req, res) => { gh.clearAuth(req.body && req.body.login); res.json({ ok: true }); });
 app.get('/api/github/repos', async (req, res) => {
+  // aggregate every connected account so 10 sites can live on 10 different githubs
   try {
-    const repos = await gh.api('/user/repos?per_page=100&sort=updated');
-    res.json(repos.map(r => ({ full_name: r.full_name, private: r.private, default_branch: r.default_branch, https: r.clone_url })));
+    const logins = gh.getLogins();
+    if (!logins.length) return res.status(500).json({ error: 'github not connected' });
+    const repos = [];
+    const errors = [];
+    for (const login of logins) {
+      try {
+        const list = await gh.apiAs(login, '/user/repos?per_page=100&sort=updated');
+        for (const r of list) repos.push({ account: login, full_name: r.full_name, private: r.private, default_branch: r.default_branch, https: r.clone_url });
+      } catch (e) { errors.push({ account: login, error: e.message }); }
+    }
+    res.json({ repos, errors });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/github/link', async (req, res) => {
-  // { appId, repo: "owner/name" } -> set repoUrl + auto-create push webhook (needs PANEL_URL reachable)
+  // { appId, repo: "owner/name", login? } -> set repoUrl + auto-create push webhook
   try {
-    const { appId, repo } = req.body;
+    const { appId, repo, login } = req.body;
     const parts = String(repo || '').split('/');
     if (parts.length !== 2) return res.status(400).json({ error: 'repo must be owner/name' });
     const db_ = load();
     const meta = db_.apps.find(a => a.id === appId);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
-    const info = await gh.api(`/repos/${parts[0]}/${parts[1]}`);
+    const info = await gh.apiAs(login || undefined, `/repos/${parts[0]}/${parts[1]}`);
+    const acct = gh.getAuth(login);
     meta.repoUrl = info.clone_url;
-    meta.github = { repo: info.full_name, branch: info.default_branch };
+    meta.github = { repo: info.full_name, branch: info.default_branch, login: acct && acct.login };
     save(db_);
     const base = (process.env.PANEL_URL || '').replace(/\/$/, '');
     if (base) {
       try {
-        await gh.api(`/repos/${parts[0]}/${parts[1]}/hooks`, {
+        await gh.apiAs(login || (meta.github && meta.github.login) || undefined, `/repos/${parts[0]}/${parts[1]}/hooks`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             name: 'web', active: true, events: ['push'],

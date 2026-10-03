@@ -29,7 +29,7 @@ function fillSiteHeader(a) {
   if (!a) return;
   document.getElementById('siteName').textContent = a.id;
   document.getElementById('siteBadges').innerHTML =
-    `<span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}${a.hostPort ? `<span class="badge">:${a.hostPort}</span>` : ''}`;
+    `<span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}${a.hostPort ? `<span class="badge">:${a.hostPort}</span>` : ''}${a.github ? `<span class="badge">git: ${a.github.login ? a.github.login + '/' : ''}${a.github.repo}</span>` : ''}`;
   document.getElementById('siteMeta').innerHTML =
     `${a.hostPort ? `local: <a href="http://${location.hostname}:${a.hostPort}" target="_blank">http://${location.hostname}:${a.hostPort}</a><br>` : ''}
     webhook: <code>POST /webhook/${a.id}?token=${a.token}</code>`;
@@ -96,9 +96,11 @@ async function createApp() {
   const r = await (await fetch('/api/apps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
   document.getElementById('out').textContent = JSON.stringify(r, null, 2);
   // github repo picked: link it (sets repoUrl + auto-creates the push webhook)
-  const ghrepo = document.getElementById('ghrepo').value;
+  const ghSel = document.getElementById('ghrepo');
+  const ghrepo = ghSel.value;
+  const ghlogin = ghSel.selectedOptions.length ? ghSel.selectedOptions[0].dataset.login : undefined;
   if (!r.error && ghrepo) {
-    const link = await (await fetch('/api/github/link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appId: r.id, repo: ghrepo }) })).json();
+    const link = await (await fetch('/api/github/link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appId: r.id, repo: ghrepo, login: ghlogin }) })).json();
     document.getElementById('out').textContent = JSON.stringify({ app: r, github: link }, null, 2);
     // code wasn't cloned at create (no URL yet) - pull it now via redeploy
     if (link.ok) await fetch('/api/apps/' + r.id + '/deploy', { method: 'POST' });
@@ -114,21 +116,30 @@ async function loadGhRepos() {
   try {
     const r = await fetch('/api/github/repos');
     if (r.status === 404) return; // panel predates github support - upgrade first
-    const repos = await r.json();
-    if (repos.error) { row.style.display = 'block'; return; }
-    sel.innerHTML = '<option value="">—</option>' + repos.map(x =>
-      `<option value="${x.full_name}">${x.full_name}${x.private ? ' (private)' : ''}</option>`).join('');
+    const data = await r.json();
+    if (data.error) { row.style.display = 'block'; return; }
+    const byAcct = {};
+    for (const x of (data.repos || [])) { (byAcct[x.account] = byAcct[x.account] || []).push(x); }
+    sel.innerHTML = '<option value="">—</option>' + Object.keys(byAcct).map(a =>
+      `<optgroup label="${a}">` + byAcct[a].map(x =>
+        `<option value="${x.full_name}" data-login="${a}">${x.full_name}${x.private ? ' (private)' : ''}</option>`).join('') + '</optgroup>').join('');
+    if ((data.errors || []).length) toast('some accounts failed: ' + data.errors.map(e => e.account).join(', '), false);
   } catch {}
 }
 async function ghStatus() {
   try {
     const s = await (await fetch('/api/github/status')).json();
-    document.getElementById('ghStatus').textContent = s.connected ? ('connected as ' + s.login) : 'not connected';
-  } catch { document.getElementById('ghStatus').textContent = 'unknown'; }
+    document.getElementById('ghStatus').textContent = s.connected ? ('connected: ' + s.logins.join(', ')) : 'not connected';
+    document.getElementById('ghAccounts').innerHTML = (s.logins || []).map(l =>
+      `<div class="meta">${l} <button onclick="ghDisconnect('${l}')">disconnect</button></div>`).join('');
+  } catch {
+    document.getElementById('ghStatus').textContent = 'unknown';
+    document.getElementById('ghAccounts').innerHTML = '';
+  }
 }
 function ghConnect() { location.href = '/api/github/login'; }
-async function ghDisconnect() {
-  await fetch('/api/github/disconnect', { method: 'POST' });
+async function ghDisconnect(login) {
+  await fetch('/api/github/disconnect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: login || undefined }) });
   ghStatus();
 }
 function dbLabel(a) { return [].concat(a.db || []).join('+') || 'none'; }
