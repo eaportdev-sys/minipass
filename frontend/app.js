@@ -60,15 +60,19 @@ async function openFile(p) {
   const fp = p || document.getElementById('filePath').value;
   if (!id || !fp) return;
   document.getElementById('filePath').value = fp;
-  const r = await (await fetch(`/api/apps/${id}/file?path=${encodeURIComponent(fp)}`)).json();
-  document.getElementById('fileEdit').value = r.content || JSON.stringify(r);
+  try {
+    const r = await (await fetch(`/api/apps/${id}/file?path=${encodeURIComponent(fp)}`)).json();
+    document.getElementById('fileEdit').value = r.content || JSON.stringify(r);
+  } catch (e) { document.getElementById('fileEdit').value = 'open failed: ' + e.message; }
 }
 async function saveFile() {
   const id = document.getElementById('fileApp').value;
   const body = { path: document.getElementById('filePath').value, content: document.getElementById('fileEdit').value };
   document.getElementById('fileOut').textContent = 'saving + redeploying…';
-  const r = await (await fetch(`/api/apps/${id}/file`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
-  document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2);
+  try {
+    const r = await (await fetch(`/api/apps/${id}/file`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+    document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2); listFiles(curDir);
+  } catch (e) { document.getElementById('fileOut').textContent = 'save failed: ' + e.message; }
 }
 async function uploadZip() {
   const id = document.getElementById('fileApp').value;
@@ -76,8 +80,10 @@ async function uploadZip() {
   if (!id || !f) { document.getElementById('fileOut').textContent = 'pick an app and a zip file'; return; }
   const fd = new FormData(); fd.append('zip', f);
   document.getElementById('fileOut').textContent = 'uploading + redeploying…';
-  const r = await (await fetch(`/api/apps/${id}/upload`, { method: 'POST', body: fd })).json();
-  document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2); listFiles('');
+  try {
+    const r = await (await fetch(`/api/apps/${id}/upload`, { method: 'POST', body: fd })).json();
+    document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2); listFiles('');
+  } catch (e) { document.getElementById('fileOut').textContent = 'upload failed: ' + e.message; }
 }
 const logsEl = document.getElementById('logs');
 let term, ws;

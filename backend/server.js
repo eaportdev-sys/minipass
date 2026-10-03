@@ -206,10 +206,27 @@ fs.mkdirSync('/tmp/minipass-uploads', { recursive: true });
 app.post('/api/apps/:id/upload', upload.single('zip'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'no zip attached (field name: zip)' });
-    await sh(`unzip -o "${req.file.path}" -d "${codeDir(req.params.id)}"`, '/tmp');
+    const code = codeDir(req.params.id);
+    const tmpBase = fs.mkdtempSync(path.join('/tmp', 'minipass-extract-'));
+    await sh(`unzip -o "${req.file.path}" -d "${tmpBase}"`, '/tmp');
     fs.unlinkSync(req.file.path);
+    // flatten: "zipped a folder" -> move its contents up
+    let src = tmpBase;
+    const entries = fs.readdirSync(tmpBase);
+    if (entries.length === 1 && fs.statSync(path.join(tmpBase, entries[0])).isDirectory()) {
+      src = path.join(tmpBase, entries[0]);
+    }
+    // merge into code, but keep managed infra files (Dockerfile, nginx.conf)
+    let n = 0;
+    for (const e of fs.readdirSync(src)) {
+      if (e === 'Dockerfile' || e === 'nginx.conf') continue;
+      fs.cpSync(path.join(src, e), path.join(code, e), { recursive: true });
+      n++;
+    }
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+    if (!n) return res.status(400).json({ error: 'zip was empty (or only contained infra files)' });
     await deploy(req.params.id);
-    res.json({ ok: true, redeployed: true });
+    res.json({ ok: true, redeployed: true, files: n });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
