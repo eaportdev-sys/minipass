@@ -4,4 +4,6 @@ apps/*/
 backend/data.json
 backend/.env
 panel-key*
+upgrade.log
+.upgrade-lock
 AGENTS.md

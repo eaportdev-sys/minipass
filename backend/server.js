@@ -346,6 +346,13 @@ app.get('/api/panel/version', (req, res) => {
 });
 app.post('/api/panel/upgrade', async (req, res) => {
   if (!REPO_DIR) return res.status(501).json({ error: 'repo not mounted (add ./:/repo volume)' });
+  // Upgrade lock: double-clicks / retries must not stack concurrent recreates.
+  const lockFile = path.join(REPO_DIR, '.upgrade-lock');
+  try {
+    const age = Date.now() - fs.statSync(lockFile).mtimeMs;
+    if (age < 8 * 60 * 1000) return res.status(409).json({ error: 'upgrade already in progress - watch the countdown' });
+  } catch {}
+  try { fs.writeFileSync(lockFile, String(Date.now())); } catch {}
   try {
     const pulled = await sh('git pull --ff-only', REPO_DIR, gitEnv());
     const sha = execSync('git rev-parse --short HEAD', { cwd: REPO_DIR }).toString().trim().replace(/[^a-z0-9]/gi, '');
@@ -375,6 +382,17 @@ app.get('/api/panel/upgrade-log', (req, res) => {
 });
 
 const server = http.createServer(app);
+// Fast graceful shutdown: without this, compose waits the full 10s grace
+// then SIGKILLs (exit 137) on every recreate, stretching upgrade downtime.
+let shuttingDown = false;
+function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 5000).unref();
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 // Web terminal: xterm.js -> ws://host/terminal?app=<id> -> docker exec -i
 const wss = new WebSocketServer({ server, path: '/terminal' });
 wss.on('connection', (ws, req) => {
