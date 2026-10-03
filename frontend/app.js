@@ -6,6 +6,13 @@ async function refresh() {
     webhook: <code>POST /webhook/${a.id}?token=${a.token}</code> - paste into GitHub Settings-&gt;Webhooks for auto-deploy on push<br>
     <button onclick="deploy('${a.id}')">redeploy</button>
     <button onclick="rmApp('${a.id}')">delete</button></div>`).join('');
+  // keep terminal/logs dropdowns in sync
+  for (const selId of ['termApp', 'logApp']) {
+    const sel = document.getElementById(selId);
+    const prev = sel.value;
+    sel.innerHTML = apps.map(a => `<option value="${a.id}">${a.id}</option>`).join('');
+    if (apps.some(a => a.id === prev)) sel.value = prev;
+  }
 }
 async function createApp() {
   const v = id => document.getElementById(id).value;
@@ -15,7 +22,12 @@ async function createApp() {
 }
 async function deploy(id) { await fetch('/api/apps/' + id + '/deploy', { method: 'POST' }); alert('deploying'); }
 async function rmApp(id) { if (confirm('delete?')) { await fetch('/api/apps/' + id, { method: 'DELETE' }); refresh(); } }
-async function showLogs() { logsEl.textContent = 'loading…'; logsEl.textContent = await (await fetch('/api/apps/' + document.getElementById('logApp').value.trim() + '/logs')).text(); }
+async function showLogs() {
+  const id = document.getElementById('logApp').value.trim();
+  if (!id) { logsEl.textContent = 'no apps yet - build one first'; return; }
+  logsEl.textContent = 'loading…';
+  logsEl.textContent = await (await fetch('/api/apps/' + id + '/logs')).text();
+}
 async function version() {
   try {
     const v = await (await fetch('/api/panel/version')).json();
@@ -30,8 +42,10 @@ async function upgrade() {
 const logsEl = document.getElementById('logs');
 let term, ws;
 function openTerm() {
+  const id = document.getElementById('termApp').value.trim();
+  if (!id) return;
   term = new Terminal(); term.open(document.getElementById('term')); term.clear();
-  ws = new WebSocket(`ws://${location.host}/terminal?app=${document.getElementById('termApp').value}`);
+  ws = new WebSocket(`ws://${location.host}/terminal?app=${id}`);
   ws.onmessage = e => term.write(e.data);
   term.onData = d => ws.send(d);
 }
