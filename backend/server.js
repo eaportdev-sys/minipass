@@ -353,8 +353,15 @@ app.post('/api/panel/upgrade', async (req, res) => {
     if (age < 8 * 60 * 1000) return res.status(409).json({ error: 'upgrade already in progress - watch the countdown' });
   } catch {}
   try { fs.writeFileSync(lockFile, String(Date.now())); } catch {}
+  // Sync to origin/main explicitly: local HEAD may lag if the host pulled
+  // concurrently (or lead nowhere) - building stale code causes pointless recycles.
   try {
-    const pulled = await sh('git pull --ff-only', REPO_DIR, gitEnv());
+    await sh('git fetch origin', REPO_DIR, gitEnv());
+    execSync('git reset --hard origin/main', { cwd: REPO_DIR, env: gitEnv() });
+  } catch (e) {
+    return res.status(500).json({ error: 'fetch failed (panel key on GitHub? git remote SSH?): ' + e.message });
+  }
+  const pulled = 'synced to origin/main';
     const sha = execSync('git rev-parse --short HEAD', { cwd: REPO_DIR }).toString().trim().replace(/[^a-z0-9]/gi, '');
     // No-suicide rule: NOTHING here may stop this container. The old design ran
     // `up -d` detached from inside the panel itself - compose then killed its own
