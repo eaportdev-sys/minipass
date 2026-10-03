@@ -1,0 +1,5 @@
+node_modules/
+apps/*/
+!.gitkeep
+backend/data.json
+backend/.env

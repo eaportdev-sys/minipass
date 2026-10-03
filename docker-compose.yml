@@ -1,0 +1,18 @@
+services:
+  panel:
+    build: ./backend
+    restart: unless-stopped
+    env_file: ./backend/.env.example
+    environment:
+      - APPS_DIR=/srv/apps
+      - PORT=3001
+    volumes:
+      - /srv/apps:/srv/apps
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "3001:3001"
+  # Set TUNNEL_TOKEN, then uncomment. One tunnel serves all apps.
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
