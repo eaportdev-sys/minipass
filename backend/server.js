@@ -203,7 +203,9 @@ app.post('/api/apps/:id/deploy', async (req, res) => {
 app.get('/api/github/status', (req, res) => {
   const logins = gh.getLogins();
   const d = gh.getAuth();
-  res.json(logins.length ? { connected: true, logins, default: d && d.login } : { connected: false, logins: [] });
+  res.json(logins.length
+    ? { connected: true, logins, default: d && d.login, oauth: !!(process.env.GITHUB_CLIENT_ID && process.env.PANEL_URL) }
+    : { connected: false, logins: [], oauth: !!(process.env.GITHUB_CLIENT_ID && process.env.PANEL_URL) });
 });
 app.get('/api/github/login', (req, res) => {
   const { GITHUB_CLIENT_ID, PANEL_URL } = process.env;

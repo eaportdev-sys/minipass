@@ -206,6 +206,8 @@ async function ghStatus() {
     document.getElementById('ghStatus').textContent = s.connected ? ('connected: ' + s.logins.join(', ')) : 'not connected';
     document.getElementById('ghAccounts').innerHTML = (s.logins || []).map(l =>
       `<div class="meta">${l} <button onclick="ghDisconnect('${l}')">disconnect</button></div>`).join('');
+    // OAuth is a dead end on LAN (GitHub rejects non-HTTPS callbacks) - only show it when configured
+    document.getElementById('oauthRow').style.display = s.oauth ? 'block' : 'none';
   } catch {
     document.getElementById('ghStatus').textContent = 'unknown';
     document.getElementById('ghAccounts').innerHTML = '';

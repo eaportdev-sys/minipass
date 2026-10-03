@@ -114,8 +114,8 @@
       <div class="card"><b>github</b> <span id="ghStatus">…</span><br>
         <div class="meta">Shared account pool (optional) — each site can also keep its own token on its page. Token paste works on localhost; OAuth needs a public panel.</div>
         <input id="ghToken" type="password" placeholder="github_pat_…" style="width:280px"><button onclick="ghSaveToken()">save token</button>
-        <div class="meta">Public-panel path: OAuth App (callback <code>/api/github/callback</code>, GITHUB_CLIENT_ID/SECRET + PANEL_URL in backend .env), then:</div>
-        <button onclick="ghConnect()">connect via oauth</button>
+        <div class="meta" id="oauthRow" style="display:none">Public-panel path: OAuth App (callback <code>/api/github/callback</code>, GITHUB_CLIENT_ID/SECRET + PANEL_URL in backend .env), then:
+        <button onclick="ghConnect()">connect via oauth</button></div>
         <div id="ghAccounts"></div>
       </div>
     </section>
