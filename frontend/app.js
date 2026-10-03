@@ -6,8 +6,8 @@ async function refresh() {
     webhook: <code>POST /webhook/${a.id}?token=${a.token}</code> - paste into GitHub Settings-&gt;Webhooks for auto-deploy on push<br>
     <button onclick="deploy('${a.id}')">redeploy</button>
     <button onclick="rmApp('${a.id}')">delete</button></div>`).join('');
-  // keep terminal/logs dropdowns in sync
-  for (const selId of ['termApp', 'logApp']) {
+  // keep terminal/logs/files dropdowns in sync
+  for (const selId of ['termApp', 'logApp', 'fileApp']) {
     const sel = document.getElementById(selId);
     const prev = sel.value;
     sel.innerHTML = apps.map(a => `<option value="${a.id}">${a.id}</option>`).join('');
@@ -39,6 +39,45 @@ async function upgrade() {
   document.getElementById('upOut').textContent = 'pulling + rebuilding… panel will restart';
   const r = await (await fetch('/api/panel/upgrade', { method: 'POST' })).json();
   document.getElementById('upOut').textContent = JSON.stringify(r, null, 2);
+}
+async function scan() {
+  const r = await (await fetch('/api/panel/scan', { method: 'POST' })).json();
+  document.getElementById('upOut').textContent = JSON.stringify(r, null, 2); refresh();
+}
+let curDir = '';
+async function listFiles(dir) {
+  curDir = dir || '';
+  const id = document.getElementById('fileApp').value;
+  if (!id) return;
+  const files = await (await fetch(`/api/apps/${id}/files?path=${encodeURIComponent(curDir)}`)).json();
+  const up = curDir ? `<button onclick="listFiles('${curDir.split('/').slice(0, -1).join('/')}')">.. up</button><br>` : '';
+  document.getElementById('fileList').innerHTML = up + (files.error || files.map(f =>
+    f.dir ? `<button onclick="listFiles('${(curDir ? curDir + '/' : '') + f.name}')">${f.name}/</button>`
+          : `<button onclick="openFile('${(curDir ? curDir + '/' : '') + f.name}')">${f.name}</button>`).join(' ') || '(empty)');
+}
+async function openFile(p) {
+  const id = document.getElementById('fileApp').value;
+  const fp = p || document.getElementById('filePath').value;
+  if (!id || !fp) return;
+  document.getElementById('filePath').value = fp;
+  const r = await (await fetch(`/api/apps/${id}/file?path=${encodeURIComponent(fp)}`)).json();
+  document.getElementById('fileEdit').value = r.content || JSON.stringify(r);
+}
+async function saveFile() {
+  const id = document.getElementById('fileApp').value;
+  const body = { path: document.getElementById('filePath').value, content: document.getElementById('fileEdit').value };
+  document.getElementById('fileOut').textContent = 'saving + redeploying…';
+  const r = await (await fetch(`/api/apps/${id}/file`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+  document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2);
+}
+async function uploadZip() {
+  const id = document.getElementById('fileApp').value;
+  const f = document.getElementById('zipFile').files[0];
+  if (!id || !f) { document.getElementById('fileOut').textContent = 'pick an app and a zip file'; return; }
+  const fd = new FormData(); fd.append('zip', f);
+  document.getElementById('fileOut').textContent = 'uploading + redeploying…';
+  const r = await (await fetch(`/api/apps/${id}/upload`, { method: 'POST', body: fd })).json();
+  document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2); listFiles('');
 }
 const logsEl = document.getElementById('logs');
 let term, ws;

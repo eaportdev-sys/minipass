@@ -13,8 +13,9 @@ const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
 function pickDir(cands) { for (const c of cands) { try { if (fs.existsSync(c)) return c; } catch {} } return cands[0]; }
 const TEMPLATES_DIR = pickDir([path.resolve(__dirname, '../templates'), path.join(__dirname, 'templates'), path.join(process.cwd(), 'templates')]);
 const FRONTEND_DIR = pickDir([path.resolve(__dirname, '../frontend'), path.join(__dirname, 'frontend'), path.join(process.cwd(), 'frontend')]);
-const DATA_FILE = path.join(__dirname, 'data.json');
+const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data.json');
 fs.mkdirSync(APPS_DIR, { recursive: true });
+fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
 
 const app = express();
 app.use(cors());
@@ -117,6 +118,98 @@ app.delete('/api/apps/:id', async (req, res) => {
     db_.apps = db_.apps.filter(a => a.id !== req.params.id);
     save(db_);
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+function parseEnvFile(p) {
+  const out = {};
+  try {
+    for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
+      const m = line.match(/^([A-Z_]+)=(.*)$/);
+      if (m) out[m[1]] = m[2].trim();
+    }
+  } catch {}
+  return out;
+}
+
+// Recover apps found on disk (e.g. panel data lost before persistent volume).
+app.post('/api/panel/scan', (req, res) => {
+  try {
+    const db_ = load();
+    const used = new Set(db_.apps.map(a => a.hostPort).filter(Boolean));
+    let nextPort = 8000;
+    const found = [];
+    for (const name of fs.readdirSync(APPS_DIR)) {
+      const dir = path.join(APPS_DIR, name);
+      try { if (!fs.statSync(dir).isDirectory()) continue; } catch { continue; }
+      if (!fs.existsSync(path.join(dir, 'docker-compose.yml'))) continue;
+      if (db_.apps.some(a => a.id === name)) { found.push(name + ' (kept)'); continue; }
+      const env = parseEnvFile(path.join(dir, '.env'));
+      let hostPort = parseInt(env.HOST_PORT, 10);
+      if (!hostPort || used.has(hostPort)) {
+        hostPort = nextPort;
+        while (used.has(hostPort) && hostPort < 9000) hostPort++;
+        nextPort = hostPort + 1;
+      }
+      used.add(hostPort);
+      db_.apps.push({
+        id: name, type: env.APP_TYPE || 'static', repoUrl: '',
+        db: env.DB_HOST ? 'external' : 'none', domain: env.DOMAIN || '',
+        token: crypto.randomBytes(16).toString('hex'),
+        hostPort, createdAt: new Date().toISOString(), recovered: true
+      });
+      found.push(name + ' (recovered, new webhook token)');
+    }
+    save(db_);
+    res.json({ ok: true, found, total: db_.apps.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// File manager for apps without git (static default page etc.)
+function codeDir(id) { return path.join(appDir(APPS_DIR, id), 'code'); }
+function safeRel(base, rel) {
+  const resolved = path.resolve(base, '.' + path.sep + (rel || ''));
+  if (resolved !== base && !resolved.startsWith(base + path.sep)) throw new Error('bad path');
+  return resolved;
+}
+app.get('/api/apps/:id/files', (req, res) => {
+  try {
+    const base = codeDir(req.params.id);
+    const dir = safeRel(base, req.query.path || '');
+    const out = fs.readdirSync(dir, { withFileTypes: true })
+      .map(e => ({ name: e.name, dir: e.isDirectory() }))
+      .sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name));
+    res.json(out);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/apps/:id/file', (req, res) => {
+  try {
+    const f = safeRel(codeDir(req.params.id), req.query.path || '');
+    const st = fs.statSync(f);
+    if (!st.isFile() || st.size > 200 * 1024) return res.status(400).json({ error: 'not a small text file' });
+    const buf = fs.readFileSync(f);
+    if (buf.includes(0)) return res.status(400).json({ error: 'binary file - use zip upload to replace' });
+    res.json({ path: req.query.path, content: buf.toString('utf8') });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/apps/:id/file', async (req, res) => {
+  try {
+    const f = safeRel(codeDir(req.params.id), req.body.path || '');
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, req.body.content || '');
+    await deploy(req.params.id);
+    res.json({ ok: true, redeployed: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+const upload = require('multer')({ dest: '/tmp/minipass-uploads/', limits: { fileSize: 50 * 1024 * 1024 } });
+fs.mkdirSync('/tmp/minipass-uploads', { recursive: true });
+app.post('/api/apps/:id/upload', upload.single('zip'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'no zip attached (field name: zip)' });
+    await sh(`unzip -o "${req.file.path}" -d "${codeDir(req.params.id)}"`, '/tmp');
+    fs.unlinkSync(req.file.path);
+    await deploy(req.params.id);
+    res.json({ ok: true, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

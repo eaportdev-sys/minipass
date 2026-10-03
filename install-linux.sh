@@ -66,7 +66,7 @@ else
 fi
 
 # 5. dirs + firewall (whichever exists)
-mkdir -p /srv/apps /opt/minipaas
+mkdir -p /srv/apps /srv/panel-data /opt/minipaas
 if command -v ufw >/dev/null; then
   ufw allow 22/tcp || true; ufw allow 3001/tcp || true; ufw allow 8000:9000/tcp || true; yes | ufw enable || true
 elif command -v firewall-cmd >/dev/null; then
