@@ -343,7 +343,9 @@ app.post('/api/panel/upgrade', async (req, res) => {
     const sha = execSync('git rev-parse --short HEAD', { cwd: REPO_DIR }).toString().trim().replace(/[^a-z0-9]/gi, '');
     // rebuild detached with baked sha: panel container restarts, so don't wait for it.
     // Build output goes to upgrade.log so the UI can show failures (otherwise silent).
-    const child = spawn('sh', ['-c', `GIT_SHA=${sha} ${COMPOSE_BIN} up -d --build > "${REPO_DIR}/upgrade.log" 2>&1`], { cwd: REPO_DIR, detached: true, stdio: 'ignore' });
+    // -p minipass: cwd inside the container is /repo, so pin the project name
+    // or upgrades spawn a duplicate `repo-*` stack that collides on ports.
+    const child = spawn('sh', ['-c', `GIT_SHA=${sha} ${COMPOSE_BIN} -p minipass up -d --build > "${REPO_DIR}/upgrade.log" 2>&1`], { cwd: REPO_DIR, detached: true, stdio: 'ignore' });
     child.unref();
     res.json({ ok: true, pulled: pulled.trim(), target: sha, restarting: true });
   } catch (e) { res.status(500).json({ error: e.message }); }

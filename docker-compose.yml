@@ -1,3 +1,4 @@
+name: minipass
 services:
   panel:
     build:
