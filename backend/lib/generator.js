@@ -155,4 +155,4 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   return { dir, appPort, hostPort: host };
 }
 
-module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs };
+module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbService, DB_IMAGES };

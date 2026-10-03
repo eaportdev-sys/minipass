@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const { exec, execSync, spawn } = require('child_process');
 const http = require('http');
 const { WebSocketServer } = require('ws');
-const { createApp, appDir, normDbs } = require('./lib/generator');
+const { createApp, appDir, normDbs, dbService } = require('./lib/generator');
 const { gitEnv, pubKey, appPubKey, appGitEnv } = require('./lib/ssh');
 
 const PORT = process.env.PORT || 3001;
@@ -388,6 +388,49 @@ app.delete('/api/apps/:id/git-token', (req, res) => {
     if (meta.github) delete meta.github.token;
     save(db_);
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Add a database to an existing app: appends service + volume, merges new env
+// vars without touching existing ones (passwords stay valid against kept volumes).
+app.post('/api/apps/:id/db', async (req, res) => {
+  try {
+    const type = normDbs(req.body.type)[0];
+    if (!type) return res.status(400).json({ error: 'unknown database type' });
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const dir = appDir(APPS_DIR, meta.id);
+    const ymlPath = path.join(dir, 'docker-compose.yml');
+    const envPath = path.join(dir, '.env');
+    if (!fs.existsSync(ymlPath)) return res.status(400).json({ error: 'app has no compose file' });
+    const current = normDbs(meta.db);
+    const yml = fs.readFileSync(ymlPath, 'utf8');
+    if (current.includes(type) || yml.includes(`db-${type}:`)) {
+      return res.status(400).json({ error: type + ' already attached' });
+    }
+    const safe = meta.id.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'app';
+    const b = dbService(type, safe, `db-${type}`, `dbdata-${type}`);
+    // splice service in before the volumes: block (or append both at end)
+    let out = yml.replace(/\nvolumes:\n/, `\n${b.compose}\nvolumes:\n`);
+    if (out === yml) out = yml.replace(/\s*$/, `\n${b.compose}\nvolumes:\n  ${b.vol}:\n`);
+    else out = out.replace(/^(volumes:\n(?:  [^\n]+\n?)*)/m, `$1  ${b.vol}:\n`);
+    fs.writeFileSync(ymlPath, out);
+    // merge env: existing keys win (old passwords keep matching old volumes)
+    const have = new Set();
+    let envText = '';
+    try {
+      envText = fs.readFileSync(envPath, 'utf8');
+      for (const line of envText.split('\n')) {
+        const m = line.match(/^([A-Z_]+)=/);
+        if (m) have.add(m[1]);
+      }
+    } catch {}
+    const fresh = b.lines.filter(l => !have.has(l.split('=')[0]));
+    fs.writeFileSync(envPath, envText.replace(/\s*$/, '') + '\n' + fresh.join('\n') + '\n');
+    meta.db = [...current, type];
+    save(db_);
+    try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, added: type, redeployError: e.message }); }
+    res.json({ ok: true, added: type, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/regenerate', (req, res) => {

@@ -38,6 +38,8 @@ function fillSiteHeader(a) {
   document.getElementById('siteStart').onclick = () => startApp(a.id);
   document.getElementById('siteDelete').onclick = () => rmApp(a.id);
   document.getElementById('hookUrl').textContent = `${location.origin}/webhook/${a.id}?token=${a.token}`;
+  document.getElementById('dbList').textContent = 'attached: ' + dbLabel(a);
+  document.getElementById('dbOut').textContent = '';
   fillGitConn(a);
   const ps = document.getElementById('pollSel');
   if (ps) ps.value = String((a.github && a.github.pollMinutes) || 0);
@@ -65,6 +67,16 @@ async function initLocalGit() {
 }
 async function copyHook() {
   try { await navigator.clipboard.writeText(document.getElementById('hookUrl').textContent); } catch {}
+}
+async function addDb() {
+  if (!currentApp) return;
+  const type = document.getElementById('dbAdd').value;
+  document.getElementById('dbOut').textContent = 'adding ' + type + ' + redeploying…';
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/db`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type }) })).json();
+    document.getElementById('dbOut').textContent = JSON.stringify(r, null, 2);
+    refresh();
+  } catch (e) { document.getElementById('dbOut').textContent = 'failed: ' + e.message; }
 }
 async function fillGitConn(a) {
   const g = a.github || {};
@@ -177,7 +189,12 @@ async function detectType() {
     if (r.type) {
       const radio = document.querySelector(`input[name=apptype][value=${r.type}]`);
       if (radio) radio.checked = true;
-      toast('detected ' + r.type + ' (' + r.reason + ')');
+      let msg = 'detected ' + r.type + ' (' + r.reason + ')';
+      if (r.dbs && r.dbs.length) {
+        document.querySelectorAll('input[name=appdb]').forEach(c => { c.checked = r.dbs.includes(c.value); });
+        msg += ' + db: ' + r.dbs.join('+');
+      }
+      toast(msg);
     } else {
       toast((r.detected ? r.detected + ' has no template yet. ' : 'could not detect type. ') + (r.reason || r.error || ''), false);
     }
