@@ -11,6 +11,7 @@ services:
     volumes:
       - /srv/apps:/srv/apps
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./:/repo
     ports:
       - "3001:3001"
   # Set TUNNEL_TOKEN, then uncomment. One tunnel serves all apps.

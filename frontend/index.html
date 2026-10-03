@@ -4,7 +4,8 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
 <style>body{font-family:system-ui;background:#0f1115;color:#eee;margin:0;padding:20px}input,select,button{padding:8px;margin:4px}button{cursor:pointer}.card{border:1px solid #333;padding:12px;margin:8px 0;border-radius:8px;background:#171a21}#term{height:300px;background:#000}</style>
 </head><body>
-<h2>minipaas - build app</h2>
+<h2>minipass - build app</h2>
+<div class="card"><b>panel</b> <span id="ver">…</span> <button onclick="upgrade()">Upgrade from git</button><pre id="upOut"></pre></div>
 <div class="card">
 <input id="name" placeholder="app name (myapp)">
 <select id="type"><option value="static">static</option><option value="react">react</option><option value="node">node js</option><option value="php">php</option></select>

@@ -58,14 +58,19 @@ app.post('/api/apps', async (req, res) => {
     if (!name || !type) return res.status(400).json({ error: 'name and type required' });
     const id = name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
     const token = crypto.randomBytes(16).toString('hex');
-    createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl, db: db || 'none', port, domain });
+    // localhost: auto-assign host port 8000+ so app is reachable without a domain
+    const existing = load().apps;
+    const used = new Set(existing.map(a => a.hostPort).filter(Boolean));
+    let hostPort = parseInt(req.body.hostPort, 10) || 8000;
+    while (used.has(hostPort) && hostPort < 9000) hostPort++;
+    createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl, db: db || 'none', port, domain, hostPort });
     const db_ = load();
-    const meta = { id, type, repoUrl: repoUrl || '', db: db || 'none', domain: domain || '', token, createdAt: new Date().toISOString() };
+    const meta = { id, type, repoUrl: repoUrl || '', db: db || 'none', domain: domain || '', token, hostPort, createdAt: new Date().toISOString() };
     db_.apps = db_.apps.filter(a => a.id !== id).concat([meta]);
     save(db_);
     // build async so UI returns fast
     sh(`${COMPOSE_BIN} up --build -d`, appDir(APPS_DIR, id)).catch(e => console.error(e.message));
-    res.json({ ...meta, webhook: `/webhook/${id}?token=${token}` });
+    res.json({ ...meta, localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}` });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -108,6 +113,31 @@ app.delete('/api/apps/:id', async (req, res) => {
     db_.apps = db_.apps.filter(a => a.id !== req.params.id);
     save(db_);
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Panel self-upgrade from UI: git pull + rebuild (needs ./:/repo mount + docker sock).
+const REPO_DIR = (() => {
+  for (const c of ['/repo', path.resolve(__dirname, '..')]) {
+    try { if (fs.existsSync(path.join(c, '.git'))) return c; } catch {}
+  }
+  return null;
+})();
+app.get('/api/panel/version', (req, res) => {
+  if (!REPO_DIR) return res.json({ version: 'unknown', upgradeable: false });
+  try {
+    const v = execSync('git rev-parse --short HEAD', { cwd: REPO_DIR }).toString().trim();
+    res.json({ version: v, upgradeable: true });
+  } catch (e) { res.json({ version: 'unknown', upgradeable: false }); }
+});
+app.post('/api/panel/upgrade', async (req, res) => {
+  if (!REPO_DIR) return res.status(501).json({ error: 'repo not mounted (add ./:/repo volume)' });
+  try {
+    const pulled = await sh('git pull --ff-only', REPO_DIR);
+    // rebuild detached: panel container restarts, so don't wait for it
+    const child = spawn('sh', ['-c', `${COMPOSE_BIN} up -d --build`], { cwd: REPO_DIR, detached: true, stdio: 'ignore' });
+    child.unref();
+    res.json({ ok: true, pulled: pulled.trim(), restarting: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

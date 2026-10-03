@@ -43,7 +43,7 @@ function dbEnv(db, name) {
   return { lines: [], compose: '' };
 }
 
-function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', port, domain }) {
+function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', port, domain, hostPort }) {
   const dir = appDir(appsDir, name);
   if (fs.existsSync(dir)) throw new Error('app exists');
   fs.mkdirSync(dir, { recursive: true });
@@ -59,19 +59,20 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
 
   // 2. .env auto-generated
   const appPort = port || TYPE_PORT[type] || 3000;
+  const host = hostPort || 8000;
   const d = dbEnv(db, name.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'app');
   const envLines = [
-    `APP_NAME=${name}`, `APP_TYPE=${type}`, `PORT=${appPort}`,
+    `APP_NAME=${name}`, `APP_TYPE=${type}`, `PORT=${appPort}`, `HOST_PORT=${host}`,
     `DOMAIN=${domain || ''}`, ...d.lines
   ];
   fs.writeFileSync(path.join(dir, '.env'), envLines.join('\n') + '\n');
 
-  // 3. docker-compose.yml per app
+  // 3. docker-compose.yml per app (ports: reachable via localhost + tunnel; expose: inter-container)
   const dbBlock = d.compose ? d.compose + '\n' : '';
   const volBlock = d.compose ? '\nvolumes:\n  dbdata:' : '';
-  const compose = `services:\n  app:\n    build: ./code\n    restart: unless-stopped\n    env_file: .env\n    expose:\n      - "${appPort}"\n${dbBlock}${volBlock}\n`;
+  const compose = `services:\n  app:\n    build: ./code\n    restart: unless-stopped\n    env_file: .env\n    ports:\n      - "${host}:${appPort}"\n    expose:\n      - "${appPort}"\n${dbBlock}${volBlock}\n`;
   fs.writeFileSync(path.join(dir, 'docker-compose.yml'), compose);
-  return { dir, appPort };
+  return { dir, appPort, hostPort: host };
 }
 
 module.exports = { createApp, appDir, TYPE_PORT, pw };
