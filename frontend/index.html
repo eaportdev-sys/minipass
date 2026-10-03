@@ -43,6 +43,13 @@
         <div class="meta">GitHub push (the trigger) → panel git pull + rebuild (the action). Paste the URL into repo Settings → Webhooks, push events.</div>
         <div class="meta"><code id="hookUrl"></code></div>
         <div class="actions"><button onclick="copyHook()">copy</button><button onclick="regenHook()">regenerate</button></div>
+        <div class="meta">offline auto-deploy (no tunnel needed — panel polls GitHub): <select id="pollSel" onchange="setPoll()">
+          <option value="0">off — webhook only</option>
+          <option value="1">every minute</option>
+          <option value="5">every 5 min</option>
+          <option value="15">every 15 min</option>
+        </select></div>
+        <div class="meta" id="pollState"></div>
         <div class="meta">repo deploy key (SSH remotes only — add to that repo, read-only): <button onclick="showRepoKey()">show key</button></div>
         <div class="meta"><code id="repoKeyOut"></code></div>
       </div>

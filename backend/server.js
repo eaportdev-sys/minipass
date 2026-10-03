@@ -32,8 +32,17 @@ app.post('/webhook/:id', express.raw({ type: '*/*' }), async (req, res) => {
     const ok = sig.length === expect.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expect));
     if (!ok) return res.status(401).send('bad signature');
   }
-  try { await deploy(req.params.id); res.send('deployed'); }
-  catch (e) { res.status(500).send(e.message); }
+  try { await deploy(req.params.id); } catch (e) { return res.status(500).send(e.message); }
+  // keep the poller from redeploying what the webhook just deployed
+  try {
+    const p = JSON.parse(req.body.toString());
+    if (p && /^[0-9a-f]{40}$/.test(p.after || '')) {
+      const db2 = load();
+      const m2 = db2.apps.find(a => a.id === req.params.id);
+      if (m2) { m2.github = { ...(m2.github || {}), sha: p.after }; save(db2); }
+    }
+  } catch {}
+  res.send('deployed');
 });
 app.use(express.json());
 // serve wizard UI (works locally and in docker). No-store so upgrades show instantly.
@@ -70,6 +79,45 @@ app.get('/api/apps/:id/repokey', (req, res) => {
   const k = appPubKey(appDir(APPS_DIR, req.params.id));
   if (!k) return res.status(500).json({ error: 'no repo key (ssh-keygen unavailable?)' });
   res.json({ pubkey: k });
+});
+
+// Offline auto-deploy (the localhost answer): GitHub can't push webhooks to an
+// unreachable panel, so the panel polls instead - outbound HTTPS only, no tunnel
+// or inbound ports. Per-app interval; converges via stored head sha.
+const pollState = new Map();
+setInterval(pollGithub, 60 * 1000);
+async function pollGithub() {
+  let db_;
+  try { db_ = load(); } catch { return; }
+  const now = Date.now();
+  for (const meta of db_.apps) {
+    const g = meta.github;
+    if (!g || !g.repo || !(g.pollMinutes > 0)) continue;
+    if (now - (pollState.get(meta.id) || 0) < g.pollMinutes * 60 * 1000) continue;
+    pollState.set(meta.id, now);
+    try {
+      const parts = String(g.repo).split('/');
+      const c = await gh.apiAs(g.login || undefined, `/repos/${parts[0]}/${parts[1]}/commits/${encodeURIComponent(g.branch || 'main')}`);
+      const sha = c && c.sha;
+      if (!sha || sha === g.sha) continue;
+      await deploy(meta.id);
+      const fresh = load();
+      const m2 = fresh.apps.find(a => a.id === meta.id);
+      if (m2 && m2.github) { m2.github.sha = sha; save(fresh); }
+      console.log(`poll-deploy ${meta.id} -> ${String(sha).slice(0, 7)}`);
+    } catch (e) { console.error(`poll ${meta.id}: ${e.message}`); }
+  }
+}
+app.post('/api/apps/:id/poll', (req, res) => {
+  try {
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    if (!meta.github) return res.status(400).json({ error: 'link a github repo first' });
+    meta.github.pollMinutes = Math.max(0, Math.min(60, parseInt(req.body.minutes, 10) || 0));
+    save(db_);
+    res.json({ ok: true, pollMinutes: meta.github.pollMinutes });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/types', (req, res) => {
@@ -207,8 +255,13 @@ app.post('/api/github/link', async (req, res) => {
     if (!meta) return res.status(404).json({ error: 'unknown app' });
     const info = await gh.apiAs(login || undefined, `/repos/${parts[0]}/${parts[1]}`);
     const acct = gh.getAuth(login);
+    let head = null;
+    try {
+      const c = await gh.apiAs(login || undefined, `/repos/${parts[0]}/${parts[1]}/commits/${encodeURIComponent(info.default_branch)}`);
+      head = c && c.sha;
+    } catch {}
     meta.repoUrl = info.clone_url;
-    meta.github = { repo: info.full_name, branch: info.default_branch, login: acct && acct.login };
+    meta.github = { repo: info.full_name, branch: info.default_branch, login: acct && acct.login, sha: head, pollMinutes: 5 };
     save(db_);
     const base = (process.env.PANEL_URL || '').replace(/\/$/, '');
     if (base) {

@@ -38,6 +38,12 @@ function fillSiteHeader(a) {
   document.getElementById('siteStart').onclick = () => startApp(a.id);
   document.getElementById('siteDelete').onclick = () => rmApp(a.id);
   document.getElementById('hookUrl').textContent = `${location.origin}/webhook/${a.id}?token=${a.token}`;
+  const ps = document.getElementById('pollSel');
+  if (ps) ps.value = String((a.github && a.github.pollMinutes) || 0);
+  const pst = document.getElementById('pollState');
+  if (pst) pst.textContent = a.github
+    ? `tracking ${a.github.repo}@${String(a.github.sha || '?').slice(0, 7)}${a.github.pollMinutes > 0 ? ` — checked every ${a.github.pollMinutes}m` : ' (webhook only)'}`
+    : 'no github repo linked';
   const box = document.getElementById('localGitBox');
   if (a.localGit) {
     const remote = `root@${location.hostname}:/srv/apps/${a.id}/repo.git`;
@@ -58,6 +64,13 @@ async function initLocalGit() {
 }
 async function copyHook() {
   try { await navigator.clipboard.writeText(document.getElementById('hookUrl').textContent); } catch {}
+}
+async function setPoll() {
+  if (!currentApp) return;
+  const minutes = parseInt(document.getElementById('pollSel').value, 10) || 0;
+  const r = await (await fetch(`/api/apps/${currentApp}/poll`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ minutes }) })).json();
+  toast(r.ok ? (minutes ? `polling every ${minutes}m` : 'polling off') : (r.error || 'failed'), !!r.ok);
+  refresh();
 }
 async function showRepoKey() {
   if (!currentApp) return;
