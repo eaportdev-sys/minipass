@@ -5,8 +5,7 @@ async function refresh() {
     `<div class="card appcard"><h3>${a.id}</h3>
     <div class="badges"><span class="badge type">${a.type}</span><span class="badge">db: ${a.db}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}</div>
     <div class="meta">local: ${a.hostPort ? `<a href="http://${location.hostname}:${a.hostPort}" target="_blank">http://${location.hostname}:${a.hostPort}</a>` : 'recreate app to get localhost port'}</div>
-    <div class="meta">webhook: <code>POST /webhook/${a.id}?token=${a.token}</code></div>
-    <div class="actions"><button class="btn primary" onclick="openSite('${a.id}')">open</button><button onclick="deploy('${a.id}')">redeploy</button><button class="btn danger" onclick="rmApp('${a.id}')">delete</button></div></div>`).join('') || '<div class="card">No websites yet - hit + Create.</div>';
+    <div class="actions"><button class="btn primary" onclick="openSite('${a.id}')">open</button><button onclick="deploy('${a.id}')">redeploy</button><button onclick="stopApp('${a.id}')">stop</button><button onclick="startApp('${a.id}')">start</button><button class="btn danger" onclick="rmApp('${a.id}')">delete</button></div></div>`).join('') || '<div class="card">No websites yet - hit + Create.</div>';
   // keep detail header + global terminal picker in sync
   if (currentApp && !apps.some(a => a.id === currentApp)) backToSites();
   else if (currentApp) fillSiteHeader(apps.find(a => a.id === currentApp));
@@ -35,6 +34,8 @@ function fillSiteHeader(a) {
     `${a.hostPort ? `local: <a href="http://${location.hostname}:${a.hostPort}" target="_blank">http://${location.hostname}:${a.hostPort}</a><br>` : ''}
     webhook: <code>POST /webhook/${a.id}?token=${a.token}</code>`;
   document.getElementById('siteRedeploy').onclick = () => deploy(a.id);
+  document.getElementById('siteStop').onclick = () => stopApp(a.id);
+  document.getElementById('siteStart').onclick = () => startApp(a.id);
   document.getElementById('siteDelete').onclick = () => rmApp(a.id);
   document.getElementById('hookUrl').textContent = `${location.origin}/webhook/${a.id}?token=${a.token}`;
 }
@@ -77,6 +78,8 @@ function toggleTheme() {
 }
 try { document.documentElement.dataset.theme = localStorage.getItem('mp-theme') || 'dark'; } catch {}
 async function deploy(id) { await fetch('/api/apps/' + id + '/deploy', { method: 'POST' }); alert('deploying'); }
+async function stopApp(id) { const r = await (await fetch('/api/apps/' + id + '/stop', { method: 'POST' })).json(); alert(r.ok ? 'stopped' : (r.error || 'failed')); }
+async function startApp(id) { const r = await (await fetch('/api/apps/' + id + '/start', { method: 'POST' })).json(); alert(r.ok ? 'started' : (r.error || 'failed')); }
 async function rmApp(id) { if (confirm('delete?')) { await fetch('/api/apps/' + id, { method: 'DELETE' }); refresh(); } }
 async function showLogs() {
   if (!currentApp) { logsEl.textContent = 'open a website first'; return; }

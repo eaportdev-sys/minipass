@@ -125,6 +125,14 @@ app.get('/api/apps/:id/logs', async (req, res) => {
   } catch (e) { res.status(500).send(e.message); }
 });
 
+app.post('/api/apps/:id/stop', async (req, res) => {
+  try { await sh(`${COMPOSE_BIN} stop`, appDir(APPS_DIR, req.params.id)); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/apps/:id/start', async (req, res) => {
+  try { await sh(`${COMPOSE_BIN} up -d`, appDir(APPS_DIR, req.params.id)); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.delete('/api/apps/:id', async (req, res) => {
   try {
     const dir = appDir(APPS_DIR, req.params.id);
@@ -341,11 +349,19 @@ app.post('/api/panel/upgrade', async (req, res) => {
   try {
     const pulled = await sh('git pull --ff-only', REPO_DIR, gitEnv());
     const sha = execSync('git rev-parse --short HEAD', { cwd: REPO_DIR }).toString().trim().replace(/[^a-z0-9]/gi, '');
-    // rebuild detached with baked sha: panel container restarts, so don't wait for it.
-    // Build output goes to upgrade.log so the UI can show failures (otherwise silent).
+    // Crash-proof: build FIRST while the old container keeps serving. Only `up -d`
+    // after a green build, so a broken build can never take the panel down.
     // -p minipass: cwd inside the container is /repo, so pin the project name
     // or upgrades spawn a duplicate `repo-*` stack that collides on ports.
-    const child = spawn('sh', ['-c', `GIT_SHA=${sha} ${COMPOSE_BIN} -p minipass up -d --build > "${REPO_DIR}/upgrade.log" 2>&1`], { cwd: REPO_DIR, detached: true, stdio: 'ignore' });
+    fs.writeFileSync(path.join(REPO_DIR, 'upgrade.log'), `pulled ${sha}, building…\n`);
+    try {
+      execSync(`GIT_SHA=${sha} ${COMPOSE_BIN} -p minipass build`, { cwd: REPO_DIR, timeout: 600000 });
+    } catch (e) {
+      const tail = String(e.message).split('\n').slice(-25).join('\n');
+      fs.appendFileSync(path.join(REPO_DIR, 'upgrade.log'), `BUILD FAILED (old panel untouched):\n${tail}\n`);
+      return res.status(500).json({ error: 'build failed - old panel still running, see upgrade log', target: sha });
+    }
+    const child = spawn('sh', ['-c', `GIT_SHA=${sha} ${COMPOSE_BIN} -p minipass up -d >> "${REPO_DIR}/upgrade.log" 2>&1`], { cwd: REPO_DIR, detached: true, stdio: 'ignore' });
     child.unref();
     res.json({ ok: true, pulled: pulled.trim(), target: sha, restarting: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
