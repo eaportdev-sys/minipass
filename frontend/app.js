@@ -134,7 +134,7 @@ async function listFiles(dir) {
   curDir = dir || '';
   if (!dir) { document.getElementById('filePath').value = ''; document.getElementById('fileEdit').value = ''; }
   if (!currentApp) return;
-  const files = await (await fetch(`/api/apps/${id}/files?path=${encodeURIComponent(curDir)}`)).json();
+  const files = await (await fetch(`/api/apps/${currentApp}/files?path=${encodeURIComponent(curDir)}`)).json();
   const up = curDir ? `<button onclick="listFiles('${curDir.split('/').slice(0, -1).join('/')}')">.. up</button><br>` : '';
   document.getElementById('fileList').innerHTML = up + (files.error || files.map(f =>
     f.dir ? `<button onclick="listFiles('${(curDir ? curDir + '/' : '') + f.name}')">${f.name}/</button>`
