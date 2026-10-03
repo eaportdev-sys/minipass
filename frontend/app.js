@@ -108,12 +108,16 @@ async function createApp() {
 }
 async function loadGhRepos() {
   const sel = document.getElementById('ghrepo');
+  const row = document.getElementById('ghConnectRow');
   sel.innerHTML = '<option value="">—</option>';
+  row.style.display = 'none';
   try {
-    const repos = await (await fetch('/api/github/repos')).json();
-    if (repos.error) return;
-    sel.innerHTML = '<option value="">—</option>' + repos.map(r =>
-      `<option value="${r.full_name}">${r.full_name}${r.private ? ' (private)' : ''}</option>`).join('');
+    const r = await fetch('/api/github/repos');
+    if (r.status === 404) return; // panel predates github support - upgrade first
+    const repos = await r.json();
+    if (repos.error) { row.style.display = 'block'; return; }
+    sel.innerHTML = '<option value="">—</option>' + repos.map(x =>
+      `<option value="${x.full_name}">${x.full_name}${x.private ? ' (private)' : ''}</option>`).join('');
   } catch {}
 }
 async function ghStatus() {

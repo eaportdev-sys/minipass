@@ -121,6 +121,7 @@
   </div>
   <label>Git repo url (optional)<input id="repo" placeholder="https://github.com/you/site.git"></label>
   <div class="meta">Or pick a connected GitHub repo (auto-webhook on build): <select id="ghrepo"><option value="">—</option></select></div>
+  <div class="meta" id="ghConnectRow" style="display:none">GitHub isn't connected. <button onclick="ghConnect()">connect github</button> (needs one-time OAuth setup, see Upgrade view)</div>
   <div class="meta">Private repo and no GitHub connect? Use SSH (<code>git@github.com:you/site.git</code>) + the repo deploy key below, or paste HTTPS with a token embedded.</div>
   <label>Domain (optional)<input id="domain" placeholder="app.example.com"></label>
   <div class="modalbtns"><button class="btn primary" onclick="createApp()">Build</button><button onclick="closeCreate()">Cancel</button></div>
