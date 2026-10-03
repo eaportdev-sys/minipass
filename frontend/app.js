@@ -187,22 +187,35 @@ async function uploadPicked(folder) {
   input.value = '';
 }
 const logsEl = document.getElementById('logs');
-let term, ws;
+const termSlots = {};
+function connectTerm(elId, appId, slotKey) {
+  // dispose any previous session first - reconnects replace instead of stacking blank terminals
+  const old = termSlots[slotKey];
+  if (old) {
+    try { old.ws.close(); } catch {}
+    try { old.term.dispose(); } catch {}
+  }
+  const el = document.getElementById(elId);
+  el.innerHTML = '';
+  const t = new Terminal();
+  t.open(el);
+  t.writeln('connecting to ' + appId + '…');
+  const w = new WebSocket(`ws://${location.host}/terminal?app=${appId}`);
+  termSlots[slotKey] = { term: t, ws: w };
+  w.onopen = () => t.writeln('connected - type commands below.\r\n');
+  w.onmessage = e => t.write(e.data);
+  w.onerror = () => t.writeln('\r\nconnection error - is the app container running?');
+  w.onclose = () => t.writeln('\r\nsession closed. Press connect to reopen.');
+  t.onData = d => { try { w.send(d); } catch {} };
+}
 function openTerm() {
   if (!currentApp) return;
-  const id = currentApp;
-  term = new Terminal(); term.open(document.getElementById('term')); term.clear();
-  ws = new WebSocket(`ws://${location.host}/terminal?app=${id}`);
-  ws.onmessage = e => term.write(e.data);
-  term.onData = d => ws.send(d);
+  connectTerm('term', currentApp, 'site');
 }
 function openTermGlobal() {
   const id = document.getElementById('termApp').value;
   if (!id) return;
-  const t = new Terminal(); t.open(document.getElementById('termGlobal'));
-  const w = new WebSocket(`ws://${location.host}/terminal?app=${id}`);
-  w.onmessage = e => t.write(e.data);
-  t.onData = d => w.send(d);
+  connectTerm('termGlobal', id, 'global');
 }
 refresh();
 version();
