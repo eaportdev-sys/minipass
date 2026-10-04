@@ -762,14 +762,19 @@ async function loadServices() {
     const r = await (await fetch(`/api/apps/${currentApp}/services`)).json();
     const list = r.services || [];
     const dirty = !!r.dirty;
-    document.getElementById('svcList').innerHTML = list.map(s =>
-      `<div class="meta" id="svc-${s.name}"><b>${s.name}</b> [${s.type}] ${s.subdir ? `/${s.subdir}` : '(root)'} ` +
+    const homePath = r.homePath || '';
+    document.getElementById('svcList').innerHTML = list.map(s => {
+      const url = s.hostPort ? `http://${location.hostname}:${s.hostPort}${s.name === 'app' ? homePath : ''}` : null;
+      const label = s.hostPort ? `${location.hostname}:${s.hostPort}${s.name === 'app' ? homePath : ''}` : '';
+      return `<div class="meta" id="svc-${s.name}"><b>${s.name}</b> [${s.type}] ${s.subdir ? `/${s.subdir}` : '(root)'} ` +
       `${s.hostPort ? `:${s.hostPort}→${s.port}` : 'no port'} ` +
-      `${s.enabled === false ? '<span class="badge">off</span>' : '<span class="badge">on</span>'} ` +
+      `${s.enabled === false ? '<span class="badge">off</span>' : '<span class="badge">on</span>'}` +
+      `${url ? `<br>local: <a href="${url}" target="_blank">${label}</a>` : ''}<br>` +
       `<button onclick="deploySvc('${s.name}')" ${dirty ? '' : 'disabled'}>redeploy</button> ` +
       `<button onclick="toggleService('${s.name}', ${s.enabled === false})">${s.enabled === false ? 'start' : 'stop'}</button>` +
       (s.name === 'app' ? '' : ` <button class="btn danger" onclick="removeService('${s.name}')">remove</button>`) +
-      `</div>`).join('') || '<div class="meta">no services</div>';
+      `</div>`;
+    }).join('') || '<div class="meta">no services</div>';
     for (const selId of ['logSvc', 'termSvc']) {
       const sel = document.getElementById(selId);
       const prev = sel.value;

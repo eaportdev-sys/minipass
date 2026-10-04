@@ -805,7 +805,7 @@ function hostPortsInUse() {
 app.get('/api/apps/:id/services', (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta) return res.status(404).json({ error: 'unknown app' });
-  res.json({ services: svc.fullServices(meta, appDir(APPS_DIR, meta.id)), dirty: meta.dirty || null });
+  res.json({ services: svc.fullServices(meta, appDir(APPS_DIR, meta.id)), dirty: meta.dirty || null, homePath: meta.homePath || '' });
 });
 app.post('/api/apps/:id/services', async (req, res) => {
   try {
