@@ -103,7 +103,7 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   fs.mkdirSync(dir, { recursive: true });
 
   // 1. code: clone or copy template starter
-  if (repoUrl) {
+  if (repoUrl && !(resume && fs.existsSync(path.join(dir, 'code', '.git')))) {
     const isSsh = /^(git@|ssh:\/\/)/i.test(repoUrl);
     // token injected in-memory only (stored repo URLs stay clean)
     const { authUrl, authUrlWith } = require('./github');
@@ -136,7 +136,13 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   // 1b. understand the code: validate subfolder, infer container port.
   // Explicit `port` always wins; otherwise the build context's Dockerfile EXPOSE
   // (whatever stack wrote it) beats the type default.
-  let sub = String(subdir || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '');
+  const wantSub = String(subdir || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '');
+  // A requested subfolder that isn't in the code is NEVER silently dropped (that
+  // builds repo root instead and serves the wrong app with zero warning).
+  if (wantSub && repoUrl && !fs.existsSync(path.join(dir, 'code', wantSub))) {
+    throw new Error(`subfolder '${wantSub}' not found in the cloned repo - push it first?`);
+  }
+  let sub = wantSub;
   if (sub && !fs.existsSync(path.join(dir, 'code', sub))) sub = '';
   let appPort = port || TYPE_PORT[type] || 3000;
   if (!port) appPort = inferPort(sub ? path.join(dir, 'code', sub) : path.join(dir, 'code'), appPort);
