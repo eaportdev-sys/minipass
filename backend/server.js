@@ -1181,12 +1181,13 @@ function scanEnvNeeds(dir) {
 // Sensible self-generated defaults: values the panel can compute without asking.
 // Only added when missing, never overwrite, editable/deletable like any custom key.
 function suggestedDefaults(meta) {
-  const host = meta.hostPort || 8000;
+  // Only universal keys here. Origin names vary per stack
+  // (CORS_ORIGINS, ALLOWED_ORIGINS, FRONTEND_URL…) so doctor flags those
+  // for manual fill instead of guessing wrong.
   return {
     NODE_ENV: 'production',
     HOST: '0.0.0.0',
-    TRUST_PROXY: '1',
-    CORS_ORIGIN: `http://localhost:${host}`
+    TRUST_PROXY: '1'
   };
 }
 // Environment editor: custom keys editable, managed keys (ports, generated creds)
