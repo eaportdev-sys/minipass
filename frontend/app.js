@@ -4,7 +4,7 @@ async function refresh() {
   document.getElementById('apps').innerHTML = apps.map(a =>
     `<div class="card appcard"><h3>${a.id}</h3>
     <div class="badges"><span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}</div>
-    <div class="meta">local: ${a.hostPort ? `<a href="http://${location.hostname}:${a.hostPort}" target="_blank">http://${location.hostname}:${a.hostPort}</a>` : 'recreate app to get localhost port'}</div>
+    <div class="meta">local: ${appUrl(a) ? `<a href="${appUrl(a)}" target="_blank">${appUrl(a).replace(/^http:\/\//, '')}</a>` : 'recreate app to get localhost port'}</div>
     <div class="actions"><button class="btn primary" onclick="openSite('${a.id}')">open</button><button onclick="deploy('${a.id}')">redeploy</button><button onclick="stopApp('${a.id}')">stop</button><button onclick="startApp('${a.id}')">start</button><button class="btn danger" onclick="rmApp('${a.id}')">delete</button></div></div>`).join('') || '<div class="card">No websites yet - hit + Create.</div>';
   // keep detail header + global terminal picker in sync
   if (currentApp && !apps.some(a => a.id === currentApp)) backToSites();
@@ -24,10 +24,21 @@ function openSite(id) {
   document.getElementById('fileOut').textContent = '';
   refresh().then(() => { showSiteTab('files'); loadDeployStatus(); });
 }
+async function appUrl(a) {
+  if (!a.hostPort) return null;
+  return `http://${location.hostname}:${a.hostPort}${a.homePath || ''}`;
+}
 async function deployCurrent() {
   if (!currentApp) return;
   await deploy(currentApp);
   loadDeployStatus();
+}
+async function saveHome() {
+  if (!currentApp) return;
+  const p = document.getElementById('homePath').value;
+  const r = await (await fetch(`/api/apps/${currentApp}/home`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) })).json();
+  toast(r.ok ? 'open path saved' : (r.error || 'failed'), !!r.ok);
+  refresh();
 }
 async function loadDeployStatus() {
   if (!currentApp) return;
@@ -43,6 +54,8 @@ async function loadDeployStatus() {
       : 'never deployed by the panel';
     list.innerHTML = (s.containers || []).map(c =>
       `<div class="meta">${c.service} — <b>${c.state || '?'}</b> ${c.status || ''}</div>`).join('') || '<div class="meta">no containers</div>';
+    const hp = document.getElementById('homePath');
+    if (hp && s.app) hp.value = s.app.homePath || '';
   } catch { info.textContent = 'unreachable'; }
 }
 function backToSites() { currentApp = null; showView('websites'); refresh(); }
@@ -52,7 +65,7 @@ function fillSiteHeader(a) {
   document.getElementById('siteBadges').innerHTML =
     `<span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}${a.hostPort ? `<span class="badge">:${a.hostPort}</span>` : ''}${a.github ? `<span class="badge">git: ${a.github.login ? a.github.login + '/' : ''}${a.github.repo}</span>` : ''}`;
   document.getElementById('siteMeta').innerHTML =
-    `${a.hostPort ? `local: <a href="http://${location.hostname}:${a.hostPort}" target="_blank">http://${location.hostname}:${a.hostPort}</a><br>` : ''}
+    `${appUrl(a) ? `local: <a href="${appUrl(a)}" target="_blank">${appUrl(a).replace(/^http:\/\//, '')}</a><br>` : ''}
     webhook: <code>POST /webhook/${a.id}?token=${a.token}</code>`;
   document.getElementById('siteRedeploy').onclick = () => deploy(a.id);
   document.getElementById('siteStop').onclick = () => stopApp(a.id);

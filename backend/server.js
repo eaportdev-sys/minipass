@@ -570,6 +570,18 @@ app.get('/api/apps/:id/logs', async (req, res) => {
   } catch (e) { res.status(500).send(e.message); }
 });
 
+app.post('/api/apps/:id/home', (req, res) => {
+  try {
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    let p = String((req.body && req.body.path) || '').trim();
+    if (p && !p.startsWith('/')) p = '/' + p;
+    meta.homePath = p || '';
+    save(db_);
+    res.json({ ok: true, homePath: meta.homePath });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.post('/api/apps/:id/stop', async (req, res) => {
   try { await sh(`${COMPOSE_BIN} stop`, appDir(APPS_DIR, req.params.id)); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
