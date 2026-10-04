@@ -430,6 +430,19 @@ async function deploy(id, opts = {}) {
     await recordDeploy(id, { sha, at: stamp(), status: 'error', error: ('build failed - running containers untouched: ' + (tail || e.message)).trim().slice(-500) });
     throw new Error('build failed - running containers untouched: ' + (tail || e.message).trim().split('\n').slice(-3).join(' '));
   }
+  // pre-swap migrations: one-off container from the fresh image, DBs already up.
+  // Fail = abort before anything is swapped; running containers untouched.
+  const migrateCmd = String((meta && meta.migrateCmd) || '').trim();
+  if (migrateCmd) {
+    try {
+      await sh(`${COMPOSE_BIN} run --rm app ${migrateCmd} >> "${buildLog}" 2>&1`, dir);
+    } catch (e) {
+      let tail = '';
+      try { tail = fs.readFileSync(buildLog, 'utf8').split('\n').slice(-25).join('\n'); } catch {}
+      await recordDeploy(id, { sha, at: stamp(), status: 'error', error: ('migration failed - running containers untouched: ' + (tail || e.message)).trim().slice(-500) });
+      throw new Error('migration failed - running containers untouched: ' + (tail || e.message).trim().split('\n').slice(-3).join(' '));
+    }
+  }
   try {
     await sh(`${COMPOSE_BIN} up -d --remove-orphans${scopeSuffix} >> "${buildLog}" 2>&1`, dir);
   } catch (e) {
@@ -1118,6 +1131,20 @@ app.post('/api/apps/:id/home', (req, res) => {
     meta.homePath = p || '';
     save(db_);
     res.json({ ok: true, homePath: meta.homePath });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Pre-swap migrate command (runs in a one-off container after build, before swap).
+// Charset-validated: no shell metachars ever reach sh. Empty clears.
+app.post('/api/apps/:id/migrate', (req, res) => {
+  try {
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const c = String((req.body && req.body.command) || '').trim();
+    if (c && !/^[A-Za-z0-9_][A-Za-z0-9_ .:/-]{0,199}$/.test(c)) return res.status(400).json({ error: 'bad command (letters/numbers/space _ . : / - only)' });
+    meta.migrateCmd = c;
+    save(db_);
+    res.json({ ok: true, migrateCmd: meta.migrateCmd });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/stop', async (req, res) => {

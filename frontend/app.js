@@ -56,6 +56,13 @@ async function saveHome() {
   toast(r.ok ? 'open path saved' : (r.error || 'failed'), !!r.ok);
   refresh(); loadDeployStatus(); loadServices();
 }
+async function saveMigrate() {
+  if (!currentApp) return;
+  const c = document.getElementById('migrateCmd').value;
+  const r = await (await fetch(`/api/apps/${currentApp}/migrate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: c }) })).json();
+  toast(r.ok ? 'migrate command saved' : (r.error || 'failed'), !!r.ok);
+  loadDeployStatus();
+}
 async function loadDeployStatus() {
   if (!currentApp) return;
   const info = document.getElementById('deployInfo');
@@ -72,6 +79,8 @@ async function loadDeployStatus() {
       `<div class="meta">${c.service} — <b>${c.state || '?'}</b> ${c.status || ''}</div>`).join('') || '<div class="meta">no containers</div>';
     const hp = document.getElementById('homePath');
     if (hp && s.app) hp.value = s.app.homePath || '';
+    const mc = document.getElementById('migrateCmd');
+    if (mc && s.app) mc.value = s.app.migrateCmd || '';
   } catch { info.textContent = 'unreachable'; }
 }
 function backToSites() { currentApp = null; showView('websites'); refresh(); }
