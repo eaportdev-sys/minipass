@@ -49,6 +49,11 @@
           <button onclick="clearSiteToken()">clear</button></div>
       </div>
       <div class="card">
+        <b>deployment</b> <span class="meta" id="deployInfo">…</span>
+        <div id="containerList"></div>
+        <div class="actions"><button onclick="deployCurrent()">redeploy</button><button onclick="loadDeployStatus()">refresh</button></div>
+      </div>
+      <div class="card">
         <b>databases</b> <span class="meta" id="dbList"></span>
         <div class="meta">Add one later — existing data and passwords untouched:
           <select id="dbAdd">

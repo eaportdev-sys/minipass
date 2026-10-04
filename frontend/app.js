@@ -22,7 +22,28 @@ function openSite(id) {
   document.getElementById('filePath').value = '';
   document.getElementById('fileEdit').value = '';
   document.getElementById('fileOut').textContent = '';
-  refresh().then(() => showSiteTab('files'));
+  refresh().then(() => { showSiteTab('files'); loadDeployStatus(); });
+}
+async function deployCurrent() {
+  if (!currentApp) return;
+  await deploy(currentApp);
+  loadDeployStatus();
+}
+async function loadDeployStatus() {
+  if (!currentApp) return;
+  const info = document.getElementById('deployInfo');
+  const list = document.getElementById('containerList');
+  info.textContent = 'loading…';
+  try {
+    const s = await (await fetch(`/api/apps/${currentApp}/status`)).json();
+    if (s.error) { info.textContent = s.error; list.innerHTML = ''; return; }
+    const d = s.lastDeploy;
+    info.textContent = d
+      ? `${d.status === 'ok' ? 'live' : 'FAILED'} @ ${d.sha || '?'} · ${d.at || ''}${d.error ? ' — ' + d.error.split('\n').slice(-2).join(' ') : ''}`
+      : 'never deployed by the panel';
+    list.innerHTML = (s.containers || []).map(c =>
+      `<div class="meta">${c.service} — <b>${c.state || '?'}</b> ${c.status || ''}</div>`).join('') || '<div class="meta">no containers</div>';
+  } catch { info.textContent = 'unreachable'; }
 }
 function backToSites() { currentApp = null; showView('websites'); refresh(); }
 function fillSiteHeader(a) {
@@ -356,6 +377,7 @@ async function stopApp(id) {
   try {
     const r = await (await fetch('/api/apps/' + id + '/stop', { method: 'POST' })).json();
     toast(r.ok ? id + ' stopped' : ('stop failed: ' + (r.error || 'unknown')), !!r.ok);
+    if (id === currentApp) setTimeout(loadDeployStatus, 2000);
   } catch (e) { toast('stop failed: ' + e.message, false); }
 }
 async function startApp(id) {
@@ -363,6 +385,7 @@ async function startApp(id) {
   try {
     const r = await (await fetch('/api/apps/' + id + '/start', { method: 'POST' })).json();
     toast(r.ok ? id + ' started' : ('start failed: ' + (r.error || 'unknown')), !!r.ok);
+    if (id === currentApp) setTimeout(loadDeployStatus, 2000);
   } catch (e) { toast('start failed: ' + e.message, false); }
 }
 async function rmApp(id) {

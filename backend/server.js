@@ -203,6 +203,21 @@ app.post('/api/apps', async (req, res) => {
 
 const redactUrl = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
 const deployLocks = new Set();
+async function currentSha(dir) {
+  try {
+    const code = path.join(dir, 'code');
+    // require code's OWN .git - otherwise rev-parse walks up into the panel repo
+    if (!fs.existsSync(path.join(code, '.git'))) return null;
+    return execSync('git rev-parse --short HEAD', { cwd: code }).toString().trim();
+  } catch { return null; }
+}
+async function recordDeploy(id, rec) {
+  try {
+    const db2 = load();
+    const m = db2.apps.find(a => a.id === id);
+    if (m) { m.lastDeploy = rec; save(db2); }
+  } catch {}
+}
 async function deploy(id) {
   // one build per app at a time: overlapping `up --build` runs fight over
   // container names and lose ("is already in use")
@@ -240,13 +255,17 @@ async function deploy(id) {
   // every build streams to deploy.log (host-persisted, per app) so the UI can show
   // the builder output; failures return the tail instead of a bare exit code
   const buildLog = path.join(dir, 'deploy.log');
+  const sha = await currentSha(dir);
+  const stamp = () => new Date().toISOString();
   try {
     await sh(`${COMPOSE_BIN} up --build -d > "${buildLog}" 2>&1`, dir);
   } catch (e) {
     let tail = '';
     try { tail = fs.readFileSync(buildLog, 'utf8').split('\n').slice(-25).join('\n'); } catch {}
+    await recordDeploy(id, { sha, at: stamp(), status: 'error', error: (tail || e.message).trim().slice(-500) });
     throw new Error((tail || e.message).trim());
   }
+  await recordDeploy(id, { sha, at: stamp(), status: 'ok' });
   return true;
   } finally {
     deployLocks.delete(id);
@@ -258,6 +277,27 @@ app.get('/api/apps/:id/build-log', (req, res) => {
     const log = fs.readFileSync(path.join(appDir(APPS_DIR, req.params.id), 'deploy.log'), 'utf8');
     res.type('text/plain').send(log.split('\n').slice(-80).join('\n') || '(empty build log)');
   } catch { res.type('text/plain').send('(no builds recorded yet)'); }
+});
+app.get('/api/apps/:id/status', async (req, res) => {
+  const meta = load().apps.find(a => a.id === req.params.id);
+  if (!meta) return res.status(404).json({ error: 'unknown app' });
+  let containers = [];
+  try {
+    const out = await sh(`${COMPOSE_BIN} ps --format json`, appDir(APPS_DIR, meta.id));
+    let arr = [];
+    try {
+      const parsed = JSON.parse(out.trim() || '[]');
+      arr = Array.isArray(parsed) ? parsed : [parsed];
+    } catch {
+      arr = out.trim().split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    }
+    containers = arr.map(c => ({
+      service: c.Service || c.service || c.Name || c.name,
+      state: c.State || c.state,
+      status: c.Status || c.status
+    }));
+  } catch {}
+  res.json({ app: pubApp(meta), lastDeploy: meta.lastDeploy || null, containers });
 });
 
 app.post('/api/apps/:id/deploy', async (req, res) => {
