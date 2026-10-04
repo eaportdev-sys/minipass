@@ -212,7 +212,7 @@ function nginxConf(proxy) {
   const api = proxy
     ? `  location /api/ {\n    rewrite ^/api/(.*) /$1 break;\n    proxy_pass http://${proxy.host}:${proxy.port};\n    proxy_set_header Host $host;\n    proxy_set_header X-Real-IP $remote_addr;\n  }\n`
     : '';
-  return `server {\n  listen 80;\n  root /usr/share/nginx/html;\n  index index.html;\n${api}  location / {\n    try_files $uri $uri/ /index.html;\n  }\n}\n`;
+  return `# minipass-managed (rewritten on link/unlink/redeploy - keep custom confs unmarked)\nserver {\n  listen 80;\n  root /usr/share/nginx/html;\n  index index.html;\n${api}  location / {\n    try_files $uri $uri/ /index.html;\n  }\n}\n`;
 }
 
 module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbService, DB_IMAGES, inferPort, nginxConf };

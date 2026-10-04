@@ -287,6 +287,31 @@ async function deploy(id) {
   // every build streams to deploy.log (host-persisted, per app) so the UI can show
   // the builder output; failures return the tail instead of a bare exit code
   const buildLog = path.join(dir, 'deploy.log');
+  // heal: static/react must ship our nginx.conf (SPA fallback, proxy when linked).
+  // Only files WE seeded (marker headers) are ever refreshed - repo-owned files are sacred.
+  if (meta && (meta.type === 'static' || meta.type === 'react')) {
+    try {
+      const ctx = path.join(codeDir, meta.subdir || '');
+      const df = path.join(ctx, 'Dockerfile');
+      if (fs.existsSync(df)) {
+        const first = (fs.readFileSync(df, 'utf8').split('\n')[0] || '');
+        // our seeded templates only (both marker generations) - repo-owned files untouched
+        if (first.includes('minipass template') || first.includes('build stage + serve')) {
+          const tplDf = path.join(TEMPLATES_DIR, meta.type, 'Dockerfile');
+          if (fs.existsSync(tplDf)) fs.copyFileSync(tplDf, df);
+        }
+      }
+      const nc = path.join(ctx, 'nginx.conf');
+      const wantProxy = !!(meta.apiBackend && meta.apiBackend.app);
+      let cur = null;
+      try { cur = fs.readFileSync(nc, 'utf8'); } catch {}
+      if (cur === null) {
+        fs.writeFileSync(nc, nginxConf(wantProxy ? { host: 'host.docker.internal', port: meta.apiBackend.port } : null));
+      } else if (cur.includes('# minipass-managed') && (cur.includes('location /api/') !== wantProxy)) {
+        fs.writeFileSync(nc, nginxConf(wantProxy ? { host: 'host.docker.internal', port: meta.apiBackend.port } : null));
+      }
+    } catch {}
+  }
   const sha = await currentSha(dir);
   const stamp = () => new Date().toISOString();
   try {
@@ -306,9 +331,12 @@ async function deploy(id) {
 }
 
 app.get('/api/apps/:id/build-log', (req, res) => {
+  const tail = Math.max(10, Math.min(500, parseInt(req.query.tail, 10) || 80));
   try {
     const log = fs.readFileSync(path.join(appDir(APPS_DIR, req.params.id), 'deploy.log'), 'utf8');
-    res.type('text/plain').send(log.split('\n').slice(-80).join('\n') || '(empty build log)');
+    const lines = log.split('\n');
+    const slice = lines.slice(-tail).join('\n') || '(empty build log)';
+    res.type('text/plain').send(lines.length > tail ? `… showing last ${tail} of ${lines.length} lines (add ?tail=500 for all)\n\n${slice}` : slice);
   } catch { res.type('text/plain').send('(no builds recorded yet)'); }
 });
 app.get('/api/apps/:id/status', async (req, res) => {
