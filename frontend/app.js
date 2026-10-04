@@ -362,16 +362,21 @@ async function detectType() {
       toast((r.detected ? r.detected + ' has no template yet. ' : 'could not detect type. ') + (r.reason || r.error || ''), false);
     }
     const hint = document.getElementById('subdirHint');
-    if (r.frontends && r.frontends.length) {
+    const fb = (r.frontends || []).map(f => `<button onclick="setSubdir('${f}', 'react')">${f} (web)</button>`).join(' ');
+    const bb = (r.backends || []).map(b => `<button onclick="setSubdir('${b}', 'node')">${b} (api)</button>`).join(' ');
+    if (fb || bb) {
       hint.style.display = 'block';
-      hint.innerHTML = 'frontend folder(s) in this repo: ' + r.frontends.map(f =>
-        `<button onclick="setSubdir('${f}')">${f}</button>`).join(' ') + ' — build one as its own site';
+      hint.innerHTML = 'repo folders: ' + fb + ' ' + bb;
     } else hint.style.display = 'none';
   } catch {}
 }
-function setSubdir(f) {
+function setSubdir(f, type) {
   document.getElementById('subdir').value = f;
-  toast('building subfolder ' + f + ' — set type to react/static for it');
+  if (type) {
+    const radio = document.querySelector(`input[name=apptype][value=${type}]`);
+    if (radio) radio.checked = true;
+  }
+  toast('building subfolder ' + f + (type ? ' as ' + type : ''));
 }
 async function ghStatus() {
   try {
@@ -738,15 +743,16 @@ async function loadServices() {
     }
     try {
       const sug = await (await fetch(`/api/apps/${currentApp}/suggest`)).json();
-      document.getElementById('svcSuggest').innerHTML = (sug.suggestions || []).length
-        ? 'detected in repo: ' + sug.suggestions.map(f => `<button onclick="fillService('${f}')">${f}</button>`).join(' ')
-        : '';
+      const fronts = (sug.suggestions || []).map(f => `<button onclick="fillService('${f}', 'react')">${f} (web)</button>`).join(' ');
+      const backs = (sug.backends || []).map(b => `<button onclick="fillService('${b}', 'node')">${b} (api)</button>`).join(' ');
+      document.getElementById('svcSuggest').innerHTML = (fronts || backs) ? ('detected in repo: ' + fronts + ' ' + backs) : '';
     } catch {}
   } catch {}
 }
-function fillService(sub) {
+function fillService(sub, type) {
   document.getElementById('svcSub').value = sub;
   document.getElementById('svcName').value = sub.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'web';
+  if (type) document.getElementById('svcType').value = type;
 }
 async function addService() {
   if (!currentApp) return;

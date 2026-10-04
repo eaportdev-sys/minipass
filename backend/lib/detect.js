@@ -80,4 +80,23 @@ function matchWorkspaces(tree, patterns) {
   return [...new Set(found)];
 }
 
-module.exports = { decideType, expandWorkspaces, matchWorkspaces };
+// Backend sub-app folders: package.json with a start script or main entry, not a
+// frontend, depth <= 2. pkgs maps dir -> parsed package.json (null when unreadable).
+// Pure - unit-test with fixtures.
+function findBackends(tree, pkgs) {
+  const found = [];
+  const dirs = new Set(
+    tree.filter(p => /(^|\/)package\.json$/.test(p))
+      .map(p => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''))
+      .filter(d => d && d.split('/').length <= 2)
+  );
+  for (const d of dirs) {
+    const pkg = pkgs[d];
+    if (!pkg || typeof pkg !== 'object') continue;
+    const scripts = pkg.scripts || {};
+    if (scripts.start || pkg.main) found.push(d);
+  }
+  return [...new Set(found)];
+}
+
+module.exports = { decideType, expandWorkspaces, matchWorkspaces, findBackends };

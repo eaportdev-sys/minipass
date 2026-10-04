@@ -560,7 +560,7 @@ async function detectRepo(repo, { login, token } = {}) {
       if (blob && blob.content) pkg = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8'));
     } catch {}
   }
-  const { decideType, expandWorkspaces, matchWorkspaces } = require('./lib/detect');
+  const { decideType, expandWorkspaces, matchWorkspaces, findBackends } = require('./lib/detect');
   const out = decideType(tree, pkg);
   // monorepo sub-apps, tool-agnostic: vite heuristic + workspace manifests
   // (npm workspaces, pnpm-workspace.yaml, lerna.json, turbo/nx conventions)
@@ -598,6 +598,21 @@ async function detectRepo(repo, { login, token } = {}) {
   for (const d of matchWorkspaces(tree, patterns)) {
     if (!out.frontends.includes(d)) out.frontends.push(d);
   }
+  // backend homes: subdirs with runnable package.json that aren't frontends
+  out.backends = [];
+  try {
+    const pkgDirs = [...new Set(tree.filter(p => /(^|\/)package\.json$/.test(p))
+      .map(p => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''))
+      .filter(d => d && d.split('/').length <= 2 && !out.frontends.includes(d)))].slice(0, 8);
+    const pkgs = {};
+    for (const d of pkgDirs) {
+      try {
+        const blob = await get(`/repos/${m[1]}/${m[2]}/contents/${d}/package.json`);
+        if (blob && blob.content) pkgs[d] = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8'));
+      } catch { pkgs[d] = null; }
+    }
+    out.backends = findBackends(tree, pkgs);
+  } catch {}
   return out;
 }
 app.get('/api/github/detect', async (req, res) => {
@@ -769,7 +784,10 @@ app.get('/api/apps/:id/suggest', async (req, res) => {
     if (!m) return res.json({ suggestions: [] });
     const r = await detectRepo(`${m[1]}/${m[2]}`, { login: meta.github && meta.github.login, token: meta.github && meta.github.token });
     const have = new Set(svc.fullServices(meta, appDir(APPS_DIR, meta.id)).map(s => s.subdir || ''));
-    res.json({ suggestions: (r.frontends || []).filter(f => !have.has(f)) });
+    res.json({
+      suggestions: (r.frontends || []).filter(f => !have.has(f)),
+      backends: (r.backends || []).filter(b => !have.has(b))
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/git-account', (req, res) => {
