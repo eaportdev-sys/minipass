@@ -50,4 +50,34 @@ function decideType(paths, pkg) {
   return { type: null, detected: null, dbs, reason: 'no recognizable markers (package.json, composer.json, index.php, index.html) - pick manually' };
 }
 
-module.exports = { decideType };
+// Monorepo sub-apps from workspace manifests (npm/pnpm/lerna) or tooling
+// conventions (turbo/nx), resolved against dirs that actually hold a package.json.
+// Pure - unit-test with fixtures.
+function expandWorkspaces(tree, rootPkg) {
+  const patterns = [];
+  if (rootPkg && rootPkg.workspaces) {
+    const w = Array.isArray(rootPkg.workspaces) ? rootPkg.workspaces : rootPkg.workspaces.packages;
+    if (Array.isArray(w)) patterns.push(...w);
+  }
+  return patterns;
+}
+
+function matchWorkspaces(tree, patterns) {
+  const found = [];
+  const dirsWithPkg = new Set(tree.filter(p => /(^|\/)package\.json$/.test(p)).map(p => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '')));
+  for (const pat of patterns) {
+    if (typeof pat !== 'string' || !pat) continue;
+    if (pat.includes('*')) {
+      const prefix = pat.split('*')[0];
+      for (const d of dirsWithPkg) {
+        if (d && d.startsWith(prefix) && !d.slice(prefix.length).includes('/')) found.push(d);
+      }
+    } else {
+      const base = pat.replace(/\/$/, '');
+      if (base && dirsWithPkg.has(base)) found.push(base);
+    }
+  }
+  return [...new Set(found)];
+}
+
+module.exports = { decideType, expandWorkspaces, matchWorkspaces };

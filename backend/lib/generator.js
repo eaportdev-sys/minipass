@@ -20,6 +20,19 @@ function normDbs(db) {
   return [...new Set(arr.map(s => String(s).trim().toLowerCase()).filter(s => VALID_DBS.includes(s)))];
 }
 
+// Read the build context's Dockerfile for EXPOSE - any repo, any stack.
+// First EXPOSE wins; falls back when absent or unreadable.
+function inferPort(codeDir, fallback) {
+  try {
+    const m = fs.readFileSync(path.join(codeDir, 'Dockerfile'), 'utf8').match(/^\s*EXPOSE\s+(\d+)/im);
+    if (m) {
+      const p = parseInt(m[1], 10);
+      if (p > 0 && p < 65536) return p;
+    }
+  } catch {}
+  return fallback;
+}
+
 function pw(n = 24) {
   return crypto.randomBytes(n).toString('base64url').slice(0, n);
 }
@@ -120,8 +133,15 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
     }
   }
 
+  // 1b. understand the code: validate subfolder, infer container port.
+  // Explicit `port` always wins; otherwise the build context's Dockerfile EXPOSE
+  // (whatever stack wrote it) beats the type default.
+  let sub = String(subdir || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '');
+  if (sub && !fs.existsSync(path.join(dir, 'code', sub))) sub = '';
+  let appPort = port || TYPE_PORT[type] || 3000;
+  if (!port) appPort = inferPort(sub ? path.join(dir, 'code', sub) : path.join(dir, 'code'), appPort);
+
   // 2. .env auto-generated
-  const appPort = port || TYPE_PORT[type] || 3000;
   const host = hostPort || 8000;
   const dbs = normDbs(db);
   const safeName = name.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'app';
@@ -154,8 +174,6 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   // monorepo: build a subfolder, seeding the type template Dockerfile when the folder lacks one.
   // Only applies to cloned repos - template starters have no subfolders, ignore it there.
   let buildYaml = '    build: ./code\n';
-  let sub = String(subdir || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '');
-  if (sub && !fs.existsSync(path.join(dir, 'code', sub))) sub = '';
   if (sub) {
     const tpl = path.join(templatesDir, type);
     for (const f of ['Dockerfile', 'nginx.conf']) {
@@ -174,4 +192,4 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   return { dir, appPort, hostPort: host, subdir: sub };
 }
 
-module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbService, DB_IMAGES };
+module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbService, DB_IMAGES, inferPort };

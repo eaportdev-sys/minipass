@@ -503,16 +503,43 @@ async function detectRepo(repo, { login, token } = {}) {
       if (blob && blob.content) pkg = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8'));
     } catch {}
   }
-  const { decideType } = require('./lib/detect');
+  const { decideType, expandWorkspaces, matchWorkspaces } = require('./lib/detect');
   const out = decideType(tree, pkg);
-  // monorepo frontend folders (depth <= 2) with their own vite setup
+  // monorepo sub-apps, tool-agnostic: vite heuristic + workspace manifests
+  // (npm workspaces, pnpm-workspace.yaml, lerna.json, turbo/nx conventions)
   out.frontends = [];
+  const readText = async (p) => {
+    try {
+      const b = await get(`/repos/${m[1]}/${m[2]}/contents/${p}`);
+      return b && b.content ? Buffer.from(b.content, 'base64').toString('utf8') : null;
+    } catch { return null; }
+  };
   for (const p of tree) {
     const fm = p.match(/^(.+)\/package\.json$/);
     if (fm && fm[1].split('/').length <= 2 &&
         (tree.includes(`${fm[1]}/vite.config.js`) || tree.includes(`${fm[1]}/vite.config.ts`) || tree.includes(`${fm[1]}/vite.config.mjs`))) {
       if (!out.frontends.includes(fm[1])) out.frontends.push(fm[1]);
     }
+  }
+  const patterns = expandWorkspaces(tree, pkgPath === 'package.json' ? pkg : null);
+  if (tree.includes('pnpm-workspace.yaml')) {
+    const y = await readText('pnpm-workspace.yaml');
+    if (y) for (const line of y.split('\n')) {
+      const mm = line.match(/^\s*-\s*['"]?([^'"]+?)['"]?\s*$/);
+      if (mm && !mm[1].startsWith('!')) patterns.push(mm[1]);
+    }
+  }
+  if (tree.includes('lerna.json')) {
+    try {
+      const l = JSON.parse(await readText('lerna.json'));
+      if (l && Array.isArray(l.packages)) patterns.push(...l.packages);
+    } catch {}
+  }
+  if (!patterns.length && tree.some(p => /^(turbo\.json|nx\.json)$/.test(p))) {
+    patterns.push('apps/*', 'packages/*');
+  }
+  for (const d of matchWorkspaces(tree, patterns)) {
+    if (!out.frontends.includes(d)) out.frontends.push(d);
   }
   return out;
 }
