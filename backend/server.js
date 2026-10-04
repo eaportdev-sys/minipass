@@ -8,6 +8,7 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const { createApp, appDir, normDbs, dbService, nginxConf } = require('./lib/generator');
 const { gitEnv, pubKey, appPubKey, appGitEnv } = require('./lib/ssh');
+const svc = require('./lib/services');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -290,7 +291,8 @@ async function deploy(id) {
     }
   }
   // every build streams to deploy.log (host-persisted, per app) so the UI can show
-  // the builder output; failures return the tail instead of a bare exit code
+  // the builder output; failures return the tail instead of a bare exit code.
+  // --remove-orphans: disabled/removed services actually disappear.
   const buildLog = path.join(dir, 'deploy.log');
   // heal: static/react must ship our nginx.conf (SPA fallback, proxy when linked).
   // Only files WE seeded (marker headers) are ever refreshed - repo-owned files are sacred.
@@ -336,7 +338,7 @@ async function deploy(id) {
   const sha = await currentSha(dir);
   const stamp = () => new Date().toISOString();
   try {
-    await sh(`${COMPOSE_BIN} up --build -d > "${buildLog}" 2>&1`, dir);
+    await sh(`${COMPOSE_BIN} up --build -d --remove-orphans > "${buildLog}" 2>&1`, dir);
   } catch (e) {
     let tail = '';
     try { tail = fs.readFileSync(buildLog, 'utf8').split('\n').slice(-25).join('\n'); } catch {}
@@ -670,6 +672,100 @@ app.post('/api/apps/:id/git-init', (req, res) => {
     res.json({ ok: true, remote: `ssh://root@<server>:${path.join(dir, 'repo.git')}` });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+// Services: one folder runs N of them (api + web + ...). Add/remove/toggle,
+// compose regenerates (enabled only, `up --remove-orphans` cleans the rest).
+function hostPortsInUse() {
+  const used = new Set();
+  try {
+    for (const a of load().apps) {
+      if (a.hostPort) used.add(a.hostPort);
+      for (const s of (a.services || [])) if (s.hostPort) used.add(s.hostPort);
+    }
+  } catch {}
+  return used;
+}
+app.get('/api/apps/:id/services', (req, res) => {
+  const meta = load().apps.find(a => a.id === req.params.id);
+  if (!meta) return res.status(404).json({ error: 'unknown app' });
+  res.json({ services: svc.fullServices(meta, appDir(APPS_DIR, meta.id)) });
+});
+app.post('/api/apps/:id/services', async (req, res) => {
+  try {
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const dir = appDir(APPS_DIR, meta.id);
+    const name = String((req.body && req.body.name) || '').trim().toLowerCase();
+    const type = String((req.body && req.body.type) || '').trim();
+    const subdir = String((req.body && req.body.subdir) || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '');
+    if (!svc.validSvcName(name) || name === 'app') return res.status(400).json({ error: 'bad service name (lowercase letters/numbers/dashes, not "app")' });
+    if (!['static', 'react', 'node', 'php'].includes(type)) return res.status(400).json({ error: 'bad type' });
+    if (!fs.existsSync(path.join(dir, 'code', subdir))) return res.status(400).json({ error: `subfolder '${subdir}' not in repo - push it first? (empty means repo root, already taken here)` });
+    const services = svc.fullServices(meta, dir);
+    if (services.some(s => s.name === name)) return res.status(400).json({ error: 'service name taken' });
+    if (services.some(s => (s.subdir || '') === subdir)) return res.status(400).json({ error: 'that folder already runs as ' + services.find(s => (s.subdir || '') === subdir).name });
+    const { inferPort, TYPE_PORT } = require('./lib/generator');
+    const port = inferPort(path.join(dir, 'code', subdir), TYPE_PORT[type] || 3000);
+    const used = hostPortsInUse();
+    let hostPort = 8000;
+    while (used.has(hostPort) && hostPort < 9000) hostPort++;
+    used.add(hostPort);
+    meta.services = [...services, { name, subdir, type, port, hostPort, enabled: true }];
+    const out = svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
+    meta.services = out.normalized;
+    save(db_);
+    try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, added: name, redeployError: e.message }); }
+    res.json({ ok: true, added: name, redeployed: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/apps/:id/services/:name', async (req, res) => {
+  try {
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const dir = appDir(APPS_DIR, meta.id);
+    if (req.params.name === 'app') return res.status(400).json({ error: 'primary service cannot be removed - delete the app instead' });
+    let services = svc.fullServices(meta, dir);
+    if (services.length <= 1) return res.status(400).json({ error: 'cannot remove the last service' });
+    if (!services.some(s => s.name === req.params.name)) return res.status(404).json({ error: 'unknown service' });
+    meta.services = services.filter(s => s.name !== req.params.name);
+    svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
+    envDeleteKeys(dir, [svc.portEnvName(req.params.name)]);
+    save(db_);
+    try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, removed: true, redeployError: e.message }); }
+    res.json({ ok: true, removed: true, redeployed: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/apps/:id/services/:name/enable', async (req, res) => {
+  try {
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const dir = appDir(APPS_DIR, meta.id);
+    const services = svc.fullServices(meta, dir);
+    const target = services.find(s => s.name === req.params.name);
+    if (!target) return res.status(404).json({ error: 'unknown service' });
+    target.enabled = !(req.body && req.body.enabled === false);
+    meta.services = services;
+    try {
+      svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
+    } catch (e) { return res.status(400).json({ error: e.message }); }
+    save(db_);
+    try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, redeployError: e.message }); }
+    res.json({ ok: true, enabled: target.enabled, redeployed: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/apps/:id/suggest', async (req, res) => {
+  try {
+    const meta = load().apps.find(a => a.id === req.params.id);
+    if (!meta || !meta.repoUrl) return res.status(400).json({ error: 'no repo linked' });
+    const m = String(meta.repoUrl).match(/github\.com[:/]([^/]+)\/([^/]+?)(\.git)?\/?$/i);
+    if (!m) return res.json({ suggestions: [] });
+    const r = await detectRepo(`${m[1]}/${m[2]}`, { login: meta.github && meta.github.login, token: meta.github && meta.github.token });
+    const have = new Set(svc.fullServices(meta, appDir(APPS_DIR, meta.id)).map(s => s.subdir || ''));
+    res.json({ suggestions: (r.frontends || []).filter(f => !have.has(f)) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.post('/api/apps/:id/git-account', (req, res) => {
   try {
     const db_ = load();
@@ -811,7 +907,10 @@ app.post('/api/apps/:id/regenerate', (req, res) => {
 
 app.get('/api/apps/:id/logs', async (req, res) => {
   try {
-    const out = await sh(`${COMPOSE_BIN} logs --tail=${req.query.tail || 100}`, appDir(APPS_DIR, req.params.id));
+    // service names go to the shell - strict charset or no logs
+    const svcName = /^[A-Za-z0-9_-]{1,32}$/.test(req.query.service || '') ? req.query.service : 'app';
+    const tail = Math.max(10, Math.min(500, parseInt(req.query.tail, 10) || 100));
+    const out = await sh(`${COMPOSE_BIN} logs --tail=${tail} ${svcName}`, appDir(APPS_DIR, req.params.id));
     res.type('text/plain').send(out);
   } catch (e) { res.status(500).send(e.message); }
 });
@@ -1214,14 +1313,16 @@ function shutdown() {
 }
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
-// Web terminal: xterm.js -> ws://host/terminal?app=<id> -> docker exec -i
+// Web terminal: xterm.js -> ws://host/terminal?app=<id>&service=<name> -> docker exec -i
 const wss = new WebSocketServer({ server, path: '/terminal' });
 wss.on('connection', (ws, req) => {
-  const id = new URL(req.url, 'http://x').searchParams.get('app');
+  const q = new URL(req.url, 'http://x').searchParams;
+  const id = q.get('app');
   if (!id) return ws.close();
+  const service = /^[A-Za-z0-9_-]{1,32}$/.test(q.get('service') || '') ? q.get('service') : 'app';
   const dir = appDir(APPS_DIR, id);
   let cid = '';
-  try { cid = execSync(`${COMPOSE_BIN} ps -q app`, { cwd: dir }).toString().trim().split('\n')[0]; }
+  try { cid = execSync(`${COMPOSE_BIN} ps -q ${service}`, { cwd: dir }).toString().trim().split('\n')[0]; }
   catch {}
   if (!cid) { ws.send('container not running - deploy first\r\n'); return ws.close(); }
   const p = spawn('docker', ['exec', '-i', cid, '/bin/sh'], { cwd: dir });

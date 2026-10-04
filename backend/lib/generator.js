@@ -252,7 +252,6 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   // 3. docker-compose.yml per app (ports: reachable via localhost + tunnel; expose: inter-container)
   // monorepo: build a subfolder, seeding the type template Dockerfile when the folder lacks one.
   // Only applies to cloned repos - template starters have no subfolders, ignore it there.
-  let buildYaml = '    build: ./code\n';
   if (sub) {
     const tpl = path.join(templatesDir, type);
     for (const f of ['Dockerfile', 'nginx.conf']) {
@@ -264,11 +263,22 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
         }
       } catch {}
     }
-    buildYaml = `    build:\n      context: ./code/${sub}\n      dockerfile: Dockerfile\n`;
   }
-  const compose = `services:\n  app:\n${buildYaml}    restart: unless-stopped\n    env_file: .env\n    ports:\n      - "${host}:${appPort}"\n    expose:\n      - "${appPort}"\n${dbBlock}${volBlock}\n`;
+  const ctx = sub ? `./code/${sub}` : './code';
+  const compose = `services:\n${serviceBlock({ svcName: 'app', ctx, port: appPort, host, portEnv: null })}${dbBlock}${volBlock}\n`;
   fs.writeFileSync(path.join(dir, 'docker-compose.yml'), compose);
   return { dir, appPort, hostPort: host, subdir: sub };
+}
+
+// One app-service block. Primary ('app') renders exactly the legacy shape;
+// secondaries add a PORT override from their own PORT_<NAME> env key.
+function serviceBlock({ svcName, ctx, port, host, portEnv }) {
+  const build = ctx === './code'
+    ? '    build: ./code\n'
+    : `    build:\n      context: ./${ctx}\n      dockerfile: Dockerfile\n`;
+  const env = portEnv ? `    environment:\n      PORT: \${${portEnv}}\n` : '';
+  const ports = host ? `    ports:\n      - "${host}:${port}"\n` : '';
+  return `  ${svcName}:\n${build}    restart: unless-stopped\n    env_file: .env\n${env}${ports}    expose:\n      - "${port}"\n`;
 }
 
 // nginx for static/react frontends. With a proxy target it mirrors the vite dev
@@ -280,4 +290,4 @@ function nginxConf(proxy) {
   return `# minipass-managed (rewritten on link/unlink/redeploy - keep custom confs unmarked)\nserver {\n  listen 80;\n  root /usr/share/nginx/html;\n  index index.html;\n${api}  location / {\n    try_files $uri $uri/ /index.html;\n  }\n}\n`;
 }
 
-module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbService, DB_IMAGES, inferPort, nginxConf, ensureDockerfile };
+module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbService, DB_IMAGES, inferPort, nginxConf, ensureDockerfile, serviceBlock };

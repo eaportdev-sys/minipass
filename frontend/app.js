@@ -22,7 +22,7 @@ function openSite(id) {
   document.getElementById('filePath').value = '';
   document.getElementById('fileEdit').value = '';
   document.getElementById('fileOut').textContent = '';
-  refresh().then(() => { showSiteTab('files'); loadDeployStatus(); loadEnv(); });
+  refresh().then(() => { showSiteTab('files'); loadDeployStatus(); loadEnv(); loadServices(); });
 }
 function appUrl(a) {
   if (!a.hostPort) return null;
@@ -534,13 +534,14 @@ async function rmApp(id) {
 }
 async function showLogs() {
   if (!currentApp) { logsEl.textContent = 'open a website first'; return; }
+  const svc = document.getElementById('logSvc').value || 'app';
   logsEl.textContent = 'loading…';
-  logsEl.textContent = await (await fetch('/api/apps/' + currentApp + '/logs')).text();
+  logsEl.textContent = await (await fetch(`/api/apps/${currentApp}/logs?service=${encodeURIComponent(svc)}`)).text();
 }
-async function showBuildLog() {
+async function showBuildLog(full) {
   if (!currentApp) { logsEl.textContent = 'open a website first'; return; }
   logsEl.textContent = 'loading…';
-  logsEl.textContent = await (await fetch('/api/apps/' + currentApp + '/build-log')).text();
+  logsEl.textContent = await (await fetch(`/api/apps/${currentApp}/build-log${full ? '?tail=500' : ''}`)).text();
 }
 async function version() {
   try {
@@ -674,7 +675,7 @@ async function uploadUnified() {
 }
 const logsEl = document.getElementById('logs');
 const termSlots = {};
-function connectTerm(elId, appId, slotKey) {
+function connectTerm(elId, appId, slotKey, svc) {
   // dispose any previous session first - reconnects replace instead of stacking blank terminals
   const old = termSlots[slotKey];
   if (old) {
@@ -685,8 +686,8 @@ function connectTerm(elId, appId, slotKey) {
   el.innerHTML = '';
   const t = new Terminal();
   t.open(el);
-  t.writeln('connecting to ' + appId + '…');
-  const w = new WebSocket(`ws://${location.host}/terminal?app=${appId}`);
+  t.writeln('connecting to ' + appId + (svc && svc !== 'app' ? '/' + svc : '') + '…');
+  const w = new WebSocket(`ws://${location.host}/terminal?app=${appId}&service=${encodeURIComponent(svc || 'app')}`);
   termSlots[slotKey] = { term: t, ws: w };
   w.onopen = () => t.writeln('connected - type commands below.\r\n');
   w.onmessage = e => t.write(e.data);
@@ -694,9 +695,68 @@ function connectTerm(elId, appId, slotKey) {
   w.onclose = () => t.writeln('\r\nsession closed. Press connect to reopen.');
   t.onData = d => { try { w.send(d); } catch {} };
 }
+async function loadServices() {
+  if (!currentApp) return;
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/services`)).json();
+    const list = r.services || [];
+    document.getElementById('svcList').innerHTML = list.map(s =>
+      `<div class="meta"><b>${s.name}</b> [${s.type}] ${s.subdir ? `/${s.subdir}` : '(root)'} ` +
+      `${s.hostPort ? `:${s.hostPort}→${s.port}` : 'no port'} ` +
+      `${s.enabled === false ? '<span class="badge">off</span>' : '<span class="badge">on</span>'} ` +
+      `<button onclick="toggleService('${s.name}', ${s.enabled === false})">${s.enabled === false ? 'start' : 'stop'}</button>` +
+      (s.name === 'app' ? '' : ` <button class="btn danger" onclick="removeService('${s.name}')">remove</button>`) +
+      `</div>`).join('') || '<div class="meta">no services</div>';
+    for (const selId of ['logSvc', 'termSvc']) {
+      const sel = document.getElementById(selId);
+      const prev = sel.value;
+      sel.innerHTML = list.filter(s => s.enabled !== false).map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+      if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+    }
+    try {
+      const sug = await (await fetch(`/api/apps/${currentApp}/suggest`)).json();
+      document.getElementById('svcSuggest').innerHTML = (sug.suggestions || []).length
+        ? 'detected in repo: ' + sug.suggestions.map(f => `<button onclick="fillService('${f}')">${f}</button>`).join(' ')
+        : '';
+    } catch {}
+  } catch {}
+}
+function fillService(sub) {
+  document.getElementById('svcSub').value = sub;
+  document.getElementById('svcName').value = sub.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'web';
+}
+async function addService() {
+  if (!currentApp) return;
+  const body = {
+    name: document.getElementById('svcName').value.trim().toLowerCase(),
+    subdir: document.getElementById('svcSub').value.trim(),
+    type: document.getElementById('svcType').value
+  };
+  const r = await (await fetch(`/api/apps/${currentApp}/services`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+  toast(r.ok ? ('service ' + body.name + ' added') : (r.error || 'failed'), !!r.ok);
+  document.getElementById('svcName').value = '';
+  document.getElementById('svcSub').value = '';
+  refresh();
+  loadServices();
+}
+async function toggleService(name, enable) {
+  const r = await (await fetch(`/api/apps/${currentApp}/services/${name}/enable`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: enable }) })).json();
+  toast(r.ok ? (name + (enable ? ' started' : ' stopped')) : (r.error || 'failed'), !!r.ok);
+  refresh();
+  loadServices();
+}
+async function removeService(name) {
+  const ok = await uiConfirm({ title: 'Remove service ' + name + '?', body: 'Container removed, code and data volumes stay. The folder is untouched.', confirmLabel: 'Remove', danger: true });
+  if (!ok) return;
+  const r = await (await fetch(`/api/apps/${currentApp}/services/${name}`, { method: 'DELETE' })).json();
+  toast(r.ok ? (name + ' removed') : (r.error || 'failed'), !!r.ok);
+  refresh();
+  loadServices();
+}
 function openTerm() {
   if (!currentApp) return;
-  connectTerm('term', currentApp, 'site');
+  const svc = document.getElementById('termSvc').value || 'app';
+  connectTerm('term', currentApp, 'site', svc);
 }
 function openTermGlobal() {
   const id = document.getElementById('termApp').value;

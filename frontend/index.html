@@ -49,6 +49,15 @@
           <button onclick="clearSiteToken()">clear</button></div>
       </div>
       <div class="card">
+        <b>services</b> <span class="meta">one folder, many runners — run both, one, or drop either later</span>
+        <div id="svcList"></div>
+        <div class="meta">add: <input id="svcName" placeholder="name" style="width:100px">
+        <input id="svcSub" placeholder="subfolder (empty = root)" style="width:170px">
+        <select id="svcType"><option value="node">node</option><option value="static">static</option><option value="react">react</option><option value="php">php</option></select>
+        <button onclick="addService()">add + deploy</button></div>
+        <div class="meta" id="svcSuggest"></div>
+      </div>
+      <div class="card">
         <b>deployment</b> <span class="meta" id="deployInfo">…</span>
         <div id="containerList"></div>
         <div class="meta">open path (where Open lands — your API has no <code>/</code> route):
@@ -123,10 +132,10 @@
         </div>
       </div>
       <div id="tab-logs" class="sitetab" style="display:none">
-        <div class="card"><button onclick="showLogs()">runtime logs</button> <button onclick="showBuildLog()">build log</button><pre id="logs"></pre></div>
+        <div class="card"><select id="logSvc"></select> <button onclick="showLogs()">runtime logs</button> <button onclick="showBuildLog()">build log</button> <button onclick="showBuildLog(true)">full</button><pre id="logs"></pre></div>
       </div>
       <div id="tab-terminal" class="sitetab" style="display:none">
-        <div class="card"><button onclick="openTerm()">connect ssh/terminal</button><div id="term"></div></div>
+        <div class="card"><select id="termSvc"></select> <button onclick="openTerm()">connect ssh/terminal</button><div id="term"></div></div>
       </div>
     </section>
     <section id="view-terminal" class="view">
