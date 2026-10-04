@@ -69,6 +69,12 @@
           <button onclick="addDb()">add database</button></div>
         <pre id="dbOut"></pre>
       </div>
+      <div class="card" id="apiCard" style="display:none">
+        <b>api backend</b> <span class="meta" id="apiState"></span>
+        <div class="meta">Same-origin <code>/api/*</code> → backend, like the vite dev proxy. Pick the site serving the API:</div>
+        <div class="meta"><select id="apiTarget"><option value="">— no link —</option></select>
+        <button onclick="saveApiLink()">save</button></div>
+      </div>
       <div class="card">
         <b>auto-deploy webhook</b>
         <div class="meta">GitHub push (the trigger) → panel git pull + rebuild (the action). Paste the URL into repo Settings → Webhooks, push events.</div>

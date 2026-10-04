@@ -140,6 +140,14 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   if (sub && !fs.existsSync(path.join(dir, 'code', sub))) sub = '';
   let appPort = port || TYPE_PORT[type] || 3000;
   if (!port) appPort = inferPort(sub ? path.join(dir, 'code', sub) : path.join(dir, 'code'), appPort);
+  // static/react always need our nginx.conf (SPA fallback; proxy added on link).
+  // Never overwrite a repo's own conf - only fill the gap (react template has none).
+  if (type === 'static' || type === 'react') {
+    const ctxDir = sub ? path.join(dir, 'code', sub) : path.join(dir, 'code');
+    try {
+      if (!fs.existsSync(path.join(ctxDir, 'nginx.conf'))) fs.writeFileSync(path.join(ctxDir, 'nginx.conf'), nginxConf(null));
+    } catch {}
+  }
 
   // 2. .env auto-generated
   const host = hostPort || 8000;
@@ -192,4 +200,13 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   return { dir, appPort, hostPort: host, subdir: sub };
 }
 
-module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbService, DB_IMAGES, inferPort };
+// nginx for static/react frontends. With a proxy target it mirrors the vite dev
+// proxy: same-origin /api/* stripped to /* and forwarded to the backend.
+function nginxConf(proxy) {
+  const api = proxy
+    ? `  location /api/ {\n    rewrite ^/api/(.*) /$1 break;\n    proxy_pass http://${proxy.host}:${proxy.port};\n    proxy_set_header Host $host;\n    proxy_set_header X-Real-IP $remote_addr;\n  }\n`
+    : '';
+  return `server {\n  listen 80;\n  root /usr/share/nginx/html;\n  index index.html;\n${api}  location / {\n    try_files $uri $uri/ /index.html;\n  }\n}\n`;
+}
+
+module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbService, DB_IMAGES, inferPort, nginxConf };

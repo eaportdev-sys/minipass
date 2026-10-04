@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const { exec, execSync, spawn } = require('child_process');
 const http = require('http');
 const { WebSocketServer } = require('ws');
-const { createApp, appDir, normDbs, dbService } = require('./lib/generator');
+const { createApp, appDir, normDbs, dbService, nginxConf } = require('./lib/generator');
 const { gitEnv, pubKey, appPubKey, appGitEnv } = require('./lib/ssh');
 
 const PORT = process.env.PORT || 3001;
@@ -702,6 +702,45 @@ app.post('/api/apps/:id/db', async (req, res) => {
     save(db_);
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, added: type, redeployError: e.message }); }
     res.json({ ok: true, added: type, redeployed: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Frontend -> backend wiring: a static/react site proxies same-origin /api/ to another
+// app (mirrors the vite dev proxy). Reaches the target through the host gateway, so no
+// shared networks and no changes to the target app are needed.
+app.post('/api/apps/:id/api-backend', async (req, res) => {
+  try {
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    if (!['static', 'react'].includes(meta.type)) return res.status(400).json({ error: 'api link is for static/react frontends' });
+    const dir = appDir(APPS_DIR, meta.id);
+    const ctxDir = path.join(dir, 'code', meta.subdir || '');
+    const ymlPath = path.join(dir, 'docker-compose.yml');
+    if (!fs.existsSync(ymlPath)) return res.status(400).json({ error: 'app has no compose file' });
+    const target = (req.body && req.body.target) || null;
+    let yml = fs.readFileSync(ymlPath, 'utf8');
+    if (!target) {
+      fs.writeFileSync(path.join(ctxDir, 'nginx.conf'), nginxConf(null));
+      yml = yml.replace(/\n    extra_hosts:\n      - "host\.docker\.internal:host-gateway"\n/, '\n');
+      fs.writeFileSync(ymlPath, yml);
+      meta.apiBackend = null;
+      save(db_);
+      try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, unlinked: true, redeployError: e.message }); }
+      return res.json({ ok: true, unlinked: true, redeployed: true });
+    }
+    const t = db_.apps.find(a => a.id === target);
+    if (!t) return res.status(404).json({ error: 'unknown target app' });
+    if (t.id === meta.id) return res.status(400).json({ error: 'cannot link an app to itself' });
+    if (!t.hostPort) return res.status(400).json({ error: 'target has no published port' });
+    fs.writeFileSync(path.join(ctxDir, 'nginx.conf'), nginxConf({ host: 'host.docker.internal', port: t.hostPort }));
+    if (!/extra_hosts:/.test(yml)) {
+      yml = yml.replace(/(    env_file: \.env\n)/, '$1    extra_hosts:\n      - "host.docker.internal:host-gateway"\n');
+    }
+    fs.writeFileSync(ymlPath, yml);
+    meta.apiBackend = { app: t.id, port: t.hostPort };
+    save(db_);
+    try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, linked: t.id, redeployError: e.message }); }
+    res.json({ ok: true, linked: t.id, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/regenerate', (req, res) => {

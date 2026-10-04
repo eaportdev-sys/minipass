@@ -86,6 +86,7 @@ function fillSiteHeader(a) {
   document.getElementById('hookUrl').textContent = `${location.origin}/webhook/${a.id}?token=${a.token}`;
   document.getElementById('dbList').textContent = 'attached: ' + dbLabel(a);
   document.getElementById('dbOut').textContent = '';
+  fillApiLink(a);
   fillGitConn(a);
   const ps = document.getElementById('pollSel');
   if (ps) ps.value = String((a.github && a.github.pollMinutes) || 0);
@@ -123,6 +124,33 @@ async function addDb() {
     document.getElementById('dbOut').textContent = JSON.stringify(r, null, 2);
     refresh();
   } catch (e) { document.getElementById('dbOut').textContent = 'failed: ' + e.message; }
+}
+async function fillApiLink(a) {
+  const card = document.getElementById('apiCard');
+  const isWeb = a.type === 'static' || a.type === 'react';
+  card.style.display = isWeb ? 'block' : 'none';
+  if (!isWeb) return;
+  const state = document.getElementById('apiState');
+  state.textContent = (a.apiBackend && a.apiBackend.app) ? `linked → ${a.apiBackend.app} (:${a.apiBackend.port})` : 'not linked';
+  try {
+    const apps = await (await fetch('/api/apps')).json();
+    const sel = document.getElementById('apiTarget');
+    const prev = (a.apiBackend && a.apiBackend.app) || '';
+    sel.innerHTML = '<option value="">— no link —</option>' + apps
+      .filter(x => x.id !== a.id && x.hostPort)
+      .map(x => `<option value="${x.id}">${x.id} (:${x.hostPort})</option>`).join('');
+    sel.value = [...sel.options].some(o => o.value === prev) ? prev : '';
+  } catch {}
+}
+async function saveApiLink() {
+  if (!currentApp) return;
+  const target = document.getElementById('apiTarget').value || null;
+  toast((target ? 'linking to ' + target : 'unlinking') + ' + redeploying…');
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/api-backend`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target }) })).json();
+    toast(r.ok ? 'api link saved' : (r.error || 'failed'), !!r.ok);
+    refresh();
+  } catch (e) { toast('failed: ' + e.message, false); }
 }
 async function fillGitConn(a) {
   const g = a.github || {};
