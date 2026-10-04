@@ -52,15 +52,18 @@ function ensureDockerfile(ctxDir, type, templatesDir) {
   throw new Error(`no Dockerfile in build context and type '${type}' has no safe default here - add a Dockerfile (with EXPOSE + CMD) to the repo`);
 }
 
-// Seed missing keys from the repo's .env.example (values stay empty - placeholders
-// are documentation, not config). Never overwrites generated keys.
+// Seed missing keys from the repo's .env.example WITH their example values - those are
+// the author's declared defaults, so a fresh deploy behaves until customized.
+// Generated keys are never overwritten; review placeholders (keys, domains) after.
 function seedEnvExample(ctxDir, haveKeys) {
   const added = [];
   try {
     const ex = require('fs').readFileSync(require('path').join(ctxDir, '.env.example'), 'utf8');
-    for (const line of ex.split('\n')) {
-      const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/);
-      if (m && !haveKeys.has(m[1]) && !added.includes(m[1])) added.push(m[1]);
+    for (const line of ex.split(/\r?\n/)) {
+      const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s?(.*)$/);
+      if (m && !haveKeys.has(m[1]) && !added.some(a => a.key === m[1])) {
+        added.push({ key: m[1], value: m[2].trim().replace(/^["']|["']$/g, '') });
+      }
     }
   } catch {}
   return added;
@@ -245,7 +248,7 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
     const have = new Set(envLines.map(l => l.split('=')[0]));
     const missing = seedEnvExample(exDir, have);
     if (missing.length) {
-      fs.appendFileSync(path.join(dir, '.env'), '# --- from repo .env.example (fill in) ---\n' + missing.map(k => `${k}=`).join('\n') + '\n');
+      fs.appendFileSync(path.join(dir, '.env'), '# --- from repo .env.example (defaults - review secrets/domains) ---\n' + missing.map(a => `${a.key}=${a.value}`).join('\n') + '\n');
     }
   } catch {}
 

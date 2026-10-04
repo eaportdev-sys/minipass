@@ -1013,7 +1013,7 @@ app.post('/api/apps/:id/start', async (req, res) => {
 function readEnvVars(envPath) {
   const vars = [];
   try {
-    for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+    for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
       const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s?(.*)$/);
       if (m) vars.push({ key: m[1], value: m[2] });
     }
