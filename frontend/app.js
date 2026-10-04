@@ -59,7 +59,7 @@ async function saveHome() {
   const p = document.getElementById('homePath').value;
   const r = await (await fetch(`/api/apps/${currentApp}/home`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) })).json();
   toast(r.ok ? 'open path saved' : (r.error || 'failed'), !!r.ok);
-  refresh();
+  refresh(); loadDeployStatus(); loadServices();
 }
 async function loadDeployStatus() {
   if (!currentApp) return;
