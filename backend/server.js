@@ -831,8 +831,16 @@ function readEnvVars(envPath) {
 }
 function managedKeys(dir) {
   try {
-    return new Set(fs.readFileSync(path.join(dir, '.env.managed'), 'utf8').split('\n').map(s => s.trim()).filter(Boolean));
-  } catch { return new Set(); }
+    const keys = fs.readFileSync(path.join(dir, '.env.managed'), 'utf8').split('\n').map(s => s.trim()).filter(Boolean);
+    if (keys.length) return new Set(keys);
+  } catch {}
+  // legacy apps predate .env.managed: fall back to the closed set of generated names
+  return new Set(['APP_NAME', 'APP_TYPE', 'PORT', 'HOST_PORT', 'DOMAIN',
+    'DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DATABASE_URL',
+    'POSTGRES_HOST', 'POSTGRES_PORT', 'POSTGRES_DB', 'POSTGRES_USER', 'POSTGRES_PASSWORD',
+    'MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_DB', 'MYSQL_USER', 'MYSQL_PASSWORD',
+    'MONGO_HOST', 'MONGO_PORT', 'MONGO_DB', 'MONGO_USER', 'MONGO_PASSWORD', 'MONGO_URL',
+    'REDIS_HOST', 'REDIS_PORT', 'REDIS_PASSWORD', 'REDIS_URL']);
 }
 app.get('/api/apps/:id/env', (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
