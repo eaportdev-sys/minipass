@@ -218,6 +218,37 @@ async function recordDeploy(id, rec) {
     if (m) { m.lastDeploy = rec; save(db2); }
   } catch {}
 }
+// Auto-detect the landing path when the user hasn't set one: first non-404 among
+// common health/index routes (401/403 count - the route exists, only auth blocks it).
+// Probes from inside the app's own compose network, so no published ports are needed.
+async function autodetectHome(id) {
+  try {
+    const dir = appDir(APPS_DIR, id);
+    const fresh = load().apps.find(a => a.id === id);
+    if (!fresh || fresh.homePath) return;
+    const env = parseEnvFile(path.join(dir, '.env'));
+    const cport = parseInt(env.PORT, 10) || 3000;
+    const net = `${id}_default`;
+    const cands = ['/health/live', '/health/ready', '/health', '/api/health', '/api', '/v1', '/'];
+    for (let round = 0; round < 6; round++) {
+      if (round) await new Promise(r => setTimeout(r, 5000));
+      for (const p of cands) {
+        try {
+          const code = execSync(
+            `docker run --rm --network ${net} curlimages/curl:latest -s -o /dev/null -w "%{http_code}" --max-time 5 http://app:${cport}${p}`,
+            { timeout: 25000 }).toString().trim();
+          if (/^[234]/.test(code) || code === '401' || code === '403') {
+            if (p === '/') return; // default already - nothing to store
+            const db3 = load();
+            const m3 = db3.apps.find(a => a.id === id);
+            if (m3 && !m3.homePath) { m3.homePath = p; save(db3); }
+            return;
+          }
+        } catch {}
+      }
+    }
+  } catch (e) { console.error(id, 'autodetect:', e.message); }
+}
 async function deploy(id) {
   // one build per app at a time: overlapping `up --build` runs fight over
   // container names and lose ("is already in use")
@@ -266,6 +297,7 @@ async function deploy(id) {
     throw new Error((tail || e.message).trim());
   }
   await recordDeploy(id, { sha, at: stamp(), status: 'ok' });
+  autodetectHome(id).catch(e => console.error(id, e.message));
   return true;
   } finally {
     deployLocks.delete(id);
