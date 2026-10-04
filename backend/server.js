@@ -234,8 +234,10 @@ async function rollbackImages(dir, snaps) {
 }
 // Health gate: every enabled app service running (not restarting/exited) twice in a
 // row, 5s apart, within ~60s. DB services excluded - slow first initdb is normal.
-async function waitStable(id, dir, meta) {
-  const names = new Set(svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false).map(s => s.name));
+// `only` scopes the gate to just-rebuilt services (others keep whatever state they had).
+async function waitStable(id, dir, meta, only = null) {
+  const all = svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false);
+  const names = new Set((only && only.length ? all.filter(s => only.includes(s.name)) : all).map(s => s.name));
   let steady = 0;
   for (let i = 0; i < 12; i++) {
     if (i) await new Promise(r => setTimeout(r, 5000));
@@ -263,7 +265,20 @@ async function recordDeploy(id, rec) {
   try {
     const db2 = load();
     const m = db2.apps.find(a => a.id === id);
-    if (m) { m.lastDeploy = rec; save(db2); }
+    if (m) {
+      m.lastDeploy = rec;
+      if (rec.status === 'ok') delete m.dirty;
+      save(db2);
+    }
+  } catch {}
+}
+// Anything that changes what a build would produce marks the app dirty.
+// Deploy buttons enable off this; a successful deploy clears it.
+async function markDirty(id, reason) {
+  try {
+    const db2 = load();
+    const m = db2.apps.find(a => a.id === id);
+    if (m && !m.dirty) { m.dirty = { reason, at: new Date().toISOString() }; save(db2); }
   } catch {}
 }
 // Auto-detect the landing path when the user hasn't set one: first non-404 among
@@ -297,7 +312,7 @@ async function autodetectHome(id) {
     }
   } catch (e) { console.error(id, 'autodetect:', e.message); }
 }
-async function deploy(id) {
+async function deploy(id, opts = {}) {
   // one build per app at a time: overlapping `up --build` runs fight over
   // container names and lose ("is already in use")
   if (deployLocks.has(id)) throw new Error('deploy already in progress - wait for it to finish');
@@ -334,7 +349,12 @@ async function deploy(id) {
   // every build streams to deploy.log (host-persisted, per app) so the UI can show
   // the builder output; failures return the tail instead of a bare exit code.
   // --remove-orphans: disabled/removed services actually disappear.
+  // opts.only: rebuild just these services, the rest stay untouched and running.
   const buildLog = path.join(dir, 'deploy.log');
+  const only = Array.isArray(opts.only)
+    ? [...new Set(opts.only.filter(s => /^[A-Za-z0-9_-]{1,32}$/.test(s || '')))]
+    : [];
+  const scope = only.join(' ');
   // heal: static/react must ship our nginx.conf (SPA fallback, proxy when linked).
   // Only files WE seeded (marker headers) are ever refreshed - repo-owned files are sacred.
   // Proxy target comes from env (the link lives there), meta only migrates old links forward.
@@ -401,8 +421,9 @@ async function deploy(id) {
   // atomic deploy: snapshot running images, build WITHOUT touching containers,
   // swap only on success, health-gate the new containers, roll back on failure.
   const snaps = await snapshotImages(dir);
+  const scopeSuffix = scope ? ` ${scope}` : '';
   try {
-    await sh(`${COMPOSE_BIN} build > "${buildLog}" 2>&1`, dir);
+    await sh(`${COMPOSE_BIN} build${scopeSuffix} > "${buildLog}" 2>&1`, dir);
   } catch (e) {
     let tail = '';
     try { tail = fs.readFileSync(buildLog, 'utf8').split('\n').slice(-25).join('\n'); } catch {}
@@ -410,12 +431,12 @@ async function deploy(id) {
     throw new Error('build failed - running containers untouched: ' + (tail || e.message).trim().split('\n').slice(-3).join(' '));
   }
   try {
-    await sh(`${COMPOSE_BIN} up -d --remove-orphans >> "${buildLog}" 2>&1`, dir);
+    await sh(`${COMPOSE_BIN} up -d --remove-orphans${scopeSuffix} >> "${buildLog}" 2>&1`, dir);
   } catch (e) {
     await recordDeploy(id, { sha, at: stamp(), status: 'error', error: String(e.message).slice(-500) });
     throw e;
   }
-  const gate = await waitStable(id, dir, meta);
+  const gate = await waitStable(id, dir, meta, only.length ? only : null);
   if (!gate.ok) {
     await rollbackImages(dir, snaps).catch(() => {});
     await recordDeploy(id, { sha, at: stamp(), status: 'error', error: ('new containers unhealthy - rolled back: ' + gate.detail).slice(-500) });
@@ -543,7 +564,13 @@ app.get('/api/apps/:id/doctor', async (req, res) => {
 });
 
 app.post('/api/apps/:id/deploy', async (req, res) => {
-  try { await deploy(req.params.id); res.json({ ok: true }); }
+  try {
+    const only = Array.isArray(req.body && req.body.services)
+      ? [...new Set(req.body.services.filter(s => /^[A-Za-z0-9_-]{1,32}$/.test(s || '')))]
+      : [];
+    await deploy(req.params.id, { only });
+    res.json({ ok: true, redeployed: true, services: only.length ? only : undefined });
+  }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -778,7 +805,7 @@ function hostPortsInUse() {
 app.get('/api/apps/:id/services', (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta) return res.status(404).json({ error: 'unknown app' });
-  res.json({ services: svc.fullServices(meta, appDir(APPS_DIR, meta.id)) });
+  res.json({ services: svc.fullServices(meta, appDir(APPS_DIR, meta.id)), dirty: meta.dirty || null });
 });
 app.post('/api/apps/:id/services', async (req, res) => {
   try {
@@ -805,6 +832,7 @@ app.post('/api/apps/:id/services', async (req, res) => {
     const out = svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
     meta.services = out.normalized;
     save(db_);
+    await markDirty(meta.id, 'service ' + name + ' added');
     if (!(req.body && req.body.apply === true)) return res.json({ ok: true, added: name, pending: true });
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, added: name, redeployError: e.message }); }
     res.json({ ok: true, added: name, redeployed: true });
@@ -824,6 +852,7 @@ app.delete('/api/apps/:id/services/:name', async (req, res) => {
     svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
     envDeleteKeys(dir, [svc.portEnvName(req.params.name)]);
     save(db_);
+    await markDirty(meta.id, 'service ' + req.params.name + ' removed');
     if (!(req.body && req.body.apply === true)) return res.json({ ok: true, removed: true, pending: true });
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, removed: true, redeployError: e.message }); }
     res.json({ ok: true, removed: true, redeployed: true });
@@ -844,6 +873,7 @@ app.post('/api/apps/:id/services/:name/enable', async (req, res) => {
       svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
     } catch (e) { return res.status(400).json({ error: e.message }); }
     save(db_);
+    await markDirty(meta.id, 'service ' + target.name + (target.enabled ? ' enabled' : ' disabled'));
     if (!(req.body && req.body.apply === true)) return res.json({ ok: true, enabled: target.enabled, pending: true });
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, redeployError: e.message }); }
     res.json({ ok: true, enabled: target.enabled, redeployed: true });
@@ -945,6 +975,7 @@ app.post('/api/apps/:id/db', async (req, res) => {
     } catch {}
     meta.db = [...current, type];
     save(db_);
+    await markDirty(meta.id, 'db ' + type + ' added');
     if (!(req.body && req.body.apply === true)) return res.json({ ok: true, added: type, pending: true });
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, added: type, redeployError: e.message }); }
     res.json({ ok: true, added: type, redeployed: true });
@@ -986,11 +1017,13 @@ app.post('/api/apps/:id/api-backend', async (req, res) => {
     if (!target) {
       envDeleteKeys(dir, ['API_HOST', 'API_PORT']);
       fs.writeFileSync(path.join(ctxDir, 'nginx.conf'), nginxConf(null));
-      yml = yml.replace(/\n    extra_hosts:\n      - "host\.docker\.internal:host-gateway"\n/, '\n');
+      // global: old buggy links may have stamped several services
+      yml = yml.replace(/\n    extra_hosts:\n      - "host\.docker\.internal:host-gateway"\n/g, '\n');
       fs.writeFileSync(ymlPath, yml);
       meta.apiBackend = null;
       meta.apiLinkOff = true;
       save(db_);
+      await markDirty(meta.id, 'api link removed');
       if (!(req.body && req.body.apply === true)) return res.json({ ok: true, unlinked: true, pending: true });
       try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, unlinked: true, redeployError: e.message }); }
       return res.json({ ok: true, unlinked: true, redeployed: true });
@@ -1013,10 +1046,22 @@ app.post('/api/apps/:id/api-backend', async (req, res) => {
       if (!t.hostPort) return res.status(400).json({ error: 'target has no published port' });
       proxy = { host: 'host.docker.internal', port: t.hostPort };
       label = t.id;
-      if (!/extra_hosts:/.test(yml)) {
-        yml = yml.replace(/(    env_file: \.env\n)/, '$1    extra_hosts:\n      - "host.docker.internal:host-gateway"\n');
-        fs.writeFileSync(ymlPath, yml);
+      // splice extra_hosts into the FRONTEND's own block (first env_file in the
+      // file may belong to another service); skip when already present there
+      const ymlLines = yml.split('\n');
+      let inFront = false;
+      for (let i = 0; i < ymlLines.length; i++) {
+        if (/^  [A-Za-z0-9_-]+:\s*$/.test(ymlLines[i])) inFront = ymlLines[i].trim().replace(/:$/, '') === front.name;
+        else if (/^[^ ]/.test(ymlLines[i])) inFront = false;
+        if (!inFront) continue;
+        if (/^\s*extra_hosts:/.test(ymlLines[i])) break;
+        if (/^    env_file: \.env$/.test(ymlLines[i])) {
+          ymlLines.splice(i + 1, 0, '    extra_hosts:', '      - "host.docker.internal:host-gateway"');
+          break;
+        }
       }
+      yml = ymlLines.join('\n');
+      fs.writeFileSync(ymlPath, yml);
     }
     // the link IS these two env vars - the conf below renders from them
     envSetManaged(dir, { API_HOST: proxy.host, API_PORT: String(proxy.port) });
@@ -1024,6 +1069,7 @@ app.post('/api/apps/:id/api-backend', async (req, res) => {
     meta.apiBackend = { app: label, port: proxy.port, service: front.name };
     delete meta.apiLinkOff;
     save(db_);
+    await markDirty(meta.id, 'api link changed');
     if (!(req.body && req.body.apply === true)) return res.json({ ok: true, linked: label, pending: true });
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, linked: label, redeployError: e.message }); }
     res.json({ ok: true, linked: label, redeployed: true });
@@ -1174,6 +1220,7 @@ app.put('/api/apps/:id/env', async (req, res) => {
       else arr.push(`${k}=${clean}`);
     }
     fs.writeFileSync(path.join(dir, '.env'), arr.join('\n').replace(/\s*$/, '') + '\n');
+    await markDirty(meta.id, 'env changed');
     const skippedAll = [...new Set([...skipped, ...lockedSet])];
     // edits save only - redeploy is an explicit user action (deploy button)
     if (!(req.body && req.body.apply === true)) return res.json({ ok: true, saved: true, skipped: skippedAll, pending: true });
@@ -1272,6 +1319,7 @@ app.put('/api/apps/:id/file', async (req, res) => {
     const f = safeRel(codeDir(req.params.id), req.body.path || '');
     fs.mkdirSync(path.dirname(f), { recursive: true });
     fs.writeFileSync(f, req.body.content || '');
+    await markDirty(req.params.id, 'file ' + (req.body.path || ''));
   } catch (e) { return res.status(500).json({ error: e.message }); }
   if (!(req.body && req.body.apply === true)) return res.json({ ok: true, saved: true, pending: true });
   try { await deploy(req.params.id); res.json({ ok: true, redeployed: true }); }
@@ -1283,6 +1331,7 @@ app.delete('/api/apps/:id/file', async (req, res) => {
     const f = safeRel(base, req.query.path || '');
     if (f === base) return res.status(400).json({ error: 'refusing to delete app root' });
     fs.rmSync(f, { recursive: true, force: true });
+    await markDirty(req.params.id, 'deleted ' + (req.query.path || ''));
     if (req.query.apply === 'true' || (req.body && req.body.apply === true)) await deploy(req.params.id);
     res.json({ ok: true, saved: true, pending: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1315,6 +1364,7 @@ app.post('/api/apps/:id/upload-files', uploadMany.array('files', 100), async (re
       }
     });
     if (!n) return res.status(400).json({ error: 'nothing usable uploaded', skipped });
+    await markDirty(req.params.id, 'upload');
     if (req.body.apply !== 'true') return res.json({ ok: true, files: n, skipped, pending: true });
     try { await deploy(req.params.id); res.json({ ok: true, redeployed: true, files: n, skipped }); }
     catch (e) { res.json({ ok: true, files: n, skipped, redeployError: e.message }); }
@@ -1350,6 +1400,7 @@ app.post('/api/apps/:id/upload', upload.single('zip'), async (req, res) => {
     }
     fs.rmSync(tmpBase, { recursive: true, force: true });
     if (!n) return res.status(400).json({ error: 'zip was empty (or only contained infra files)' });
+    await markDirty(req.params.id, 'zip upload');
     // validate: static hosting needs index.html at root - indicate, don't guess further
     const rootFiles = fs.readdirSync(code);
     const hasIndex = rootFiles.some(e => /^index\.html?$/i.test(e));

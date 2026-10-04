@@ -3,7 +3,7 @@ async function refresh() {
   const apps = await (await fetch('/api/apps')).json();
   document.getElementById('apps').innerHTML = apps.map(a =>
     `<div class="card appcard" id="card-${a.id}"><h3>${a.id}</h3>
-    <div class="badges"><span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}</div>
+    <div class="badges"><span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}${a.dirty ? `<span class="badge">● changes pending</span>` : ''}</div>
     <div class="meta">local: ${appUrl(a) ? `<a href="${appUrl(a)}" target="_blank">${appUrl(a).replace(/^http:\/\//, '')}</a>` : 'recreate app to get localhost port'}</div>
     <div class="actions"><button class="btn primary" onclick="openSite('${a.id}')">open</button><button onclick="deploy('${a.id}')">redeploy</button><button onclick="stopApp('${a.id}')">stop</button><button onclick="startApp('${a.id}')">start</button><button class="btn danger" onclick="rmApp('${a.id}')">delete</button></div></div>`).join('') || '<div class="card">No websites yet - hit + Create.</div>';
   // keep detail header + global terminal picker in sync
@@ -32,6 +32,15 @@ async function deployCurrent() {
   if (!currentApp) return;
   await deploy(currentApp);
   loadDeployStatus();
+}
+async function deploySvc(name) {
+  toast('redeploying ' + name + '… (others untouched)');
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/deploy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ services: [name] }) })).json();
+    toast(r.ok ? (name + ' redeployed') : ('redeploy failed: ' + (r.error || 'unknown')), !!r.ok);
+    loadDeployStatus();
+    loadServices();
+  } catch (e) { toast('redeploy failed: ' + e.message, false); }
 }
 async function diagnose() {
   if (!currentApp) return;
@@ -752,10 +761,12 @@ async function loadServices() {
   try {
     const r = await (await fetch(`/api/apps/${currentApp}/services`)).json();
     const list = r.services || [];
+    const dirty = !!r.dirty;
     document.getElementById('svcList').innerHTML = list.map(s =>
       `<div class="meta" id="svc-${s.name}"><b>${s.name}</b> [${s.type}] ${s.subdir ? `/${s.subdir}` : '(root)'} ` +
       `${s.hostPort ? `:${s.hostPort}→${s.port}` : 'no port'} ` +
       `${s.enabled === false ? '<span class="badge">off</span>' : '<span class="badge">on</span>'} ` +
+      `<button onclick="deploySvc('${s.name}')" ${dirty ? '' : 'disabled'}>redeploy</button> ` +
       `<button onclick="toggleService('${s.name}', ${s.enabled === false})">${s.enabled === false ? 'start' : 'stop'}</button>` +
       (s.name === 'app' ? '' : ` <button class="btn danger" onclick="removeService('${s.name}')">remove</button>`) +
       `</div>`).join('') || '<div class="meta">no services</div>';
