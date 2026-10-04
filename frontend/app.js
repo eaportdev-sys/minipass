@@ -34,13 +34,8 @@ async function deployCurrent() {
   loadDeployStatus();
 }
 async function deploySvc(name) {
-  toast('redeploying ' + name + '… (others untouched)');
-  try {
-    const r = await (await fetch(`/api/apps/${currentApp}/deploy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ services: [name] }) })).json();
-    toast(r.ok ? (name + ' redeployed') : ('redeploy failed: ' + (r.error || 'unknown')), !!r.ok);
-    loadDeployStatus();
-    loadServices();
-  } catch (e) { toast('redeploy failed: ' + e.message, false); }
+  if (!currentApp) return;
+  return runDeploy(currentApp, [name]);
 }
 async function diagnose() {
   if (!currentApp) return;
@@ -528,11 +523,68 @@ function toggleTheme() {
 }
 try { document.documentElement.dataset.theme = localStorage.getItem('mp-theme') || 'dark'; } catch {}
 async function deploy(id) {
+  if (id === currentApp && document.getElementById('deployProg')) return runDeploy(id, null);
   toast('redeploying ' + id + '…');
   try {
     const r = await (await fetch('/api/apps/' + id + '/deploy', { method: 'POST' })).json();
     toast(r.ok ? id + ' redeployed' : ('redeploy failed: ' + (r.error || 'unknown')), !!r.ok);
   } catch (e) { toast('redeploy failed: ' + e.message, false); }
+}
+// Deploy with live notice: elapsed timer, progress bar to 100%, stage + log tail,
+// success/fail at the end. Polls /status (deploying flag) + build log; the bar
+// eases toward 95% on elapsed time and snaps to 100% when the server finishes.
+async function runDeploy(id, services) {
+  const prog = document.getElementById('deployProg');
+  const bar = document.getElementById('deployBar');
+  const pct = document.getElementById('deployPct');
+  const time = document.getElementById('deployTime');
+  const stage = document.getElementById('deployStage');
+  const tail = document.getElementById('deployTail');
+  const t0 = Date.now();
+  let done = false;
+  let outcome = null;
+  prog.style.display = 'block';
+  bar.style.width = '2%'; bar.style.background = '#4caf50';
+  const tick = setInterval(() => {
+    const s = Math.floor((Date.now() - t0) / 1000);
+    time.textContent = s + 's';
+    if (!done) {
+      const p = Math.min(95, 2 + (Date.now() - t0) / 90000 * 93);
+      bar.style.width = p.toFixed(0) + '%';
+      pct.textContent = p.toFixed(0) + '%';
+    }
+  }, 1000);
+  const poll = setInterval(async () => {
+    try {
+      const st = await (await fetch(`/api/apps/${id}/status`)).json();
+      if (st.deploying === false && done) { clearInterval(poll); return; }
+      const log = await (await fetch(`/api/apps/${id}/build-log?tail=8`)).text();
+      const last = log.split('\n').filter(l => l.trim()).slice(-1)[0] || '';
+      stage.textContent = st.deploying === false ? stage.textContent : 'deploying…';
+      tail.textContent = last.slice(-160);
+    } catch {}
+  }, 2500);
+  stage.textContent = services && services.length ? ('redeploying ' + services.join(',') + '… (others untouched)') : ('redeploying ' + id + '…');
+  try {
+    const r = await (await fetch(`/api/apps/${id}/deploy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(services && services.length ? { services } : {}) })).json();
+    outcome = r;
+  } catch (e) { outcome = { ok: false, error: e.message }; }
+  done = true;
+  clearInterval(tick); clearInterval(poll);
+  bar.style.width = '100%'; pct.textContent = '100%';
+  time.textContent = Math.floor((Date.now() - t0) / 1000) + 's';
+  if (outcome && outcome.ok) {
+    bar.style.background = '#4caf50';
+    stage.textContent = 'done — live';
+    toast(id + ' redeployed', true);
+  } else {
+    bar.style.background = 'var(--danger)';
+    stage.textContent = 'failed';
+    tail.textContent = (outcome && (outcome.error || '')) || 'failed';
+    toast('redeploy failed: ' + ((outcome && outcome.error) || 'unknown'), false);
+  }
+  loadDeployStatus(); loadServices(); refresh();
+  setTimeout(() => { prog.style.display = 'none'; }, 15000);
 }
 function toast(msg, ok = true) {
   const box = document.getElementById('toasts');

@@ -462,7 +462,7 @@ app.get('/api/apps/:id/build-log', (req, res) => {
 app.get('/api/apps/:id/status', async (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta) return res.status(404).json({ error: 'unknown app' });
-  res.json({ app: pubApp(meta), lastDeploy: meta.lastDeploy || null, containers: await appContainers(meta.id) });
+  res.json({ app: pubApp(meta), lastDeploy: meta.lastDeploy || null, containers: await appContainers(meta.id), deploying: deployLocks.has(meta.id) });
 });
 async function appContainers(id) {
   let containers = [];

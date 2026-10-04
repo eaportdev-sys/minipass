@@ -64,6 +64,7 @@
           <input id="homePath" placeholder="/v1/live/events" style="width:200px">
           <button onclick="saveHome()">save</button></div>
         <div class="actions"><button onclick="deployCurrent()">redeploy</button><button onclick="loadDeployStatus()">refresh</button><button onclick="diagnose()">diagnose</button></div>
+        <div id="deployProg" style="display:none"><div class="meta"><span id="deployStage">deploying…</span> <span id="deployPct"></span> <span id="deployTime"></span></div><div style="background:#222;height:8px"><div id="deployBar" style="height:8px;width:0%;background:#4caf50"></div></div><pre id="deployTail"></pre></div>
         <div id="doctorOut"></div>
       </div>
       <div class="card">
