@@ -20,6 +20,38 @@ function normDbs(db) {
   return [...new Set(arr.map(s => String(s).trim().toLowerCase()).filter(s => VALID_DBS.includes(s)))];
 }
 
+// Seed a Dockerfile only when the repo shape makes the choice unambiguous.
+// Anything else fails loud with exactly what's missing - never a bare build error.
+function ensureDockerfile(ctxDir, type, templatesDir) {
+  try {
+    const files = fs.readdirSync(ctxDir);
+    if (files.some(f => /^dockerfile$/i.test(f))) return 'present';
+  } catch { return 'no-context'; }
+  const has = (...names) => names.some(n => {
+    try { return fs.existsSync(path.join(ctxDir, n)); } catch { return false; }
+  });
+  const seed = (...files) => {
+    for (const f of files) {
+      const src = path.join(templatesDir, type, f);
+      const dst = path.join(ctxDir, f);
+      if (fs.existsSync(src) && !fs.existsSync(dst)) fs.copyFileSync(src, dst);
+    }
+  };
+  const readPkg = () => {
+    try { return JSON.parse(fs.readFileSync(path.join(ctxDir, 'package.json'), 'utf8')); }
+    catch { return null; }
+  };
+  if (type === 'static' && (has('index.html') || has('index.htm'))) { seed('Dockerfile', 'nginx.conf'); return 'seeded-static'; }
+  if (type === 'react') {
+    const pkg = readPkg();
+    if (pkg && pkg.scripts && pkg.scripts.build) { seed('Dockerfile', 'nginx.conf'); return 'seeded-react'; }
+    throw new Error(`no Dockerfile and package.json has no build script - add a Dockerfile or a "build" script emitting dist/`);
+  }
+  if (type === 'php' && (has('index.php') || has('composer.json'))) { seed('Dockerfile'); return 'seeded-php'; }
+  if (type === 'node' && has('index.js')) { seed('Dockerfile'); return 'seeded-node'; }
+  throw new Error(`no Dockerfile in build context and type '${type}' has no safe default here - add a Dockerfile (with EXPOSE + CMD) to the repo`);
+}
+
 // Read the build context's Dockerfile for EXPOSE - any repo, any stack.
 // First EXPOSE wins; falls back when absent or unreadable.
 function inferPort(codeDir, fallback) {
@@ -144,6 +176,10 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   }
   let sub = wantSub;
   if (sub && !fs.existsSync(path.join(dir, 'code', sub))) sub = '';
+  // No Dockerfile anywhere is a loud, specific error - unless the repo shape makes
+  // a template choice unambiguous (static index, spa build script, php entry, node index).
+  // Never invent an entrypoint: node without index.js must bring its own Dockerfile.
+  ensureDockerfile(sub ? path.join(dir, 'code', sub) : path.join(dir, 'code'), type, templatesDir);
   let appPort = port || TYPE_PORT[type] || 3000;
   if (!port) appPort = inferPort(sub ? path.join(dir, 'code', sub) : path.join(dir, 'code'), appPort);
   // static/react always need our nginx.conf (SPA fallback; proxy added on link).
@@ -215,4 +251,4 @@ function nginxConf(proxy) {
   return `# minipass-managed (rewritten on link/unlink/redeploy - keep custom confs unmarked)\nserver {\n  listen 80;\n  root /usr/share/nginx/html;\n  index index.html;\n${api}  location / {\n    try_files $uri $uri/ /index.html;\n  }\n}\n`;
 }
 
-module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbService, DB_IMAGES, inferPort, nginxConf };
+module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbService, DB_IMAGES, inferPort, nginxConf, ensureDockerfile };
