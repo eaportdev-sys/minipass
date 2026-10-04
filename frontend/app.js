@@ -85,9 +85,7 @@ function fillSiteHeader(a) {
   document.getElementById('siteName').textContent = a.id;
   document.getElementById('siteBadges').innerHTML =
     `<span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}${a.hostPort ? `<span class="badge">:${a.hostPort}</span>` : ''}${a.subdir ? `<span class="badge">/${a.subdir}</span>` : ''}${a.github ? `<span class="badge">git: ${a.github.login ? a.github.login + '/' : ''}${a.github.repo}</span>` : ''}`;
-  document.getElementById('siteMeta').innerHTML =
-    `${appUrl(a) ? `local: <a href="${appUrl(a)}" target="_blank">${appUrl(a).replace(/^http:\/\//, '')}</a><br>` : ''}
-    webhook: <code>POST /webhook/${a.id}?token=${a.token}</code>`;
+  document.getElementById('siteMeta').innerHTML = '';
   document.getElementById('siteRedeploy').onclick = () => deploy(a.id);
   document.getElementById('siteStop').onclick = () => stopApp(a.id);
   document.getElementById('siteStart').onclick = () => startApp(a.id);
