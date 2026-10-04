@@ -153,7 +153,7 @@ async function saveEnv() {
   try {
     const r = await (await fetch(`/api/apps/${currentApp}/env`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ set }) })).json();
     document.getElementById('envOut').textContent = JSON.stringify(r, null, 2);
-    loadEnv();
+    loadEnv(); refresh(); loadServices();
   } catch (e) { document.getElementById('envOut').textContent = 'failed: ' + e.message; }
 }
 async function envDownload(example) {
@@ -178,7 +178,7 @@ async function envAdd() {
   document.getElementById('envOut').textContent = JSON.stringify(r, null, 2);
   document.getElementById('envKey').value = '';
   document.getElementById('envVal').value = '';
-  loadEnv();
+  loadEnv(); refresh(); loadServices();
 }
 async function envDel(key) {
   if (!currentApp) return;
@@ -195,7 +195,7 @@ async function addDb() {
   try {
     const r = await (await fetch(`/api/apps/${currentApp}/db`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type }) })).json();
     document.getElementById('dbOut').textContent = JSON.stringify(r, null, 2);
-    refresh();
+    refresh(); loadServices();
   } catch (e) { document.getElementById('dbOut').textContent = 'failed: ' + e.message; }
 }
 async function fillApiLink(a) {
@@ -677,7 +677,7 @@ async function saveFile() {
   document.getElementById('fileOut').textContent = 'saving… (redeploy to apply)';
   try {
     const r = await (await fetch(`/api/apps/${id}/file`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
-    document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2); listFiles(curDir);
+    document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2); listFiles(curDir); refresh(); loadServices();
   } catch (e) { document.getElementById('fileOut').textContent = 'save failed: ' + e.message; }
 }
 async function deleteFile() {
@@ -694,7 +694,7 @@ async function deleteFile() {
     const r = await (await fetch(`/api/apps/${id}/file?path=${encodeURIComponent(fp)}`, { method: 'DELETE' })).json();
     document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2);
     document.getElementById('filePath').value = ''; document.getElementById('fileEdit').value = '';
-    listFiles(curDir);
+    listFiles(curDir); refresh(); loadServices();
   } catch (e) { document.getElementById('fileOut').textContent = 'delete failed: ' + e.message; }
 }
 function upModeChange() {
@@ -730,7 +730,7 @@ async function uploadUnified() {
       }
     }
     const r = await (await fetch(url, { method: 'POST', body: fd })).json();
-    out.textContent = JSON.stringify(r, null, 2); listFiles('');
+    out.textContent = JSON.stringify(r, null, 2); listFiles(''); refresh(); loadServices();
   } catch (e) { out.textContent = 'upload failed: ' + e.message; }
   input.value = '';
 }
