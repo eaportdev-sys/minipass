@@ -24,7 +24,7 @@ function openSite(id) {
   document.getElementById('fileOut').textContent = '';
   refresh().then(() => { showSiteTab('files'); loadDeployStatus(); });
 }
-async function appUrl(a) {
+function appUrl(a) {
   if (!a.hostPort) return null;
   return `http://${location.hostname}:${a.hostPort}${a.homePath || ''}`;
 }
