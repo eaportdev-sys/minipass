@@ -115,7 +115,6 @@ async function initLocalGit() {
 async function copyHook() {
   try { await navigator.clipboard.writeText(document.getElementById('hookUrl').textContent); } catch {}
 }
-let envCache = {};
 async function loadEnv() {
   if (!currentApp) return;
   const box = document.getElementById('envList');
@@ -123,29 +122,19 @@ async function loadEnv() {
   try {
     const r = await (await fetch(`/api/apps/${currentApp}/env`)).json();
     if (r.error) { box.innerHTML = '<div class="meta">' + r.error + '</div>'; return; }
-    envCache = {};
-    for (const v of (r.vars || [])) envCache[v.key] = v;
     box.innerHTML = (r.vars || []).map(v =>
-      `<div class="meta"><code>${v.key}</code> ` +
-      ((v.managed && v.key !== 'DOMAIN')
-        ? `<span class="badge">managed</span> <code id="envv-${v.key}">${String(v.value).slice(0, 4)}…</code> <button onclick="toggleEnv('${v.key}', this)">show</button>`
-        : `<input id="envi-${v.key}" data-envkey="${v.key}" type="password" value="${String(v.value).replace(/"/g, '&quot;')}" style="width:260px"> <button onclick="toggleEnv('${v.key}', this)">show</button>${v.managed ? '' : ` <button onclick="envDel('${v.key}')">delete</button>`}`) +
-      `</div>`).join('') || '<div class="meta">(empty env)</div>';
+      `<div class="meta"><code>${v.key}</code>${v.managed ? ' <span class="badge">managed</span>' : ''} ` +
+      `<input id="envi-${v.key}" data-envkey="${v.key}" type="password" value="${String(v.value).replace(/"/g, '&quot;')}" style="width:260px"> ` +
+      `<button onclick="toggleEnv('${v.key}', this)">show</button> ` +
+      `<button onclick="envDel('${v.key}')">delete</button></div>`).join('') || '<div class="meta">(empty env)</div>';
   } catch { box.innerHTML = '<div class="meta">load failed</div>'; }
 }
 function toggleEnv(key, btn) {
-  const v = envCache[key];
-  if (!v) return;
   const input = document.getElementById('envi-' + key);
-  const code = document.getElementById('envv-' + key);
+  if (!input) return;
   const showing = btn.textContent === 'hide';
-  if (input) {
-    input.type = showing ? 'password' : 'text';
-    btn.textContent = showing ? 'show' : 'hide';
-  } else if (code) {
-    code.textContent = showing ? (String(v.value).slice(0, 4) + '…') : v.value;
-    btn.textContent = showing ? 'show' : 'hide';
-  }
+  input.type = showing ? 'password' : 'text';
+  btn.textContent = showing ? 'show' : 'hide';
 }
 async function saveEnv() {
   if (!currentApp) return;
