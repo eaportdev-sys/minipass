@@ -147,6 +147,19 @@ async function saveEnv() {
     loadEnv();
   } catch (e) { document.getElementById('envOut').textContent = 'failed: ' + e.message; }
 }
+async function envDownload(example) {
+  if (!currentApp) return;
+  const r = await (await fetch(`/api/apps/${currentApp}/env`)).json();
+  if (r.error) { toast(r.error, false); return; }
+  const text = example
+    ? '# copy to .env and fill in - generated for redeploy elsewhere\n' + (r.vars || []).map(v => `${v.key}=`).join('\n') + '\n'
+    : (r.vars || []).map(v => `${v.key}=${v.value}`).join('\n') + '\n';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+  a.download = currentApp + (example ? '.env.example' : '.env');
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
 async function envAdd() {
   if (!currentApp) return;
   const k = document.getElementById('envKey').value.trim();
@@ -190,7 +203,15 @@ async function fillApiLink(a) {
   if (!isWeb) return;
   const ab = a.apiBackend || {};
   const state = document.getElementById('apiState');
-  state.textContent = ab.app ? `${ab.auto ? 'auto-linked' : 'linked'} → ${ab.app} (:${ab.port})` : 'not linked';
+  if (ab.app) {
+    const sibName = String(ab.app).replace(/^svc:/, '');
+    const sibs = (JSON.parse(document.getElementById('apiTarget').dataset.sibs || '[]'));
+    if (sibs.includes(sibName)) {
+      state.textContent = `${ab.auto ? 'auto-linked' : 'linked'} → ${sibName} (same network, no public port)`;
+    } else {
+      state.innerHTML = `${ab.auto ? 'auto-linked' : 'linked'} → <a class="openlink" href="http://${location.hostname}:${ab.port}" target="_blank">${ab.app} (:${ab.port})</a>`;
+    }
+  } else state.textContent = 'not linked';
   const svcRow = document.getElementById('apiSvcRow');
   if (fronts.length > 1) {
     svcRow.style.display = 'block';
