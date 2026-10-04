@@ -558,14 +558,17 @@ app.get('/api/apps/:id/doctor', async (req, res) => {
       ? { name: 'logs', status: hits.some(h => h.level === 'fail') ? 'fail' : 'warn', detail: hits.map(h => h.msg).join(' | ') }
       : { name: 'logs', status: 'ok', detail: 'no known failure signatures in last 200 lines' });
   } catch (e) { checks.push({ name: 'logs', status: 'warn', detail: 'could not read logs' }); }
-  // env-needs: vars the repo code reads but .env doesn't set (read-only scan)
+  // env-needs: vars the repo code reads but .env doesn't set (read-only scan).
+  // Empty counts as unset: a referenced key with no value can't function.
   try {
     const need = scanEnvNeeds(dir);
-    const have = new Set(readEnvVars(path.join(dir, '.env')).map(v => v.key));
-    const missing = need.filter(k => !have.has(k));
+    const valOf = new Map(readEnvVars(path.join(dir, '.env')).map(v => [v.key, v.value]));
+    const missing = need.filter(k => !valOf.has(k));
+    const empty = need.filter(k => valOf.has(k) && !String(valOf.get(k)).trim());
+    const unset = [...missing, ...empty];
     if (!need.length) checks.push({ name: 'env-needs', status: 'ok', detail: 'no env references found in code' });
-    else if (!missing.length) checks.push({ name: 'env-needs', status: 'ok', detail: `all ${need.length} code-referenced var${need.length === 1 ? '' : 's'} set` });
-    else checks.push({ name: 'env-needs', status: 'fail', detail: `code reads ${missing.length} unset var${missing.length === 1 ? '' : 's'}: ${missing.slice(0, 12).join(', ')}${missing.length > 12 ? '…' : ''} — add via environment card` });
+    else if (!unset.length) checks.push({ name: 'env-needs', status: 'ok', detail: `all ${need.length} code-referenced var${need.length === 1 ? '' : 's'} set` });
+    else checks.push({ name: 'env-needs', status: 'fail', detail: `code reads ${unset.length} unset var${unset.length === 1 ? '' : 's'}: ${unset.slice(0, 12).join(', ')}${unset.length > 12 ? '…' : ''}${empty.length ? ` (${empty.length} present but empty)` : ''} — add via environment card` });
   } catch (e) { checks.push({ name: 'env-needs', status: 'warn', detail: 'scan failed' }); }
   const fails = checks.filter(c => c.status === 'fail').length;
   const warns = checks.filter(c => c.status === 'warn').length;
@@ -1307,16 +1310,21 @@ app.post('/api/apps/:id/env/defaults', async (req, res) => {
     const asked = Array.isArray(req.body && req.body.keys) && req.body.keys.length
       ? req.body.keys.filter(k => Object.prototype.hasOwnProperty.call(allowed, k))
       : Object.keys(allowed);
-    const have = new Set(readEnvVars(path.join(dir, '.env')).map(v => v.key));
-    const add = {};
-    for (const k of asked) if (!have.has(k)) add[k] = allowed[k];
-    if (!Object.keys(add).length) return res.json({ ok: true, added: [], pending: true });
+    const valOf = new Map(readEnvVars(path.join(dir, '.env')).map(v => [v.key, v.value]));
+    // Fill when missing OR empty - a present-but-empty suggested key can't function.
+    // Never touch non-empty values.
+    const fill = asked.filter(k => !valOf.has(k) || !String(valOf.get(k)).trim());
+    if (!fill.length) return res.json({ ok: true, added: [], pending: true });
     let arr = [];
     try { arr = fs.readFileSync(path.join(dir, '.env'), 'utf8').split('\n'); } catch {}
-    for (const [k, v] of Object.entries(add)) arr.push(`${k}=${v}`);
+    for (const k of fill) {
+      const i = arr.findIndex(l => new RegExp(`^\\s*${k}\\s*=`).test(l));
+      if (i >= 0) arr[i] = `${k}=${allowed[k]}`;
+      else arr.push(`${k}=${allowed[k]}`);
+    }
     fs.writeFileSync(path.join(dir, '.env'), arr.join('\n').replace(/\s*$/, '') + '\n');
     await markDirty(meta.id, 'env defaults added');
-    res.json({ ok: true, added: Object.keys(add), pending: true });
+    res.json({ ok: true, added: fill, pending: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/apps/:id', async (req, res) => {
