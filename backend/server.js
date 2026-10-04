@@ -294,6 +294,7 @@ async function deploy(id) {
   const buildLog = path.join(dir, 'deploy.log');
   // heal: static/react must ship our nginx.conf (SPA fallback, proxy when linked).
   // Only files WE seeded (marker headers) are ever refreshed - repo-owned files are sacred.
+  // Proxy target comes from env (the link lives there), meta only migrates old links forward.
   if (meta && (meta.type === 'static' || meta.type === 'react')) {
     try {
       const ctx = path.join(codeDir, meta.subdir || '');
@@ -306,14 +307,29 @@ async function deploy(id) {
           if (fs.existsSync(tplDf)) fs.copyFileSync(tplDf, df);
         }
       }
+      const envNow = parseEnvFile(path.join(dir, '.env'));
+      // link record wins and re-syncs env (target may have been recreated on a new port);
+      // env-only values still work when no link record exists (hand-set vars survive).
+      let proxy = null;
+      const ab = meta.apiBackend;
+      if (ab && ab.app) {
+        const t = load().apps.find(a => a.id === ab.app);
+        if (t && t.hostPort) {
+          proxy = { host: 'host.docker.internal', port: t.hostPort };
+          if (envNow.API_PORT !== String(t.hostPort) || envNow.API_HOST !== proxy.host) {
+            envSetManaged(dir, { API_HOST: proxy.host, API_PORT: String(proxy.port) });
+          }
+        }
+      } else if (envNow.API_HOST && envNow.API_PORT) {
+        proxy = { host: envNow.API_HOST, port: envNow.API_PORT };
+      }
       const nc = path.join(ctx, 'nginx.conf');
-      const wantProxy = !!(meta.apiBackend && meta.apiBackend.app);
       let cur = null;
       try { cur = fs.readFileSync(nc, 'utf8'); } catch {}
       if (cur === null) {
-        fs.writeFileSync(nc, nginxConf(wantProxy ? { host: 'host.docker.internal', port: meta.apiBackend.port } : null));
-      } else if (cur.includes('# minipass-managed') && (cur.includes('location /api/') !== wantProxy)) {
-        fs.writeFileSync(nc, nginxConf(wantProxy ? { host: 'host.docker.internal', port: meta.apiBackend.port } : null));
+        fs.writeFileSync(nc, nginxConf(proxy));
+      } else if (cur.includes('# minipass-managed') && (cur.includes('location /api/') !== !!proxy)) {
+        fs.writeFileSync(nc, nginxConf(proxy));
       }
     } catch {}
   }
@@ -756,6 +772,7 @@ app.post('/api/apps/:id/api-backend', async (req, res) => {
     const target = (req.body && req.body.target) || null;
     let yml = fs.readFileSync(ymlPath, 'utf8');
     if (!target) {
+      envDeleteKeys(dir, ['API_HOST', 'API_PORT']);
       fs.writeFileSync(path.join(ctxDir, 'nginx.conf'), nginxConf(null));
       yml = yml.replace(/\n    extra_hosts:\n      - "host\.docker\.internal:host-gateway"\n/, '\n');
       fs.writeFileSync(ymlPath, yml);
@@ -768,6 +785,8 @@ app.post('/api/apps/:id/api-backend', async (req, res) => {
     if (!t) return res.status(404).json({ error: 'unknown target app' });
     if (t.id === meta.id) return res.status(400).json({ error: 'cannot link an app to itself' });
     if (!t.hostPort) return res.status(400).json({ error: 'target has no published port' });
+    // the link IS these two env vars - the conf below renders from them
+    envSetManaged(dir, { API_HOST: 'host.docker.internal', API_PORT: String(t.hostPort) });
     fs.writeFileSync(path.join(ctxDir, 'nginx.conf'), nginxConf({ host: 'host.docker.internal', port: t.hostPort }));
     if (!/extra_hosts:/.test(yml)) {
       yml = yml.replace(/(    env_file: \.env\n)/, '$1    extra_hosts:\n      - "host.docker.internal:host-gateway"\n');
@@ -840,7 +859,42 @@ function managedKeys(dir) {
     'POSTGRES_HOST', 'POSTGRES_PORT', 'POSTGRES_DB', 'POSTGRES_USER', 'POSTGRES_PASSWORD',
     'MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_DB', 'MYSQL_USER', 'MYSQL_PASSWORD',
     'MONGO_HOST', 'MONGO_PORT', 'MONGO_DB', 'MONGO_USER', 'MONGO_PASSWORD', 'MONGO_URL',
-    'REDIS_HOST', 'REDIS_PORT', 'REDIS_PASSWORD', 'REDIS_URL']);
+    'REDIS_HOST', 'REDIS_PORT', 'REDIS_PASSWORD', 'REDIS_URL',
+    'API_HOST', 'API_PORT']);
+}
+// Cross-site links live in env (visible, editable source of truth) - never in
+// shared networks or volumes. One folder/container per site, always.
+function envSetManaged(dir, obj) {
+  const envPath = path.join(dir, '.env');
+  let arr = [];
+  try { arr = fs.readFileSync(envPath, 'utf8').split('\n'); } catch {}
+  for (const [k, v] of Object.entries(obj)) {
+    const i = arr.findIndex(l => new RegExp(`^\\s*${k}\\s*=`).test(l));
+    if (i >= 0) arr[i] = `${k}=${v}`;
+    else arr.push(`${k}=${v}`);
+  }
+  fs.writeFileSync(envPath, arr.join('\n').replace(/\s*$/, '') + '\n');
+  const mp = path.join(dir, '.env.managed');
+  let have = new Set();
+  try { have = new Set(fs.readFileSync(mp, 'utf8').split('\n').map(s => s.trim()).filter(Boolean)); } catch {}
+  for (const k of Object.keys(obj)) have.add(k);
+  try { fs.writeFileSync(mp, [...have].join('\n') + '\n'); } catch {}
+}
+function envDeleteKeys(dir, keys) {
+  const envPath = path.join(dir, '.env');
+  let arr = [];
+  try { arr = fs.readFileSync(envPath, 'utf8').split('\n'); } catch {}
+  const gone = new Set(keys);
+  arr = arr.filter(l => {
+    const m = l.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+    return !(m && gone.has(m[1]));
+  });
+  fs.writeFileSync(envPath, arr.join('\n').replace(/\s*$/, '') + '\n');
+  const mp = path.join(dir, '.env.managed');
+  try {
+    const kept = fs.readFileSync(mp, 'utf8').split('\n').map(s => s.trim()).filter(s => s && !gone.has(s));
+    fs.writeFileSync(mp, kept.join('\n') + '\n');
+  } catch {}
 }
 app.get('/api/apps/:id/env', (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
