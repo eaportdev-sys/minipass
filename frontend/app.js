@@ -243,6 +243,8 @@ async function createApp() {
     const tok = document.getElementById('ghModalToken').value.trim();
     if (tok) body.gitToken = tok;
   }
+  const br = v('branch');
+  if (br) body.branch = br;
   const r = await (await fetch('/api/apps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
   document.getElementById('out').textContent = JSON.stringify(r, null, 2);
   refresh();
@@ -374,6 +376,7 @@ function openCreate() {
   document.querySelector('input[name=apptype][value=static]').checked = true;
   document.querySelectorAll('input[name=appdb]').forEach(c => { c.checked = false; });
   document.getElementById('ghModalToken').value = '';
+  document.getElementById('branch').value = '';
   document.getElementById('subdir').value = '';
   document.getElementById('subdirHint').style.display = 'none';
   document.getElementById('ghrepo').innerHTML = '<option value="">GitHub repo…</option>';

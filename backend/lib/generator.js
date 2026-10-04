@@ -52,6 +52,20 @@ function ensureDockerfile(ctxDir, type, templatesDir) {
   throw new Error(`no Dockerfile in build context and type '${type}' has no safe default here - add a Dockerfile (with EXPOSE + CMD) to the repo`);
 }
 
+// Seed missing keys from the repo's .env.example (values stay empty - placeholders
+// are documentation, not config). Never overwrites generated keys.
+function seedEnvExample(ctxDir, haveKeys) {
+  const added = [];
+  try {
+    const ex = require('fs').readFileSync(require('path').join(ctxDir, '.env.example'), 'utf8');
+    for (const line of ex.split('\n')) {
+      const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+      if (m && !haveKeys.has(m[1]) && !added.includes(m[1])) added.push(m[1]);
+    }
+  } catch {}
+  return added;
+}
+
 // Read the build context's Dockerfile for EXPOSE - any repo, any stack.
 // First EXPOSE wins; falls back when absent or unreadable.
 function inferPort(codeDir, fallback) {
@@ -127,7 +141,7 @@ function dbService(db, name, svc, vol) {
   return { lines: [], compose: '', vol, url: null, info: null };
 }
 
-function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', port, domain, hostPort, gitToken, subdir }) {
+function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', port, domain, hostPort, gitToken, subdir, gitBranch }) {
   const dir = appDir(appsDir, name);
   // resume allowed when a previous create died before writing compose (keys preserved)
   const resume = fs.existsSync(dir) && !fs.existsSync(path.join(dir, 'docker-compose.yml'));
@@ -136,13 +150,15 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
 
   // 1. code: clone or copy template starter
   if (repoUrl && !(resume && fs.existsSync(path.join(dir, 'code', '.git')))) {
+    const branch = String(gitBranch || '').trim();
+    if (branch && !/^[A-Za-z0-9._\/-]+$/.test(branch)) throw new Error(`bad branch name '${branch}'`);
     const isSsh = /^(git@|ssh:\/\/)/i.test(repoUrl);
     // token injected in-memory only (stored repo URLs stay clean)
     const { authUrl, authUrlWith } = require('./github');
     const cloneUrl = isSsh ? repoUrl : (gitToken ? authUrlWith(repoUrl, gitToken) : authUrl(repoUrl));
     const redact = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
     try {
-      execSync(`git clone --depth 1 ${cloneUrl} "${dir}/code"`, { stdio: 'pipe', env: isSsh ? appGitEnv(dir) : process.env });
+      execSync(`git clone --depth 1 ${branch ? `-b ${branch} ` : ''}${cloneUrl} "${dir}/code"`, { stdio: 'pipe', env: isSsh ? appGitEnv(dir) : process.env });
     } catch (e) {
       // don't leave a half-created app behind (retry would hit "app exists");
       // keep per-app deploy keys so the key can still be shown + registered
@@ -219,6 +235,15 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
     `DOMAIN=${domain || ''}`, ...extraLines
   ];
   fs.writeFileSync(path.join(dir, '.env'), envLines.join('\n') + '\n');
+  // seed app-specific keys from the repo's .env.example (never overwrite generated)
+  try {
+    const exDir = sub ? path.join(dir, 'code', sub) : path.join(dir, 'code');
+    const have = new Set(envLines.map(l => l.split('=')[0]));
+    const missing = seedEnvExample(exDir, have);
+    if (missing.length) {
+      fs.appendFileSync(path.join(dir, '.env'), '# --- from repo .env.example (fill in) ---\n' + missing.map(k => `${k}=`).join('\n') + '\n');
+    }
+  } catch {}
 
   // 3. docker-compose.yml per app (ports: reachable via localhost + tunnel; expose: inter-container)
   // monorepo: build a subfolder, seeding the type template Dockerfile when the folder lacks one.

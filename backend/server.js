@@ -152,6 +152,10 @@ app.post('/api/apps', async (req, res) => {
     // is created, stored on the site only - never the shared pool.
     let finalRepoUrl = repoUrl || '';
     let siteToken = String(req.body.gitToken || '').trim() || null;
+    let explicitBranch = String(req.body.branch || '').trim() || null;
+    if (explicitBranch && !/^[A-Za-z0-9._\/-]+$/.test(explicitBranch)) {
+      return res.status(400).json({ error: `bad branch name '${explicitBranch}'` });
+    }
     let ghLink = null;
     const ghRepo = req.body.ghRepo;
     if (ghRepo && ghRepo.repo) {
@@ -163,19 +167,20 @@ app.post('/api/apps', async (req, res) => {
         .catch(() => { throw new Error('token cannot read ' + ghRepo.repo + ' - check repo access on the token'); });
       let head = null;
       try {
-        const c = await gh.apiWith(siteToken, `/repos/${parts[0]}/${parts[1]}/commits/${encodeURIComponent(info.default_branch)}`);
+        const br = explicitBranch || info.default_branch;
+        const c = await gh.apiWith(siteToken, `/repos/${parts[0]}/${parts[1]}/commits/${encodeURIComponent(br)}`);
         head = c && c.sha;
       } catch {}
       finalRepoUrl = info.clone_url;
-      ghLink = { repo: info.full_name, branch: info.default_branch, login: me.login, sha: head, pollMinutes: 5, token: siteToken };
+      ghLink = { repo: info.full_name, branch: explicitBranch || info.default_branch, login: me.login, sha: head, pollMinutes: 5, token: siteToken };
     } else if (siteToken && finalRepoUrl) {
       const m = finalRepoUrl.match(/github\.com[:/]([^/]+)\/([^/]+?)(\.git)?\/?$/i);
-      if (m) ghLink = { repo: `${m[1]}/${m[2]}`, branch: null, login: null, sha: null, pollMinutes: 5, token: siteToken };
+      if (m) ghLink = { repo: `${m[1]}/${m[2]}`, branch: explicitBranch, login: null, sha: null, pollMinutes: 5, token: siteToken };
       else siteToken = null;
     }
     const dbs = normDbs(req.body.dbs !== undefined ? req.body.dbs : db);
     const subdir = String(req.body.subdir || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '') || '';
-    const created = createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain, hostPort, gitToken: siteToken, subdir });
+    const created = createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain, hostPort, gitToken: siteToken, subdir, gitBranch: explicitBranch });
     const db_ = load();
     const meta = { id, type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: domain || '', token, hostPort, subdir: created.subdir || '', createdAt: new Date().toISOString() };
     db_.apps = db_.apps.filter(a => a.id !== id).concat([meta]);
