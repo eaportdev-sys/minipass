@@ -210,6 +210,47 @@ app.post('/api/apps', async (req, res) => {
 
 const redactUrl = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
 const deployLocks = new Set();
+// Container image IDs before a deploy, so a failed swap can retag + restart them.
+async function snapshotImages(dir) {
+  const snaps = [];
+  try {
+    const out = await sh(`${COMPOSE_BIN} ps -q`, dir);
+    for (const cid of out.trim().split('\n').filter(Boolean)) {
+      try {
+        const name = execSync(`docker inspect ${cid.trim()} --format '{{.Config.Image}}'`).toString().trim();
+        const imgId = execSync(`docker inspect ${cid.trim()} --format '{{.Image}}'`).toString().trim();
+        if (name && imgId) snaps.push({ name, imgId });
+      } catch {}
+    }
+  } catch {}
+  return snaps;
+}
+async function rollbackImages(dir, snaps) {
+  if (!snaps.length) return;
+  for (const s of snaps) {
+    try { execSync(`docker tag ${s.imgId} ${s.name}`); } catch {}
+  }
+  await sh(`${COMPOSE_BIN} up -d --remove-orphans`, dir);
+}
+// Health gate: every enabled app service running (not restarting/exited) twice in a
+// row, 5s apart, within ~60s. DB services excluded - slow first initdb is normal.
+async function waitStable(id, dir, meta) {
+  const names = new Set(svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false).map(s => s.name));
+  let steady = 0;
+  for (let i = 0; i < 12; i++) {
+    if (i) await new Promise(r => setTimeout(r, 5000));
+    let cs = [];
+    try { cs = await appContainers(id); } catch { continue; }
+    const rel = cs.filter(c => names.has(c.service));
+    if (rel.length && rel.some(c => /exited|dead|failed|removing/i.test(c.state || ''))) {
+      return { ok: false, detail: rel.map(c => `${c.service}=${c.state}`).join(', ') };
+    }
+    if (rel.length && rel.every(c => /^running/i.test(c.state || ''))) {
+      if (++steady >= 2) return { ok: true };
+    } else steady = 0;
+  }
+  return { ok: false, detail: 'containers never stabilized within 60s' };
+}
 async function currentSha(dir) {
   try {
     const code = path.join(dir, 'code');
@@ -357,13 +398,28 @@ async function deploy(id) {
   } catch {}
   const sha = await currentSha(dir);
   const stamp = () => new Date().toISOString();
+  // atomic deploy: snapshot running images, build WITHOUT touching containers,
+  // swap only on success, health-gate the new containers, roll back on failure.
+  const snaps = await snapshotImages(dir);
   try {
-    await sh(`${COMPOSE_BIN} up --build -d --remove-orphans > "${buildLog}" 2>&1`, dir);
+    await sh(`${COMPOSE_BIN} build > "${buildLog}" 2>&1`, dir);
   } catch (e) {
     let tail = '';
     try { tail = fs.readFileSync(buildLog, 'utf8').split('\n').slice(-25).join('\n'); } catch {}
-    await recordDeploy(id, { sha, at: stamp(), status: 'error', error: (tail || e.message).trim().slice(-500) });
-    throw new Error((tail || e.message).trim());
+    await recordDeploy(id, { sha, at: stamp(), status: 'error', error: ('build failed - running containers untouched: ' + (tail || e.message)).trim().slice(-500) });
+    throw new Error('build failed - running containers untouched: ' + (tail || e.message).trim().split('\n').slice(-3).join(' '));
+  }
+  try {
+    await sh(`${COMPOSE_BIN} up -d --remove-orphans >> "${buildLog}" 2>&1`, dir);
+  } catch (e) {
+    await recordDeploy(id, { sha, at: stamp(), status: 'error', error: String(e.message).slice(-500) });
+    throw e;
+  }
+  const gate = await waitStable(id, dir, meta);
+  if (!gate.ok) {
+    await rollbackImages(dir, snaps).catch(() => {});
+    await recordDeploy(id, { sha, at: stamp(), status: 'error', error: ('new containers unhealthy - rolled back: ' + gate.detail).slice(-500) });
+    throw new Error('new containers unhealthy - rolled back: ' + gate.detail);
   }
   await recordDeploy(id, { sha, at: stamp(), status: 'ok' });
   autodetectHome(id).catch(e => console.error(id, e.message));
@@ -749,6 +805,7 @@ app.post('/api/apps/:id/services', async (req, res) => {
     const out = svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
     meta.services = out.normalized;
     save(db_);
+    if (!(req.body && req.body.apply === true)) return res.json({ ok: true, added: name, pending: true });
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, added: name, redeployError: e.message }); }
     res.json({ ok: true, added: name, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -767,6 +824,7 @@ app.delete('/api/apps/:id/services/:name', async (req, res) => {
     svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
     envDeleteKeys(dir, [svc.portEnvName(req.params.name)]);
     save(db_);
+    if (!(req.body && req.body.apply === true)) return res.json({ ok: true, removed: true, pending: true });
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, removed: true, redeployError: e.message }); }
     res.json({ ok: true, removed: true, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -786,6 +844,7 @@ app.post('/api/apps/:id/services/:name/enable', async (req, res) => {
       svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
     } catch (e) { return res.status(400).json({ error: e.message }); }
     save(db_);
+    if (!(req.body && req.body.apply === true)) return res.json({ ok: true, enabled: target.enabled, pending: true });
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, redeployError: e.message }); }
     res.json({ ok: true, enabled: target.enabled, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -886,6 +945,7 @@ app.post('/api/apps/:id/db', async (req, res) => {
     } catch {}
     meta.db = [...current, type];
     save(db_);
+    if (!(req.body && req.body.apply === true)) return res.json({ ok: true, added: type, pending: true });
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, added: type, redeployError: e.message }); }
     res.json({ ok: true, added: type, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -931,6 +991,7 @@ app.post('/api/apps/:id/api-backend', async (req, res) => {
       meta.apiBackend = null;
       meta.apiLinkOff = true;
       save(db_);
+      if (!(req.body && req.body.apply === true)) return res.json({ ok: true, unlinked: true, pending: true });
       try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, unlinked: true, redeployError: e.message }); }
       return res.json({ ok: true, unlinked: true, redeployed: true });
     }
@@ -963,6 +1024,7 @@ app.post('/api/apps/:id/api-backend', async (req, res) => {
     meta.apiBackend = { app: label, port: proxy.port, service: front.name };
     delete meta.apiLinkOff;
     save(db_);
+    if (!(req.body && req.body.apply === true)) return res.json({ ok: true, linked: label, pending: true });
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, linked: label, redeployError: e.message }); }
     res.json({ ok: true, linked: label, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1113,6 +1175,8 @@ app.put('/api/apps/:id/env', async (req, res) => {
     }
     fs.writeFileSync(path.join(dir, '.env'), arr.join('\n').replace(/\s*$/, '') + '\n');
     const skippedAll = [...new Set([...skipped, ...lockedSet])];
+    // edits save only - redeploy is an explicit user action (deploy button)
+    if (!(req.body && req.body.apply === true)) return res.json({ ok: true, saved: true, skipped: skippedAll, pending: true });
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, saved: true, skipped: skippedAll, redeployError: e.message }); }
     res.json({ ok: true, saved: true, skipped: skippedAll, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1209,6 +1273,7 @@ app.put('/api/apps/:id/file', async (req, res) => {
     fs.mkdirSync(path.dirname(f), { recursive: true });
     fs.writeFileSync(f, req.body.content || '');
   } catch (e) { return res.status(500).json({ error: e.message }); }
+  if (!(req.body && req.body.apply === true)) return res.json({ ok: true, saved: true, pending: true });
   try { await deploy(req.params.id); res.json({ ok: true, redeployed: true }); }
   catch (e) { res.json({ ok: true, saved: true, redeployError: e.message }); }
 });
@@ -1218,8 +1283,8 @@ app.delete('/api/apps/:id/file', async (req, res) => {
     const f = safeRel(base, req.query.path || '');
     if (f === base) return res.status(400).json({ error: 'refusing to delete app root' });
     fs.rmSync(f, { recursive: true, force: true });
-    await deploy(req.params.id);
-    res.json({ ok: true, redeployed: true });
+    if (req.query.apply === 'true' || (req.body && req.body.apply === true)) await deploy(req.params.id);
+    res.json({ ok: true, saved: true, pending: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 const uploadMany = require('multer')({ dest: '/tmp/minipass-uploads/', limits: { fileSize: 50 * 1024 * 1024, files: 100 } });
@@ -1250,6 +1315,7 @@ app.post('/api/apps/:id/upload-files', uploadMany.array('files', 100), async (re
       }
     });
     if (!n) return res.status(400).json({ error: 'nothing usable uploaded', skipped });
+    if (req.body.apply !== 'true') return res.json({ ok: true, files: n, skipped, pending: true });
     try { await deploy(req.params.id); res.json({ ok: true, redeployed: true, files: n, skipped }); }
     catch (e) { res.json({ ok: true, files: n, skipped, redeployError: e.message }); }
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1306,6 +1372,7 @@ app.post('/api/apps/:id/upload', upload.single('zip'), async (req, res) => {
         : `no index.html found anywhere in the zip. Static sites need an index.html - showing: ${rootFiles.slice(0, 8).join(', ')}`;
     }
     merged = true;
+    if (req.body.apply !== 'true') return res.json({ ok: true, files: 'merged', saved: true, pending: true, index: hasIndex ? 'index.html' : null, warning });
     await deploy(req.params.id);
     res.json({ ok: true, redeployed: true, files: n, index: hasIndex ? 'index.html' : null, warning });
   } catch (e) {

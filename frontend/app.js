@@ -2,7 +2,7 @@ let currentApp = null;
 async function refresh() {
   const apps = await (await fetch('/api/apps')).json();
   document.getElementById('apps').innerHTML = apps.map(a =>
-    `<div class="card appcard"><h3>${a.id}</h3>
+    `<div class="card appcard" id="card-${a.id}"><h3>${a.id}</h3>
     <div class="badges"><span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}</div>
     <div class="meta">local: ${appUrl(a) ? `<a href="${appUrl(a)}" target="_blank">${appUrl(a).replace(/^http:\/\//, '')}</a>` : 'recreate app to get localhost port'}</div>
     <div class="actions"><button class="btn primary" onclick="openSite('${a.id}')">open</button><button onclick="deploy('${a.id}')">redeploy</button><button onclick="stopApp('${a.id}')">stop</button><button onclick="startApp('${a.id}')">start</button><button class="btn danger" onclick="rmApp('${a.id}')">delete</button></div></div>`).join('') || '<div class="card">No websites yet - hit + Create.</div>';
@@ -140,7 +140,7 @@ async function saveEnv() {
   if (!currentApp) return;
   const set = {};
   document.querySelectorAll('#envList input[data-envkey]').forEach(i => { set[i.dataset.envkey] = i.value; });
-  document.getElementById('envOut').textContent = 'saving + redeploying…';
+  document.getElementById('envOut').textContent = 'saving… (redeploy to apply)';
   try {
     const r = await (await fetch(`/api/apps/${currentApp}/env`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ set }) })).json();
     document.getElementById('envOut').textContent = JSON.stringify(r, null, 2);
@@ -182,7 +182,7 @@ async function envDel(key) {
 async function addDb() {
   if (!currentApp) return;
   const type = document.getElementById('dbAdd').value;
-  document.getElementById('dbOut').textContent = 'adding ' + type + ' + redeploying…';
+  document.getElementById('dbOut').textContent = 'adding ' + type + '… (redeploy to apply)';
   try {
     const r = await (await fetch(`/api/apps/${currentApp}/db`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type }) })).json();
     document.getElementById('dbOut').textContent = JSON.stringify(r, null, 2);
@@ -244,7 +244,7 @@ async function saveApiLink() {
   const target = document.getElementById('apiTarget').value || null;
   const svcRow = document.getElementById('apiSvcRow');
   const service = (svcRow.style.display !== 'none' && document.getElementById('apiService').value) || undefined;
-  toast((target ? 'linking to ' + target : 'unlinking') + ' + redeploying…');
+  toast((target ? 'linking to ' + target : 'unlinking') + '… (redeploy to apply)');
   try {
     const r = await (await fetch(`/api/apps/${currentApp}/api-backend`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target, service }) })).json();
     toast(r.ok ? 'api link saved' : (r.error || 'failed'), !!r.ok);
@@ -574,11 +574,15 @@ async function rmApp(id) {
     requireText: id, confirmLabel: 'Delete', danger: true
   });
   if (!ok) return;
+  // optimistic: gone from screen instantly, restored on failure
+  const card = document.getElementById('card-' + id);
+  if (card) card.remove();
+  toast('deleting ' + id + '…');
   try {
     await fetch('/api/apps/' + id, { method: 'DELETE' });
     toast(id + ' deleted');
     if (id === currentApp) backToSites(); else refresh();
-  } catch (e) { toast('delete failed: ' + e.message, false); }
+  } catch (e) { toast('delete failed: ' + e.message, false); refresh(); }
 }
 async function showLogs() {
   if (!currentApp) { logsEl.textContent = 'open a website first'; return; }
@@ -661,7 +665,7 @@ async function openFile(p) {
 async function saveFile() {
   const id = currentApp;
   const body = { path: document.getElementById('filePath').value, content: document.getElementById('fileEdit').value };
-  document.getElementById('fileOut').textContent = 'saving + redeploying…';
+  document.getElementById('fileOut').textContent = 'saving… (redeploy to apply)';
   try {
     const r = await (await fetch(`/api/apps/${id}/file`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
     document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2); listFiles(curDir);
@@ -676,7 +680,7 @@ async function deleteFile() {
     confirmLabel: 'Delete', danger: true
   });
   if (!ok) return;
-  document.getElementById('fileOut').textContent = 'deleting + redeploying…';
+  document.getElementById('fileOut').textContent = 'deleting… (redeploy to apply)';
   try {
     const r = await (await fetch(`/api/apps/${id}/file?path=${encodeURIComponent(fp)}`, { method: 'DELETE' })).json();
     document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2);
@@ -702,7 +706,7 @@ async function uploadUnified() {
   const files = [...input.files];
   const out = document.getElementById('fileOut');
   if (!id || !files.length) { out.textContent = 'open a website and pick something to upload'; return; }
-  out.textContent = `uploading ${mode} (${files.length} file(s)) + redeploying…`;
+  out.textContent = `uploading ${mode} (${files.length} file(s))… (redeploy after)`;
   try {
     let url, fd = new FormData();
     if (mode === 'zip') {
@@ -749,7 +753,7 @@ async function loadServices() {
     const r = await (await fetch(`/api/apps/${currentApp}/services`)).json();
     const list = r.services || [];
     document.getElementById('svcList').innerHTML = list.map(s =>
-      `<div class="meta"><b>${s.name}</b> [${s.type}] ${s.subdir ? `/${s.subdir}` : '(root)'} ` +
+      `<div class="meta" id="svc-${s.name}"><b>${s.name}</b> [${s.type}] ${s.subdir ? `/${s.subdir}` : '(root)'} ` +
       `${s.hostPort ? `:${s.hostPort}→${s.port}` : 'no port'} ` +
       `${s.enabled === false ? '<span class="badge">off</span>' : '<span class="badge">on</span>'} ` +
       `<button onclick="toggleService('${s.name}', ${s.enabled === false})">${s.enabled === false ? 'start' : 'stop'}</button>` +
@@ -782,23 +786,27 @@ async function addService() {
     type: document.getElementById('svcType').value
   };
   const r = await (await fetch(`/api/apps/${currentApp}/services`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
-  toast(r.ok ? ('service ' + body.name + ' added') : (r.error || 'failed'), !!r.ok);
+  toast(r.ok ? ('service ' + body.name + ' added - redeploy to start it') : (r.error || 'failed'), !!r.ok);
   document.getElementById('svcName').value = '';
   document.getElementById('svcSub').value = '';
   refresh();
   loadServices();
 }
 async function toggleService(name, enable) {
+  toast((enable ? 'starting ' : 'stopping ') + name + '… (applies on redeploy)');
   const r = await (await fetch(`/api/apps/${currentApp}/services/${name}/enable`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: enable }) })).json();
-  toast(r.ok ? (name + (enable ? ' started' : ' stopped')) : (r.error || 'failed'), !!r.ok);
+  toast(r.ok ? (name + (enable ? ' will start' : ' will stop') + ' on redeploy') : (r.error || 'failed'), !!r.ok);
   refresh();
   loadServices();
 }
 async function removeService(name) {
-  const ok = await uiConfirm({ title: 'Remove service ' + name + '?', body: 'Container removed, code and data volumes stay. The folder is untouched.', confirmLabel: 'Remove', danger: true });
+  const ok = await uiConfirm({ title: 'Remove service ' + name + '?', body: 'Container removed on next redeploy, code and data volumes stay. The folder is untouched.', confirmLabel: 'Remove', danger: true });
   if (!ok) return;
+  const row = document.getElementById('svc-' + name);
+  if (row) row.remove();
+  toast('removing ' + name + '…');
   const r = await (await fetch(`/api/apps/${currentApp}/services/${name}`, { method: 'DELETE' })).json();
-  toast(r.ok ? (name + ' removed') : (r.error || 'failed'), !!r.ok);
+  toast(r.ok ? (name + ' removed - redeploy to apply') : (r.error || 'failed'), !!r.ok);
   refresh();
   loadServices();
 }
