@@ -33,6 +33,18 @@ async function deployCurrent() {
   await deploy(currentApp);
   loadDeployStatus();
 }
+async function diagnose() {
+  if (!currentApp) return;
+  const out = document.getElementById('doctorOut');
+  out.innerHTML = '<div class="meta">diagnosing…</div>';
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/doctor`)).json();
+    if (r.error) { out.innerHTML = '<div class="meta">' + r.error + '</div>'; return; }
+    const dot = s => s === 'ok' ? '[ok]' : s === 'warn' ? '[warn]' : '[FAIL]';
+    out.innerHTML = `<div class="meta"><b>doctor: ${r.summary}</b></div>` +
+      (r.checks || []).map(c => `<div class="meta">${dot(c.status)} <b>${c.name}</b> — ${c.detail}</div>`).join('');
+  } catch { out.innerHTML = '<div class="meta">diagnose failed</div>'; }
+}
 async function saveHome() {
   if (!currentApp) return;
   const p = document.getElementById('homePath').value;

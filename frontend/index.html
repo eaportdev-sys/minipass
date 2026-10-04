@@ -54,7 +54,8 @@
         <div class="meta">open path (where Open lands — your API has no <code>/</code> route):
           <input id="homePath" placeholder="/v1/live/events" style="width:200px">
           <button onclick="saveHome()">save</button></div>
-        <div class="actions"><button onclick="deployCurrent()">redeploy</button><button onclick="loadDeployStatus()">refresh</button></div>
+        <div class="actions"><button onclick="deployCurrent()">redeploy</button><button onclick="loadDeployStatus()">refresh</button><button onclick="diagnose()">diagnose</button></div>
+        <div id="doctorOut"></div>
       </div>
       <div class="card">
         <b>databases</b> <span class="meta" id="dbList"></span>

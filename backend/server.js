@@ -313,9 +313,12 @@ app.get('/api/apps/:id/build-log', (req, res) => {
 app.get('/api/apps/:id/status', async (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta) return res.status(404).json({ error: 'unknown app' });
+  res.json({ app: pubApp(meta), lastDeploy: meta.lastDeploy || null, containers: await appContainers(meta.id) });
+});
+async function appContainers(id) {
   let containers = [];
   try {
-    const out = await sh(`${COMPOSE_BIN} ps --format json`, appDir(APPS_DIR, meta.id));
+    const out = await sh(`${COMPOSE_BIN} ps --format json`, appDir(APPS_DIR, id));
     let arr = [];
     try {
       const parsed = JSON.parse(out.trim() || '[]');
@@ -324,12 +327,91 @@ app.get('/api/apps/:id/status', async (req, res) => {
       arr = out.trim().split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
     }
     containers = arr.map(c => ({
+      id: c.ID || c.Id || c.id,
       service: c.Service || c.service || c.Name || c.name,
       state: c.State || c.state,
       status: c.Status || c.status
     }));
   } catch {}
-  res.json({ app: pubApp(meta), lastDeploy: meta.lastDeploy || null, containers });
+  return containers;
+}
+// Doctor: same checklist for any developer's app - containers, OOM, landing path,
+// and known failure signatures in recent logs. Read-only, no changes.
+const LOG_RULES = [
+  { re: /relation "([^"]+)" does not exist/, level: 'fail', msg: m => `table "${m[1]}" missing in postgres — run this app's migrations` },
+  { re: /FATAL:\s+database "([^"]+)" does not exist/, level: 'fail', msg: m => `database "${m[1]}" missing on the db service — wrong DB name in env?` },
+  { re: /FATAL:\s+role "([^"]+)" does not exist/, level: 'fail', msg: m => `db role "${m[1]}" missing — user/password out of sync with the volume?` },
+  { re: /password authentication failed/i, level: 'fail', msg: () => 'db password rejected — .env out of sync with the kept volume (recreate resets both)' },
+  { re: /getaddrinfo ENOTFOUND ([^\s]+)/i, level: 'fail', msg: m => `DNS fail for "${m[1]}" — wrong service hostname in env? (use db-<type>)` },
+  { re: /connect ECONNREFUSED ([^\s:]+):(\d+)/i, level: 'fail', msg: m => `nothing at ${m[1]}:${m[2]} — wrong host/port in env, or that service is down` },
+  { re: /EADDRINUSE[^:]*:?(\d+)?/i, level: 'fail', msg: m => `port ${m[1] || '?'} busy inside the container — app hardcodes a port?` },
+  { re: /Cannot find module ([^\s'"]+)/, level: 'fail', msg: m => `missing node module ${m[1]} — incomplete install, rebuild the app` },
+  { re: /JavaScript heap out of memory|OOMKilled/i, level: 'fail', msg: () => 'out of memory — raise box swap or container limits' },
+  { re: /^(?!.*(password|token|secret|key)).*error:/gim, level: 'warn', msg: () => 'error lines present in recent logs', count: true }
+];
+app.get('/api/apps/:id/doctor', async (req, res) => {
+  const meta = load().apps.find(a => a.id === req.params.id);
+  if (!meta) return res.status(404).json({ error: 'unknown app' });
+  const dir = appDir(APPS_DIR, meta.id);
+  const checks = [];
+  const containers = await appContainers(meta.id);
+  const appC = containers.find(c => /^(app|web|server)$/i.test(c.service)) || containers[0];
+  checks.push({
+    name: 'containers',
+    status: containers.length && containers.every(c => /^running/i.test(c.state || '')) ? 'ok' : 'fail',
+    detail: containers.length ? containers.map(c => `${c.service}: ${c.state || '?'}${c.status ? ` (${c.status})` : ''}`).join(', ') : 'no containers'
+  });
+  if (appC && appC.id) {
+    try {
+      const insp = await sh(`docker inspect ${appC.id} --format '{{.State.OOMKilled}} {{.State.ExitCode}} {{.RestartCount}}'`, dir);
+      const [oom, code, restarts] = insp.trim().split(/\s+/);
+      checks.push({
+        name: 'oom/crashloop',
+        status: oom === 'true' || (parseInt(code, 10) !== 0 && parseInt(restarts, 10) > 3) ? 'fail' : 'ok',
+        detail: `OOMKilled=${oom} exit=${code} restarts=${restarts}`
+      });
+    } catch (e) { checks.push({ name: 'oom/crashloop', status: 'warn', detail: 'inspect failed' }); }
+  }
+  // landing probe (same candidates as autodetect)
+  try {
+    const env = parseEnvFile(path.join(dir, '.env'));
+    const cport = parseInt(env.PORT, 10) || 3000;
+    const net = `${meta.id}_default`;
+    const probed = [];
+    for (const p of ['/health/live', '/health/ready', '/health', '/api/health', '/api', '/v1', '/']) {
+      try {
+        const code = execSync(`docker run --rm --network ${net} curlimages/curl:latest -s -o /dev/null -w "%{http_code}" --max-time 5 http://app:${cport}${p}`, { timeout: 15000 }).toString().trim();
+        probed.push(`${p}→${code}`);
+        if (/^[234]/.test(code) || code === '401' || code === '403') {
+          checks.push({ name: 'landing', status: 'ok', detail: `first live route: ${p} (${code})${meta.homePath && meta.homePath !== p ? ` - open path set to ${meta.homePath}` : ''}` });
+          break;
+        }
+      } catch { probed.push(`${p}→unreachable`); }
+    }
+    if (!checks.some(c => c.name === 'landing')) {
+      checks.push({ name: 'landing', status: 'fail', detail: 'no route answers; probed: ' + probed.join(' ') });
+    }
+  } catch (e) { checks.push({ name: 'landing', status: 'warn', detail: 'probe failed: ' + e.message }); }
+  // log signature scan (app service only, secretes filtered by rules avoiding creds)
+  try {
+    const logs = await sh(`${COMPOSE_BIN} logs --tail=200 app`, dir).catch(() => '');
+    const hits = [];
+    for (const rule of LOG_RULES) {
+      if (rule.count) {
+        const n = (logs.match(rule.re) || []).length;
+        if (n > 3) hits.push({ level: rule.level, msg: `${n} error lines in recent logs - open Logs tab` });
+        continue;
+      }
+      const m = logs.match(rule.re);
+      if (m) hits.push({ level: rule.level, msg: rule.msg(m) });
+    }
+    checks.push(hits.length
+      ? { name: 'logs', status: hits.some(h => h.level === 'fail') ? 'fail' : 'warn', detail: hits.map(h => h.msg).join(' | ') }
+      : { name: 'logs', status: 'ok', detail: 'no known failure signatures in last 200 lines' });
+  } catch (e) { checks.push({ name: 'logs', status: 'warn', detail: 'could not read logs' }); }
+  const fails = checks.filter(c => c.status === 'fail').length;
+  const warns = checks.filter(c => c.status === 'warn').length;
+  res.json({ app: meta.id, checks, summary: fails ? `${fails} fail${warns ? `, ${warns} warn` : ''}` : (warns ? `${warns} warn` : 'all clear') });
 });
 
 app.post('/api/apps/:id/deploy', async (req, res) => {
