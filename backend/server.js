@@ -297,44 +297,50 @@ async function deploy(id) {
   // heal: static/react must ship our nginx.conf (SPA fallback, proxy when linked).
   // Only files WE seeded (marker headers) are ever refreshed - repo-owned files are sacred.
   // Proxy target comes from env (the link lives there), meta only migrates old links forward.
-  if (meta && (meta.type === 'static' || meta.type === 'react')) {
-    try {
-      const ctx = path.join(codeDir, meta.subdir || '');
+  // heal: every enabled static/react SERVICE gets a working nginx.conf.
+  // Only files WE seeded (marker headers) are ever refreshed - repo-owned files are sacred.
+  // The api link lands on its recorded service (or the first frontend); others stay plain.
+  try {
+    const services = svc.fullServices(meta || {}, dir);
+    const fronts = services.filter(s => (s.type === 'static' || s.type === 'react') && s.enabled !== false);
+    const envNow = parseEnvFile(path.join(dir, '.env'));
+    let proxy = null;
+    const ab = meta && meta.apiBackend;
+    if (ab && ab.app) {
+      const sib = services.find(s => s.name === ab.app.replace(/^svc:/, '') && s.enabled !== false);
+      if (sib) {
+        proxy = { host: sib.name, port: parseInt(sib.port, 10) || 3000 };
+      } else {
+        const t = load().apps.find(a => a.id === ab.app);
+        if (t && t.hostPort) proxy = { host: 'host.docker.internal', port: t.hostPort };
+      }
+      if (proxy && (envNow.API_PORT !== String(proxy.port) || envNow.API_HOST !== proxy.host)) {
+        envSetManaged(dir, { API_HOST: proxy.host, API_PORT: String(proxy.port) });
+      }
+    }
+    if (!proxy && envNow.API_HOST && envNow.API_PORT) proxy = { host: envNow.API_HOST, port: envNow.API_PORT };
+    const linkedSvc = (ab && ab.service) || (fronts[0] && fronts[0].name);
+    for (const f of fronts) {
+      const ctx = path.join(codeDir, f.subdir || '');
       const df = path.join(ctx, 'Dockerfile');
       if (fs.existsSync(df)) {
         const first = (fs.readFileSync(df, 'utf8').split('\n')[0] || '');
-        // our seeded templates only (both marker generations) - repo-owned files untouched
         if (first.includes('minipass template') || first.includes('build stage + serve')) {
-          const tplDf = path.join(TEMPLATES_DIR, meta.type, 'Dockerfile');
+          const tplDf = path.join(TEMPLATES_DIR, f.type, 'Dockerfile');
           if (fs.existsSync(tplDf)) fs.copyFileSync(tplDf, df);
         }
       }
-      const envNow = parseEnvFile(path.join(dir, '.env'));
-      // link record wins and re-syncs env (target may have been recreated on a new port);
-      // env-only values still work when no link record exists (hand-set vars survive).
-      let proxy = null;
-      const ab = meta.apiBackend;
-      if (ab && ab.app) {
-        const t = load().apps.find(a => a.id === ab.app);
-        if (t && t.hostPort) {
-          proxy = { host: 'host.docker.internal', port: t.hostPort };
-          if (envNow.API_PORT !== String(t.hostPort) || envNow.API_HOST !== proxy.host) {
-            envSetManaged(dir, { API_HOST: proxy.host, API_PORT: String(proxy.port) });
-          }
-        }
-      } else if (envNow.API_HOST && envNow.API_PORT) {
-        proxy = { host: envNow.API_HOST, port: envNow.API_PORT };
-      }
+      const wantProxy = linkedSvc === f.name ? proxy : null;
       const nc = path.join(ctx, 'nginx.conf');
       let cur = null;
       try { cur = fs.readFileSync(nc, 'utf8'); } catch {}
       if (cur === null) {
-        fs.writeFileSync(nc, nginxConf(proxy));
-      } else if (cur.includes('# minipass-managed') && (cur.includes('location /api/') !== !!proxy)) {
-        fs.writeFileSync(nc, nginxConf(proxy));
+        fs.writeFileSync(nc, nginxConf(wantProxy));
+      } else if (cur.includes('# minipass-managed') && (cur.includes('location /api/') !== !!wantProxy)) {
+        fs.writeFileSync(nc, nginxConf(wantProxy));
       }
-    } catch {}
-  }
+    }
+  } catch {}
   const sha = await currentSha(dir);
   const stamp = () => new Date().toISOString();
   try {
@@ -860,9 +866,17 @@ app.post('/api/apps/:id/api-backend', async (req, res) => {
     const db_ = load();
     const meta = db_.apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
-    if (!['static', 'react'].includes(meta.type)) return res.status(400).json({ error: 'api link is for static/react frontends' });
     const dir = appDir(APPS_DIR, meta.id);
-    const ctxDir = path.join(dir, 'code', meta.subdir || '');
+    if (!['static', 'react'].includes(meta.type) && !(svc.fullServices(meta, dir).some(s => (s.type === 'static' || s.type === 'react') && s.enabled !== false))) {
+      return res.status(400).json({ error: 'api link needs a static/react frontend service on this site' });
+    }
+    const frontName = (req.body && req.body.service) || null;
+    const all = svc.fullServices(meta, dir);
+    const front = frontName
+      ? all.find(s => s.name === frontName && (s.type === 'static' || s.type === 'react') && s.enabled !== false)
+      : all.find(s => (s.type === 'static' || s.type === 'react') && s.enabled !== false);
+    if (!front) return res.status(400).json({ error: 'no enabled static/react service to link from' });
+    const ctxDir = path.join(dir, 'code', front.subdir || '');
     const ymlPath = path.join(dir, 'docker-compose.yml');
     if (!fs.existsSync(ymlPath)) return res.status(400).json({ error: 'app has no compose file' });
     const target = (req.body && req.body.target) || null;
@@ -877,21 +891,35 @@ app.post('/api/apps/:id/api-backend', async (req, res) => {
       try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, unlinked: true, redeployError: e.message }); }
       return res.json({ ok: true, unlinked: true, redeployed: true });
     }
-    const t = db_.apps.find(a => a.id === target);
-    if (!t) return res.status(404).json({ error: 'unknown target app' });
-    if (t.id === meta.id) return res.status(400).json({ error: 'cannot link an app to itself' });
-    if (!t.hostPort) return res.status(400).json({ error: 'target has no published port' });
-    // the link IS these two env vars - the conf below renders from them
-    envSetManaged(dir, { API_HOST: 'host.docker.internal', API_PORT: String(t.hostPort) });
-    fs.writeFileSync(path.join(ctxDir, 'nginx.conf'), nginxConf({ host: 'host.docker.internal', port: t.hostPort }));
-    if (!/extra_hosts:/.test(yml)) {
-      yml = yml.replace(/(    env_file: \.env\n)/, '$1    extra_hosts:\n      - "host.docker.internal:host-gateway"\n');
+    // sibling service (same site, same private network) vs other site (via host gateway)
+    let proxy, label;
+    if (String(target).startsWith('svc:')) {
+      const sname = target.slice(4);
+      const list = svc.fullServices(meta, dir);
+      const s = list.find(x => x.name === sname && x.enabled !== false);
+      if (!s) return res.status(404).json({ error: 'unknown sibling service' });
+      if (s.name === front.name) return res.status(400).json({ error: 'cannot link a service to itself' });
+      proxy = { host: s.name, port: parseInt(s.port, 10) || 3000 };
+      label = s.name;
+    } else {
+      const t = db_.apps.find(a => a.id === target);
+      if (!t) return res.status(404).json({ error: 'unknown target app' });
+      if (t.id === meta.id) return res.status(400).json({ error: 'cannot link an app to itself' });
+      if (!t.hostPort) return res.status(400).json({ error: 'target has no published port' });
+      proxy = { host: 'host.docker.internal', port: t.hostPort };
+      label = t.id;
+      if (!/extra_hosts:/.test(yml)) {
+        yml = yml.replace(/(    env_file: \.env\n)/, '$1    extra_hosts:\n      - "host.docker.internal:host-gateway"\n');
+        fs.writeFileSync(ymlPath, yml);
+      }
     }
-    fs.writeFileSync(ymlPath, yml);
-    meta.apiBackend = { app: t.id, port: t.hostPort };
+    // the link IS these two env vars - the conf below renders from them
+    envSetManaged(dir, { API_HOST: proxy.host, API_PORT: String(proxy.port) });
+    fs.writeFileSync(path.join(ctxDir, 'nginx.conf'), nginxConf(proxy));
+    meta.apiBackend = { app: label, port: proxy.port, service: front.name };
     save(db_);
-    try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, linked: t.id, redeployError: e.message }); }
-    res.json({ ok: true, linked: t.id, redeployed: true });
+    try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, linked: label, redeployError: e.message }); }
+    res.json({ ok: true, linked: label, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/regenerate', (req, res) => {

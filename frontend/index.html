@@ -89,6 +89,7 @@
       <div class="card" id="apiCard" style="display:none">
         <b>api backend</b> <span class="meta" id="apiState"></span>
         <div class="meta">Same-origin <code>/api/*</code> → backend, like the vite dev proxy. Stored as <code>API_HOST</code>/<code>API_PORT</code> in this site's environment — one folder, one container, nothing shared.</div>
+        <div class="meta" id="apiSvcRow" style="display:none">frontend service: <select id="apiService"></select></div>
         <div class="meta"><select id="apiTarget"><option value="">— no link —</option></select>
         <button onclick="saveApiLink()">save</button></div>
       </div>

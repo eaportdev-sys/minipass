@@ -189,27 +189,50 @@ async function addDb() {
 }
 async function fillApiLink(a) {
   const card = document.getElementById('apiCard');
-  const isWeb = a.type === 'static' || a.type === 'react';
+  let services = [];
+  try {
+    const svcR = await (await fetch(`/api/apps/${a.id}/services`)).json();
+    services = svcR.services || [];
+  } catch {}
+  const fronts = services.filter(s => (s.type === 'static' || s.type === 'react') && s.enabled !== false);
+  const isWeb = a.type === 'static' || a.type === 'react' || fronts.length > 0;
   card.style.display = isWeb ? 'block' : 'none';
   if (!isWeb) return;
+  const ab = a.apiBackend || {};
   const state = document.getElementById('apiState');
-  state.textContent = (a.apiBackend && a.apiBackend.app) ? `linked → ${a.apiBackend.app} (:${a.apiBackend.port})` : 'not linked';
+  state.textContent = ab.app ? `linked → ${ab.app} (:${ab.port})` : 'not linked';
+  const svcRow = document.getElementById('apiSvcRow');
+  if (fronts.length > 1) {
+    svcRow.style.display = 'block';
+    const sel = document.getElementById('apiService');
+    const prev = ab.service || fronts[0].name;
+    sel.innerHTML = fronts.map(s => `<option value="${s.name}">${s.name} (${s.subdir || 'root'})</option>`).join('');
+    if (fronts.some(s => s.name === prev)) sel.value = prev;
+  } else svcRow.style.display = 'none';
   try {
     const apps = await (await fetch('/api/apps')).json();
+    const sibs = services.filter(s => s.name !== 'app' && s.hostPort && (s.enabled !== false));
+    const others = apps.filter(x => x.id !== a.id && x.hostPort);
     const sel = document.getElementById('apiTarget');
-    const prev = (a.apiBackend && a.apiBackend.app) || '';
-    sel.innerHTML = '<option value="">— no link —</option>' + apps
-      .filter(x => x.id !== a.id && x.hostPort)
-      .map(x => `<option value="${x.id}">${x.id} (:${x.hostPort})</option>`).join('');
-    sel.value = [...sel.options].some(o => o.value === prev) ? prev : '';
+    const prev = ab.app || '';
+    let html = '<option value="">— no link —</option>';
+    if (sibs.length) html += `<optgroup label="this site">` + sibs.map(s => `<option value="svc:${s.name}">${s.name} (:${s.hostPort})</option>`).join('') + '</optgroup>';
+    if (others.length) html += `<optgroup label="other sites">` + others.map(x => `<option value="${x.id}">${x.id} (:${x.hostPort})</option>`).join('') + '</optgroup>';
+    sel.innerHTML = html;
+    const prevSib = prev.replace(/^svc:/, '');
+    if (sibs.some(s => s.name === prevSib)) sel.value = 'svc:' + prevSib;
+    else if (others.some(x => x.id === prev)) sel.value = prev;
+    else sel.value = '';
   } catch {}
 }
 async function saveApiLink() {
   if (!currentApp) return;
   const target = document.getElementById('apiTarget').value || null;
+  const svcRow = document.getElementById('apiSvcRow');
+  const service = (svcRow.style.display !== 'none' && document.getElementById('apiService').value) || undefined;
   toast((target ? 'linking to ' + target : 'unlinking') + ' + redeploying…');
   try {
-    const r = await (await fetch(`/api/apps/${currentApp}/api-backend`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target }) })).json();
+    const r = await (await fetch(`/api/apps/${currentApp}/api-backend`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target, service }) })).json();
     toast(r.ok ? 'api link saved' : (r.error || 'failed'), !!r.ok);
     refresh();
   } catch (e) { toast('failed: ' + e.message, false); }
