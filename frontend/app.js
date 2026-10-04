@@ -75,7 +75,7 @@ function fillSiteHeader(a) {
   if (!a) return;
   document.getElementById('siteName').textContent = a.id;
   document.getElementById('siteBadges').innerHTML =
-    `<span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}${a.hostPort ? `<span class="badge">:${a.hostPort}</span>` : ''}${a.github ? `<span class="badge">git: ${a.github.login ? a.github.login + '/' : ''}${a.github.repo}</span>` : ''}`;
+    `<span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}${a.hostPort ? `<span class="badge">:${a.hostPort}</span>` : ''}${a.subdir ? `<span class="badge">/${a.subdir}</span>` : ''}${a.github ? `<span class="badge">git: ${a.github.login ? a.github.login + '/' : ''}${a.github.repo}</span>` : ''}`;
   document.getElementById('siteMeta').innerHTML =
     `${appUrl(a) ? `local: <a href="${appUrl(a)}" target="_blank">${appUrl(a).replace(/^http:\/\//, '')}</a><br>` : ''}
     webhook: <code>POST /webhook/${a.id}?token=${a.token}</code>`;
@@ -203,7 +203,8 @@ async function createApp() {
   const access = accessEl ? accessEl.value : 'local';
   const body = {
     name: v('name'), type: typeEl ? typeEl.value : 'static', dbs,
-    repoUrl: v('repo'), domain: access === 'domain' ? v('domain') : ''
+    repoUrl: v('repo'), domain: access === 'domain' ? v('domain') : '',
+    subdir: v('subdir')
   };
   // site-owned connection: fresh token travels with this build only
   const ghSel = document.getElementById('ghrepo');
@@ -245,7 +246,17 @@ async function detectType() {
     } else {
       toast((r.detected ? r.detected + ' has no template yet. ' : 'could not detect type. ') + (r.reason || r.error || ''), false);
     }
+    const hint = document.getElementById('subdirHint');
+    if (r.frontends && r.frontends.length) {
+      hint.style.display = 'block';
+      hint.innerHTML = 'frontend folder(s) in this repo: ' + r.frontends.map(f =>
+        `<button onclick="setSubdir('${f}')">${f}</button>`).join(' ') + ' — build one as its own site';
+    } else hint.style.display = 'none';
   } catch {}
+}
+function setSubdir(f) {
+  document.getElementById('subdir').value = f;
+  toast('building subfolder ' + f + ' — set type to react/static for it');
 }
 async function ghStatus() {
   try {
@@ -335,6 +346,8 @@ function openCreate() {
   document.querySelector('input[name=apptype][value=static]').checked = true;
   document.querySelectorAll('input[name=appdb]').forEach(c => { c.checked = false; });
   document.getElementById('ghModalToken').value = '';
+  document.getElementById('subdir').value = '';
+  document.getElementById('subdirHint').style.display = 'none';
   document.getElementById('ghrepo').innerHTML = '<option value="">GitHub repo…</option>';
   document.getElementById('ghRepoRow').style.display = 'none';
   document.getElementById('ghConnectRow').style.display = 'block';

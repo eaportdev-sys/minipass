@@ -174,9 +174,10 @@ app.post('/api/apps', async (req, res) => {
       else siteToken = null;
     }
     const dbs = normDbs(req.body.dbs !== undefined ? req.body.dbs : db);
-    createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain, hostPort, gitToken: siteToken });
+    const subdir = String(req.body.subdir || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '') || '';
+    const created = createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain, hostPort, gitToken: siteToken, subdir });
     const db_ = load();
-    const meta = { id, type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: domain || '', token, hostPort, createdAt: new Date().toISOString() };
+    const meta = { id, type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: domain || '', token, hostPort, subdir: created.subdir || '', createdAt: new Date().toISOString() };
     db_.apps = db_.apps.filter(a => a.id !== id).concat([meta]);
     save(db_);
     // auto webhook for site-token links (best effort - needs PANEL_URL reachable)
@@ -503,7 +504,17 @@ async function detectRepo(repo, { login, token } = {}) {
     } catch {}
   }
   const { decideType } = require('./lib/detect');
-  return decideType(tree, pkg);
+  const out = decideType(tree, pkg);
+  // monorepo frontend folders (depth <= 2) with their own vite setup
+  out.frontends = [];
+  for (const p of tree) {
+    const fm = p.match(/^(.+)\/package\.json$/);
+    if (fm && fm[1].split('/').length <= 2 &&
+        (tree.includes(`${fm[1]}/vite.config.js`) || tree.includes(`${fm[1]}/vite.config.ts`) || tree.includes(`${fm[1]}/vite.config.mjs`))) {
+      if (!out.frontends.includes(fm[1])) out.frontends.push(fm[1]);
+    }
+  }
+  return out;
 }
 app.get('/api/github/detect', async (req, res) => {
   try { res.json({ ...(await detectRepo(req.query.repo, { login: req.query.login })), via: 'account' }); }

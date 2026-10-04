@@ -12,7 +12,7 @@ const DB_IMAGES = {
 };
 
 // Default in-container port per type
-const TYPE_PORT = { node: 3000, react: 3000, php: 80, static: 80 };
+const TYPE_PORT = { node: 3000, react: 80, php: 80, static: 80 };
 const VALID_DBS = ['postgres', 'mysql', 'mongo', 'redis'];
 
 function normDbs(db) {
@@ -82,7 +82,7 @@ function dbService(db, name, svc, vol) {
   return { lines: [], compose: '', vol, url: null, info: null };
 }
 
-function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', port, domain, hostPort, gitToken }) {
+function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', port, domain, hostPort, gitToken, subdir }) {
   const dir = appDir(appsDir, name);
   // resume allowed when a previous create died before writing compose (keys preserved)
   const resume = fs.existsSync(dir) && !fs.existsSync(path.join(dir, 'docker-compose.yml'));
@@ -151,9 +151,27 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   fs.writeFileSync(path.join(dir, '.env'), envLines.join('\n') + '\n');
 
   // 3. docker-compose.yml per app (ports: reachable via localhost + tunnel; expose: inter-container)
-  const compose = `services:\n  app:\n    build: ./code\n    restart: unless-stopped\n    env_file: .env\n    ports:\n      - "${host}:${appPort}"\n    expose:\n      - "${appPort}"\n${dbBlock}${volBlock}\n`;
+  // monorepo: build a subfolder, seeding the type template Dockerfile when the folder lacks one.
+  // Only applies to cloned repos - template starters have no subfolders, ignore it there.
+  let buildYaml = '    build: ./code\n';
+  let sub = String(subdir || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '');
+  if (sub && !fs.existsSync(path.join(dir, 'code', sub))) sub = '';
+  if (sub) {
+    const tpl = path.join(templatesDir, type);
+    for (const f of ['Dockerfile', 'nginx.conf']) {
+      const dst = path.join(dir, 'code', sub, f);
+      try {
+        if (!fs.existsSync(dst) && fs.existsSync(path.join(tpl, f))) {
+          fs.mkdirSync(path.dirname(dst), { recursive: true });
+          fs.copyFileSync(path.join(tpl, f), dst);
+        }
+      } catch {}
+    }
+    buildYaml = `    build:\n      context: ./code/${sub}\n      dockerfile: Dockerfile\n`;
+  }
+  const compose = `services:\n  app:\n${buildYaml}    restart: unless-stopped\n    env_file: .env\n    ports:\n      - "${host}:${appPort}"\n    expose:\n      - "${appPort}"\n${dbBlock}${volBlock}\n`;
   fs.writeFileSync(path.join(dir, 'docker-compose.yml'), compose);
-  return { dir, appPort, hostPort: host };
+  return { dir, appPort, hostPort: host, subdir: sub };
 }
 
 module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbService, DB_IMAGES };
