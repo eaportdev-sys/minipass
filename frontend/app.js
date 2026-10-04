@@ -99,8 +99,8 @@ function fillSiteHeader(a) {
   const box = document.getElementById('localGitBox');
   if (a.localGit) {
     const remote = `root@${location.hostname}:/srv/apps/${a.id}/repo.git`;
-    box.innerHTML = `<code id="localRemote">${remote}</code> <button onclick="copyLocal()">copy</button>` +
-      `<div class="meta">on your machine:<br><code>git remote add minipass ${remote}</code><br><code>git push minipass main</code> (or master)</div>`;
+    box.innerHTML = `<div class="meta">Push from GitHub<br>Get update from Git Repo over SSH</div>` +
+      `<div class="meta"><code>git push minipass main</code> (or master)<br>on your machine:<br><code>git remote add minipass <span id="localRemote">${remote}</span></code> <button onclick="copyLocal()">copy</button></div>`;
   } else {
     box.innerHTML = `<button onclick="initLocalGit()">enable local git push</button>`;
   }
