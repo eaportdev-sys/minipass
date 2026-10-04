@@ -558,6 +558,15 @@ app.get('/api/apps/:id/doctor', async (req, res) => {
       ? { name: 'logs', status: hits.some(h => h.level === 'fail') ? 'fail' : 'warn', detail: hits.map(h => h.msg).join(' | ') }
       : { name: 'logs', status: 'ok', detail: 'no known failure signatures in last 200 lines' });
   } catch (e) { checks.push({ name: 'logs', status: 'warn', detail: 'could not read logs' }); }
+  // env-needs: vars the repo code reads but .env doesn't set (read-only scan)
+  try {
+    const need = scanEnvNeeds(dir);
+    const have = new Set(readEnvVars(path.join(dir, '.env')).map(v => v.key));
+    const missing = need.filter(k => !have.has(k));
+    if (!need.length) checks.push({ name: 'env-needs', status: 'ok', detail: 'no env references found in code' });
+    else if (!missing.length) checks.push({ name: 'env-needs', status: 'ok', detail: `all ${need.length} code-referenced var${need.length === 1 ? '' : 's'} set` });
+    else checks.push({ name: 'env-needs', status: 'fail', detail: `code reads ${missing.length} unset var${missing.length === 1 ? '' : 's'}: ${missing.slice(0, 12).join(', ')}${missing.length > 12 ? '…' : ''} — add via environment card` });
+  } catch (e) { checks.push({ name: 'env-needs', status: 'warn', detail: 'scan failed' }); }
   const fails = checks.filter(c => c.status === 'fail').length;
   const warns = checks.filter(c => c.status === 'warn').length;
   res.json({ app: meta.id, checks, summary: fails ? `${fails} fail${warns ? `, ${warns} warn` : ''}` : (warns ? `${warns} warn` : 'all clear') });
@@ -1116,6 +1125,67 @@ app.post('/api/apps/:id/start', async (req, res) => {
   try { await sh(`${COMPOSE_BIN} up -d`, appDir(APPS_DIR, req.params.id)); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
+// Static env-need scan: which vars the repo code actually reads, so missing
+// declarations in .env/.env.example surface before runtime. Read-only, key
+// names only - never values. Caps files/size/depth to stay fast.
+const ENV_SCAN_SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'vendor', '__pycache__', '.venv', 'venv']);
+const ENV_SCAN_NOISE = new Set(['PATH', 'HOME', 'USER', 'SHELL', 'PWD', 'OLDPWD', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP', 'TMP', 'NODE_PATH']);
+function scanEnvNeeds(dir) {
+  const codeDir = path.join(dir, 'code');
+  const files = [];
+  const walk = (d, depth) => {
+    if (depth > 4 || files.length > 300) return;
+    let entries = [];
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (files.length > 300) return;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { if (!ENV_SCAN_SKIP_DIRS.has(e.name)) walk(p, depth + 1); }
+      else if (e.isFile()) {
+        if (e.name === '.env' || e.name === '.env.example') continue;
+        if (/\.(js|ts|jsx|tsx|mjs|cjs|php|py)$/.test(e.name)) {
+          try { if (fs.statSync(p).size > 200 * 1024) continue; } catch { continue; }
+          files.push(p);
+        }
+      }
+    }
+  };
+  walk(codeDir, 0);
+  const pats = [
+    /process\.env\.([A-Za-z_][A-Za-z0-9_]*)/g,
+    /process\.env\[\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\]/g,
+    /getenv\(\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\)/g,
+    /\$_(?:ENV|SERVER)\[\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\]/g,
+    /os\.environ(?:\.get)?\(\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\)/g,
+    /os\.getenv\(\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\)/g
+  ];
+  const found = new Set();
+  for (const f of files) {
+    let text = '';
+    try { text = fs.readFileSync(f, 'utf8'); } catch { continue; }
+    for (const re of pats) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(text)) && found.size < 50) {
+        const k = m[1];
+        if (k && !ENV_SCAN_NOISE.has(k)) found.add(k);
+      }
+    }
+    if (found.size >= 50) break;
+  }
+  return [...found].sort();
+}
+// Sensible self-generated defaults: values the panel can compute without asking.
+// Only added when missing, never overwrite, editable/deletable like any custom key.
+function suggestedDefaults(meta) {
+  const host = meta.hostPort || 8000;
+  return {
+    NODE_ENV: 'production',
+    HOST: '0.0.0.0',
+    TRUST_PROXY: '1',
+    CORS_ORIGIN: `http://localhost:${host}`
+  };
+}
 // Environment editor: custom keys editable, managed keys (ports, generated creds)
 // locked. POST redeploys so containers pick the new env up.
 function readEnvVars(envPath) {
@@ -1226,6 +1296,27 @@ app.put('/api/apps/:id/env', async (req, res) => {
     if (!(req.body && req.body.apply === true)) return res.json({ ok: true, saved: true, skipped: skippedAll, pending: true });
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, saved: true, skipped: skippedAll, redeployError: e.message }); }
     res.json({ ok: true, saved: true, skipped: skippedAll, redeployed: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/apps/:id/env/defaults', async (req, res) => {
+  try {
+    const meta = load().apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const dir = appDir(APPS_DIR, meta.id);
+    const allowed = suggestedDefaults(meta);
+    const asked = Array.isArray(req.body && req.body.keys) && req.body.keys.length
+      ? req.body.keys.filter(k => Object.prototype.hasOwnProperty.call(allowed, k))
+      : Object.keys(allowed);
+    const have = new Set(readEnvVars(path.join(dir, '.env')).map(v => v.key));
+    const add = {};
+    for (const k of asked) if (!have.has(k)) add[k] = allowed[k];
+    if (!Object.keys(add).length) return res.json({ ok: true, added: [], pending: true });
+    let arr = [];
+    try { arr = fs.readFileSync(path.join(dir, '.env'), 'utf8').split('\n'); } catch {}
+    for (const [k, v] of Object.entries(add)) arr.push(`${k}=${v}`);
+    fs.writeFileSync(path.join(dir, '.env'), arr.join('\n').replace(/\s*$/, '') + '\n');
+    await markDirty(meta.id, 'env defaults added');
+    res.json({ ok: true, added: Object.keys(add), pending: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/apps/:id', async (req, res) => {

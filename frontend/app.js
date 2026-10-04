@@ -129,11 +129,18 @@ async function loadEnv() {
   try {
     const r = await (await fetch(`/api/apps/${currentApp}/env`)).json();
     if (r.error) { box.innerHTML = '<div class="meta">' + r.error + '</div>'; return; }
-    box.innerHTML = (r.vars || []).map(v =>
-      `<div class="meta"><code>${v.key}</code>${v.managed ? ' <span class="badge">managed</span>' : ''} ` +
+    box.innerHTML = (r.vars || []).map(v => {
+      if (v.key === 'NODE_ENV' && !v.managed) {
+        const cur = String(v.value).trim();
+        return `<div class="meta"><code>${v.key}</code> ` +
+        `<select data-envkey="${v.key}"><option value="development"${cur === 'development' ? ' selected' : ''}>development</option><option value="production"${cur === 'production' ? ' selected' : ''}>production</option></select> ` +
+        `<button onclick="envDel('${v.key}')">delete</button></div>`;
+      }
+      return `<div class="meta"><code>${v.key}</code>${v.managed ? ' <span class="badge">managed</span>' : ''} ` +
       `<input id="envi-${v.key}" data-envkey="${v.key}" type="password" value="${String(v.value).replace(/"/g, '&quot;')}" style="width:260px"> ` +
       `<button onclick="toggleEnv('${v.key}', this)">show</button> ` +
-      `<button onclick="envDel('${v.key}')">delete</button></div>`).join('') || '<div class="meta">(empty env)</div>';
+      `<button onclick="envDel('${v.key}')">delete</button></div>`;
+    }).join('') || '<div class="meta">(empty env)</div>';
   } catch { box.innerHTML = '<div class="meta">load failed</div>'; }
 }
 function toggleEnv(key, btn) {
@@ -146,11 +153,21 @@ function toggleEnv(key, btn) {
 async function saveEnv() {
   if (!currentApp) return;
   const set = {};
-  document.querySelectorAll('#envList input[data-envkey]').forEach(i => { set[i.dataset.envkey] = i.value; });
+  document.querySelectorAll('#envList [data-envkey]').forEach(i => { set[i.dataset.envkey] = i.value; });
   document.getElementById('envOut').textContent = 'saving… (redeploy to apply)';
   try {
     const r = await (await fetch(`/api/apps/${currentApp}/env`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ set }) })).json();
     document.getElementById('envOut').textContent = JSON.stringify(r, null, 2);
+    loadEnv(); refresh(); loadServices();
+  } catch (e) { document.getElementById('envOut').textContent = 'failed: ' + e.message; }
+}
+async function fillEnvDefaults() {
+  if (!currentApp) return;
+  document.getElementById('envOut').textContent = 'adding defaults… (redeploy to apply)';
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/env/defaults`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+    document.getElementById('envOut').textContent = JSON.stringify(r, null, 2);
+    toast(r.ok ? (r.added && r.added.length ? ('defaults added: ' + r.added.join(', ') + ' - redeploy to apply') : 'defaults already present') : (r.error || 'failed'), !!r.ok);
     loadEnv(); refresh(); loadServices();
   } catch (e) { document.getElementById('envOut').textContent = 'failed: ' + e.message; }
 }

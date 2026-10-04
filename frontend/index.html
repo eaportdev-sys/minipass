@@ -83,7 +83,7 @@
         <div id="envList"></div>
         <div class="meta"><input id="envKey" placeholder="KEY" style="width:140px"> <input id="envVal" placeholder="value" style="width:220px">
         <button onclick="envAdd()">add</button> <button onclick="loadEnv()">reload</button></div>
-        <div class="actions"><button class="btn primary" onclick="saveEnv()">save all</button> <button onclick="envDownload(false)">download .env</button> <button onclick="envDownload(true)">download .env.example</button></div>
+        <div class="actions"><button class="btn primary" onclick="saveEnv()">save all</button> <button onclick="fillEnvDefaults()">add defaults</button> <button onclick="envDownload(false)">download .env</button> <button onclick="envDownload(true)">download .env.example</button></div>
         <pre id="envOut"></pre>
       </div>
       <div class="card" id="apiCard" style="display:none">
