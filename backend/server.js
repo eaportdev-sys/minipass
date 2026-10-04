@@ -731,6 +731,9 @@ app.post('/api/apps/:id/db', async (req, res) => {
     } catch {}
     const fresh = b.lines.filter(l => !have.has(l.split('=')[0]));
     fs.writeFileSync(envPath, envText.replace(/\s*$/, '') + '\n' + fresh.join('\n') + '\n');
+    try {
+      fs.appendFileSync(path.join(dir, '.env.managed'), fresh.map(l => l.split('=')[0]).join('\n') + '\n');
+    } catch {}
     meta.db = [...current, type];
     save(db_);
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, added: type, redeployError: e.message }); }
@@ -813,6 +816,72 @@ app.post('/api/apps/:id/stop', async (req, res) => {
 app.post('/api/apps/:id/start', async (req, res) => {
   try { await sh(`${COMPOSE_BIN} up -d`, appDir(APPS_DIR, req.params.id)); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Environment editor: custom keys editable, managed keys (ports, generated creds)
+// locked. POST redeploys so containers pick the new env up.
+function readEnvVars(envPath) {
+  const vars = [];
+  try {
+    for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s?(.*)$/);
+      if (m) vars.push({ key: m[1], value: m[2] });
+    }
+  } catch {}
+  return vars;
+}
+function managedKeys(dir) {
+  try {
+    return new Set(fs.readFileSync(path.join(dir, '.env.managed'), 'utf8').split('\n').map(s => s.trim()).filter(Boolean));
+  } catch { return new Set(); }
+}
+app.get('/api/apps/:id/env', (req, res) => {
+  const meta = load().apps.find(a => a.id === req.params.id);
+  if (!meta) return res.status(404).json({ error: 'unknown app' });
+  const managed = managedKeys(appDir(APPS_DIR, meta.id));
+  res.json({ vars: readEnvVars(path.join(appDir(APPS_DIR, meta.id), '.env')).map(v => ({ ...v, managed: managed.has(v.key) })) });
+});
+app.put('/api/apps/:id/env', async (req, res) => {
+  const validKey = k => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k);
+  try {
+    const meta = load().apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const dir = appDir(APPS_DIR, meta.id);
+    const managed = managedKeys(dir);
+    // managed keys are infrastructure (ports, hosts, generated creds) - read-only,
+    // except DOMAIN which is display/future-tunnel metadata. Deleting them is refused too.
+    const EDITABLE = new Set(['DOMAIN']);
+    const set = (req.body && req.body.set) || {};
+    const del = (req.body && req.body.delete) || [];
+    for (const k of Object.keys(set)) {
+      if (!validKey(k)) return res.status(400).json({ error: 'bad key name: ' + k });
+    }
+    for (const k of Object.keys(set)) {
+      if (!validKey(k)) return res.status(400).json({ error: 'bad key name: ' + k });
+    }
+    let raw = '';
+    try { raw = fs.readFileSync(path.join(dir, '.env'), 'utf8'); } catch {}
+    let arr = raw.split('\n');
+    const skipped = del.filter(k => managed.has(k));
+    const delSet = new Set(del.filter(k => !managed.has(k)));
+    const lockedSet = Object.keys(set).filter(k => managed.has(k) && !EDITABLE.has(k));
+    for (const k of lockedSet) delete set[k];
+    if (delSet.size) {
+      arr = arr.filter(l => {
+        const m = l.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+        return !(m && delSet.has(m[1]));
+      });
+    }
+    for (const [k, vv] of Object.entries(set)) {
+      const clean = String(vv == null ? '' : vv).replace(/[\r\n]/g, '');
+      const i = arr.findIndex(l => new RegExp(`^\\s*${k}\\s*=`).test(l));
+      if (i >= 0) arr[i] = `${k}=${clean}`;
+      else arr.push(`${k}=${clean}`);
+    }
+    fs.writeFileSync(path.join(dir, '.env'), arr.join('\n').replace(/\s*$/, '') + '\n');
+    const skippedAll = [...new Set([...skipped, ...lockedSet])];
+    try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, saved: true, skipped: skippedAll, redeployError: e.message }); }
+    res.json({ ok: true, saved: true, skipped: skippedAll, redeployed: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/apps/:id', async (req, res) => {
   try {

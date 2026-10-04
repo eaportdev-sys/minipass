@@ -235,6 +235,10 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
     `DOMAIN=${domain || ''}`, ...extraLines
   ];
   fs.writeFileSync(path.join(dir, '.env'), envLines.join('\n') + '\n');
+  // track managed keys so the env editor knows what's safe to delete
+  try {
+    fs.writeFileSync(path.join(dir, '.env.managed'), envLines.map(l => l.split('=')[0]).join('\n') + '\n');
+  } catch {}
   // seed app-specific keys from the repo's .env.example (never overwrite generated)
   try {
     const exDir = sub ? path.join(dir, 'code', sub) : path.join(dir, 'code');

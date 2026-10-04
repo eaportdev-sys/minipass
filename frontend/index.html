@@ -69,6 +69,14 @@
           <button onclick="addDb()">add database</button></div>
         <pre id="dbOut"></pre>
       </div>
+      <div class="card">
+        <b>environment</b> <span class="meta">managed keys are locked — custom keys editable, changes redeploy</span>
+        <div id="envList"></div>
+        <div class="meta"><input id="envKey" placeholder="KEY" style="width:140px"> <input id="envVal" placeholder="value" style="width:220px">
+        <button onclick="envAdd()">add + redeploy</button> <button onclick="loadEnv()">reload</button></div>
+        <div class="actions"><button class="btn primary" onclick="saveEnv()">save all + redeploy</button></div>
+        <pre id="envOut"></pre>
+      </div>
       <div class="card" id="apiCard" style="display:none">
         <b>api backend</b> <span class="meta" id="apiState"></span>
         <div class="meta">Same-origin <code>/api/*</code> → backend, like the vite dev proxy. Pick the site serving the API:</div>

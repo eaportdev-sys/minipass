@@ -22,7 +22,7 @@ function openSite(id) {
   document.getElementById('filePath').value = '';
   document.getElementById('fileEdit').value = '';
   document.getElementById('fileOut').textContent = '';
-  refresh().then(() => { showSiteTab('files'); loadDeployStatus(); });
+  refresh().then(() => { showSiteTab('files'); loadDeployStatus(); loadEnv(); });
 }
 function appUrl(a) {
   if (!a.hostPort) return null;
@@ -114,6 +114,51 @@ async function initLocalGit() {
 }
 async function copyHook() {
   try { await navigator.clipboard.writeText(document.getElementById('hookUrl').textContent); } catch {}
+}
+async function loadEnv() {
+  if (!currentApp) return;
+  const box = document.getElementById('envList');
+  box.innerHTML = '<div class="meta">loading…</div>';
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/env`)).json();
+    if (r.error) { box.innerHTML = '<div class="meta">' + r.error + '</div>'; return; }
+    box.innerHTML = (r.vars || []).map(v =>
+      `<div class="meta"><code>${v.key}</code> ` +
+      ((v.managed && v.key !== 'DOMAIN')
+        ? `<span class="badge">managed</span> <code>${String(v.value).slice(0, 4)}…</code>`
+        : `<input data-envkey="${v.key}" value="${String(v.value).replace(/"/g, '&quot;')}" style="width:260px">${v.managed ? '' : ` <button onclick="envDel('${v.key}')">delete</button>`}`) +
+      `</div>`).join('') || '<div class="meta">(empty env)</div>';
+  } catch { box.innerHTML = '<div class="meta">load failed</div>'; }
+}
+async function saveEnv() {
+  if (!currentApp) return;
+  const set = {};
+  document.querySelectorAll('#envList input[data-envkey]').forEach(i => { set[i.dataset.envkey] = i.value; });
+  document.getElementById('envOut').textContent = 'saving + redeploying…';
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/env`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ set }) })).json();
+    document.getElementById('envOut').textContent = JSON.stringify(r, null, 2);
+    loadEnv();
+  } catch (e) { document.getElementById('envOut').textContent = 'failed: ' + e.message; }
+}
+async function envAdd() {
+  if (!currentApp) return;
+  const k = document.getElementById('envKey').value.trim();
+  const v = document.getElementById('envVal').value;
+  if (!k) return;
+  const r = await (await fetch(`/api/apps/${currentApp}/env`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ set: { [k]: v } }) })).json();
+  document.getElementById('envOut').textContent = JSON.stringify(r, null, 2);
+  document.getElementById('envKey').value = '';
+  document.getElementById('envVal').value = '';
+  loadEnv();
+}
+async function envDel(key) {
+  if (!currentApp) return;
+  const ok = await uiConfirm({ title: 'Delete ' + key + '?', body: 'From ' + currentApp + '. Redeploys after.', confirmLabel: 'Delete', danger: true });
+  if (!ok) return;
+  const r = await (await fetch(`/api/apps/${currentApp}/env`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ delete: [key] }) })).json();
+  document.getElementById('envOut').textContent = JSON.stringify(r, null, 2);
+  loadEnv();
 }
 async function addDb() {
   if (!currentApp) return;
