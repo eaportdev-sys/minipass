@@ -341,6 +341,20 @@ async function deploy(id) {
       }
     }
   } catch {}
+  // auto-link: exactly one backend sibling + frontend(s) present and no explicit
+  // choice on record = wire it. Manual unlink sets apiLinkOff so this never fights back.
+  try {
+    const autoSvcs = svc.fullServices(meta, dir);
+    const autoFronts = autoSvcs.filter(s => (s.type === 'static' || s.type === 'react') && s.enabled !== false);
+    const autoBacks = autoSvcs.filter(s => s.type !== 'static' && s.type !== 'react' && s.enabled !== false);
+    if (!meta.apiBackend && !meta.apiLinkOff && autoFronts.length >= 1 && autoBacks.length === 1) {
+      const b = autoBacks[0];
+      meta.apiBackend = { app: b.name, port: parseInt(b.port, 10) || 3000, auto: true };
+      const dbAuto = load();
+      const mAuto = dbAuto.apps.find(a => a.id === id);
+      if (mAuto) { mAuto.apiBackend = meta.apiBackend; save(dbAuto); }
+    }
+  } catch {}
   const sha = await currentSha(dir);
   const stamp = () => new Date().toISOString();
   try {
@@ -879,6 +893,16 @@ app.post('/api/apps/:id/db', async (req, res) => {
 // Frontend -> backend wiring: a static/react site proxies same-origin /api/ to another
 // app (mirrors the vite dev proxy). Reaches the target through the host gateway, so no
 // shared networks and no changes to the target app are needed.
+app.post('/api/apps/:id/allow-backend', (req, res) => {
+  try {
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    meta.allowBackend = !(req.body && req.body.allow === false);
+    save(db_);
+    res.json({ ok: true, allowBackend: !!meta.allowBackend });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.post('/api/apps/:id/api-backend', async (req, res) => {
   try {
     const db_ = load();
@@ -905,6 +929,7 @@ app.post('/api/apps/:id/api-backend', async (req, res) => {
       yml = yml.replace(/\n    extra_hosts:\n      - "host\.docker\.internal:host-gateway"\n/, '\n');
       fs.writeFileSync(ymlPath, yml);
       meta.apiBackend = null;
+      meta.apiLinkOff = true;
       save(db_);
       try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, unlinked: true, redeployError: e.message }); }
       return res.json({ ok: true, unlinked: true, redeployed: true });
@@ -923,6 +948,7 @@ app.post('/api/apps/:id/api-backend', async (req, res) => {
       const t = db_.apps.find(a => a.id === target);
       if (!t) return res.status(404).json({ error: 'unknown target app' });
       if (t.id === meta.id) return res.status(400).json({ error: 'cannot link an app to itself' });
+      if (!t.allowBackend) return res.status(400).json({ error: `${t.id} has not opted in as an API backend` });
       if (!t.hostPort) return res.status(400).json({ error: 'target has no published port' });
       proxy = { host: 'host.docker.internal', port: t.hostPort };
       label = t.id;
@@ -935,6 +961,7 @@ app.post('/api/apps/:id/api-backend', async (req, res) => {
     envSetManaged(dir, { API_HOST: proxy.host, API_PORT: String(proxy.port) });
     fs.writeFileSync(path.join(ctxDir, 'nginx.conf'), nginxConf(proxy));
     meta.apiBackend = { app: label, port: proxy.port, service: front.name };
+    delete meta.apiLinkOff;
     save(db_);
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, linked: label, redeployError: e.message }); }
     res.json({ ok: true, linked: label, redeployed: true });

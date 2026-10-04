@@ -197,10 +197,11 @@ async function fillApiLink(a) {
   const fronts = services.filter(s => (s.type === 'static' || s.type === 'react') && s.enabled !== false);
   const isWeb = a.type === 'static' || a.type === 'react' || fronts.length > 0;
   card.style.display = isWeb ? 'block' : 'none';
+  document.getElementById('allowBackend').value = a.allowBackend ? '1' : '0';
   if (!isWeb) return;
   const ab = a.apiBackend || {};
   const state = document.getElementById('apiState');
-  state.textContent = ab.app ? `linked → ${ab.app} (:${ab.port})` : 'not linked';
+  state.textContent = ab.app ? `${ab.auto ? 'auto-linked' : 'linked'} → ${ab.app} (:${ab.port})` : 'not linked';
   const svcRow = document.getElementById('apiSvcRow');
   if (fronts.length > 1) {
     svcRow.style.display = 'block';
@@ -212,7 +213,7 @@ async function fillApiLink(a) {
   try {
     const apps = await (await fetch('/api/apps')).json();
     const sibs = services.filter(s => s.name !== 'app' && s.hostPort && (s.enabled !== false));
-    const others = apps.filter(x => x.id !== a.id && x.hostPort);
+    const others = apps.filter(x => x.id !== a.id && x.hostPort && x.allowBackend);
     const sel = document.getElementById('apiTarget');
     const prev = ab.app || '';
     let html = '<option value="">— no link —</option>';
@@ -223,6 +224,9 @@ async function fillApiLink(a) {
     if (sibs.some(s => s.name === prevSib)) sel.value = 'svc:' + prevSib;
     else if (others.some(x => x.id === prev)) sel.value = prev;
     else sel.value = '';
+    if (prev && !sibs.some(s => s.name === prevSib) && !others.some(x => x.id === prev)) {
+      state.textContent += ' — legacy cross-site link (target has not opted in)';
+    }
   } catch {}
 }
 async function saveApiLink() {
@@ -236,6 +240,12 @@ async function saveApiLink() {
     toast(r.ok ? 'api link saved' : (r.error || 'failed'), !!r.ok);
     refresh();
   } catch (e) { toast('failed: ' + e.message, false); }
+}
+async function saveAllow() {
+  if (!currentApp) return;
+  const allow = document.getElementById('allowBackend').value === '1';
+  const r = await (await fetch(`/api/apps/${currentApp}/allow-backend`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ allow }) })).json();
+  toast(r.ok ? ('offer as backend ' + (allow ? 'on' : 'off')) : (r.error || 'failed'), !!r.ok);
 }
 async function fillGitConn(a) {
   const g = a.github || {};
