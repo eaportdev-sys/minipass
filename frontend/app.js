@@ -1548,7 +1548,7 @@ async function addService() {
       check.innerHTML = '';
       check.appendChild(document.createTextNode(msg + ' '));
       const b = document.createElement('button');
-      b.textContent = `use standard ${document.getElementById('svcType').value} Dockerfile`;
+      b.textContent = 'use standard Dockerfile';
       b.onclick = seedStandardDockerfile;
       check.appendChild(b);
     } else {
