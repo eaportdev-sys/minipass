@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const { exec, execSync, spawn } = require('child_process');
 const http = require('http');
 const { WebSocketServer } = require('ws');
-const { createApp, appDir, normDbs, dbService, nginxConf } = require('./lib/generator');
+const { createApp, appDir, normDbs, dbService, nginxConf, ensureDockerfile } = require('./lib/generator');
 const { gitEnv, pubKey, appPubKey, appGitEnv } = require('./lib/ssh');
 const svc = require('./lib/services');
 
@@ -401,6 +401,24 @@ async function deploy(id, opts = {}) {
       await recordDeploy(id, { sha: sha0, at: new Date().toISOString(), status: 'error', error: ('git sync failed - running containers untouched: ' + msg).slice(-500) });
       throw new Error(msg);
     }
+  }
+  // self-heal seeded build files: a panel-seeded Dockerfile/nginx.conf that later
+  // vanished (swept, deleted, never committed) kills the build cryptically.
+  // Re-seed when the repo shape is unambiguous, fail loud otherwise.
+  try {
+    for (const s of svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false)) {
+      const ctxDir = path.join(dir, 'code', s.subdir || '');
+      ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+      if (s.type === 'static' || s.type === 'react') {
+        try {
+          if (!fs.existsSync(path.join(ctxDir, 'nginx.conf'))) fs.writeFileSync(path.join(ctxDir, 'nginx.conf'), nginxConf(null));
+        } catch {}
+      }
+    }
+  } catch (e) {
+    const shaSe = await currentSha(dir);
+    await recordDeploy(id, { sha: shaSe, at: stamp(), status: 'error', error: ('missing build file - running containers untouched: ' + e.message).slice(-500) });
+    throw e;
   }
   // every build streams to deploy.log (host-persisted, per app) so the UI can show
   // the builder output; failures return the tail instead of a bare exit code.
