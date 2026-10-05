@@ -831,6 +831,20 @@ app.post('/api/apps/:id/git-init', (req, res) => {
     res.json({ ok: true, remote: `ssh://root@<server>:${path.join(dir, 'repo.git')}` });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+// Disable local push-to-deploy: drop the hook, keep the repo (pushes land but
+// don't rebuild). Re-enable rewrites the hook.
+app.delete('/api/apps/:id/git-init', (req, res) => {
+  try {
+    const dir = appDir(APPS_DIR, req.params.id);
+    try { fs.rmSync(path.join(dir, 'repo.git', 'hooks', 'post-receive'), { force: true }); } catch {}
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    meta.localGit = false;
+    save(db_);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 // Services: one folder runs N of them (api + web + ...). Add/remove/toggle,
 // compose regenerates (enabled only, `up --remove-orphans` cleans the rest).
 function hostPortsInUse() {

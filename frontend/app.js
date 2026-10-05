@@ -123,7 +123,7 @@ function fillSiteHeader(a) {
   if (a.localGit) {
     const remote = `root@${location.hostname}:/srv/apps/${a.id}/repo.git`;
     box.innerHTML = `<div class="meta">Push from GitHub<br>Get update from Git Repo over SSH</div>` +
-      `<div class="meta"><code>git push minipass main</code> (or master)<br>on your machine:<br><code>git remote add minipass <span id="localRemote">${remote}</span></code> <button onclick="copyLocal()">copy</button></div>`;
+      `<div class="meta"><code>git push minipass main</code> (or master)<br>on your machine:<br><code>git remote add minipass <span id="localRemote">${remote}</span></code> <button onclick="copyLocal()">copy</button> <button onclick="disableLocalGit()">disable</button></div>`;
   } else {
     box.innerHTML = `<button onclick="initLocalGit()">enable local git push</button>`;
   }
@@ -135,6 +135,14 @@ async function initLocalGit() {
   if (!currentApp) return;
   const r = await (await fetch(`/api/apps/${currentApp}/git-init`, { method: 'POST' })).json();
   if (r.ok) { toast('local git ready - push to deploy'); refresh(); }
+  else toast(r.error || 'failed', false);
+}
+// Disable = remove the hook, keep the repo: pushes land but no longer rebuild.
+// One click re-enables (rewrites the hook).
+async function disableLocalGit() {
+  if (!currentApp) return;
+  const r = await (await fetch(`/api/apps/${currentApp}/git-init`, { method: 'DELETE' })).json();
+  if (r.ok) { toast('local git disabled - pushes land without rebuilding'); refresh(); }
   else toast(r.error || 'failed', false);
 }
 async function copyHook() {
