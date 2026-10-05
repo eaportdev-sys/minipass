@@ -24,112 +24,123 @@
     </section>
     <section id="view-site" class="view">
       <div class="pagehead"><h1 id="siteName">site</h1><button onclick="backToSites()">&larr; all sites</button></div>
-      <div class="card">
+      <div class="card sitehero">
         <div class="badges" id="siteBadges"></div>
         <div class="meta" id="siteMeta"></div>
         <div class="actions">
-          <button class="tabbtn" data-tab="files" onclick="showSiteTab('files')">Files</button>
-          <button class="tabbtn" data-tab="logs" onclick="showSiteTab('logs')">Logs</button>
-          <button class="tabbtn" data-tab="terminal" onclick="showSiteTab('terminal')">Terminal</button>
-          <span style="flex:1"></span>
-          <button id="siteRedeploy">redeploy</button>
+          <button class="btn primary" id="siteRedeploy">redeploy</button>
           <button id="siteStop">stop</button>
           <button id="siteStart">start</button>
           <button class="btn danger" id="siteDelete">delete</button>
         </div>
       </div>
-      <div class="card">
-        <b>git connection</b> <span class="meta" id="gitConnState"></span>
-        <div class="meta">Use a shared account:
+      <div class="site-tabs" role="tablist" aria-label="Site sections">
+        <button class="tabbtn" data-tab="overview" onclick="showSiteTab('overview')">Overview</button>
+        <button class="tabbtn" data-tab="setup" onclick="showSiteTab('setup')">Setup</button>
+        <button class="tabbtn" data-tab="deploy" onclick="showSiteTab('deploy')">Deploy</button>
+        <button class="tabbtn" data-tab="files" onclick="showSiteTab('files')">Files</button>
+        <button class="tabbtn" data-tab="logs" onclick="showSiteTab('logs')">Logs</button>
+        <button class="tabbtn" data-tab="terminal" onclick="showSiteTab('terminal')">Terminal</button>
+      </div>
+      <div id="tab-overview" class="sitetab">
+        <div class="card">
+          <div class="sectionhead"><div><b>Current deployment</b><div class="meta">What is running on this box right now.</div></div><button onclick="loadDeployStatus()">refresh</button></div>
+          <div class="statusline" id="deployInfo">…</div>
+          <div id="containerList"></div>
+        </div>
+        <div class="card flowintro">
+          <b>Deployment workflow</b>
+          <div class="flowsteps"><span>1 · Setup source and runtime</span><span>2 · Choose a deploy method</span><span>3 · Watch build and health</span></div>
+          <div class="meta">Use Setup when the app structure or configuration changes. Use Deploy for releases, automation, history, and recovery.</div>
+        </div>
+      </div>
+      <div id="tab-setup" class="sitetab" style="display:none">
+        <div class="card stepcard">
+          <div class="stephead"><span class="stepno">1</span><div><b>Connect the source</b><div class="meta" id="gitConnState"></div></div></div>
+          <div class="meta">Use a shared GitHub account:</div>
           <select id="gitAccount"><option value="">—</option></select>
-          <button onclick="useAccount()">use account</button></div>
-        <div class="meta">Or store a token on this site only (wins over accounts):
+          <button onclick="useAccount()">use account</button>
+          <div class="meta">Or store a token on this site only (wins over accounts):</div>
           <input id="gitSiteToken" type="password" placeholder="github_pat_…" style="width:220px">
           <button onclick="saveSiteToken()">save</button>
-          <button onclick="clearSiteToken()">clear</button></div>
+          <button onclick="clearSiteToken()">clear</button>
+          <div class="meta">SSH remote deploy key (read-only): <button onclick="showRepoKey()">show key</button></div>
+          <div class="meta"><code id="repoKeyOut"></code></div>
+        </div>
+        <div class="card stepcard">
+          <div class="stephead"><span class="stepno">2</span><div><b>Confirm services</b><div class="meta">Each runnable folder becomes one service; type is detected from that folder.</div></div></div>
+          <div id="svcList"></div>
+          <div class="meta">add: <input id="svcName" placeholder="name" style="width:100px">
+          <input id="svcSub" placeholder="subfolder (empty = root)" style="width:170px">
+          <select id="svcType"><option value="auto">auto-detect</option><option value="node">node</option><option value="static">static</option><option value="react">react</option><option value="php">php</option></select>
+          <button onclick="addService()">add</button></div>
+          <div class="meta" id="svcSuggest"></div>
+        </div>
+        <div class="card stepcard">
+          <div class="stephead"><span class="stepno">3</span><div><b>Attach databases</b><div class="meta" id="dbList"></div></div></div>
+          <div class="meta">Optional. Adding another database keeps existing data and passwords untouched:</div>
+          <select id="dbAdd"><option value="postgres">postgres</option><option value="mysql">mysql</option><option value="mongo">mongo</option><option value="redis">redis</option></select>
+          <button onclick="addDb()">add database</button>
+          <pre id="dbOut"></pre>
+        </div>
+        <div class="card stepcard">
+          <div class="stephead"><span class="stepno">4</span><div><b>Set environment</b><div class="meta">Managed keys are locked; custom keys are editable.</div></div></div>
+          <div id="envList"></div>
+          <div class="meta"><input id="envKey" placeholder="KEY" style="width:140px"> <input id="envVal" placeholder="value" style="width:220px">
+          <button onclick="envAdd()">add</button> <button onclick="loadEnv()">reload</button></div>
+          <div class="actions"><button class="btn primary" onclick="saveEnv()">save all</button> <button onclick="fillEnvDefaults()">add defaults</button> <button onclick="envDownload(false)">download .env</button> <button onclick="envDownload(true)">download .env.example</button></div>
+          <pre id="envOut"></pre>
+        </div>
+        <div class="card stepcard">
+          <div class="stephead"><span class="stepno">5</span><div><b>Configure routing</b><div class="meta">Where Open lands and how services connect.</div></div></div>
+          <div class="meta">Open path: <input id="homePath" placeholder="/v1/live/events" style="width:200px"> <button onclick="saveHome()">save</button></div>
+          <div id="apiCard" style="display:none">
+            <hr><b>API backend</b> <span class="meta" id="apiState"></span>
+            <div class="meta">Same-origin <code>/api/*</code> → backend. Stored as <code>API_HOST</code>/<code>API_PORT</code>.</div>
+            <div class="meta" id="apiSvcRow" style="display:none">frontend service: <select id="apiService"></select></div>
+            <div class="meta"><select id="apiTarget"><option value="">— no link —</option></select> <button onclick="saveApiLink()">save</button></div>
+          </div>
+          <hr><b>Share as a backend</b>
+          <div class="meta">Allow other sites to list this site as an API target:
+            <select id="allowBackend"><option value="0">off</option><option value="1">on</option></select>
+            <button onclick="saveAllow()">save</button></div>
+        </div>
       </div>
-      <div class="card">
-        <b>services</b> <span class="meta">one folder, many runners — run both, one, or drop either later</span>
-        <div id="svcList"></div>
-        <div class="meta">add: <input id="svcName" placeholder="name" style="width:100px">
-        <input id="svcSub" placeholder="subfolder (empty = root)" style="width:170px">
-        <select id="svcType"><option value="auto">auto-detect</option><option value="node">node</option><option value="static">static</option><option value="react">react</option><option value="php">php</option></select>
-        <button onclick="addService()">add</button></div>
-        <div class="meta" id="svcSuggest"></div>
+      <div id="tab-deploy" class="sitetab" style="display:none">
+        <div class="card">
+          <div class="sectionhead"><div><b>Deploy now</b><div class="meta">Build first, swap only on success, then verify container health.</div></div><button class="btn primary" onclick="deployCurrent()">redeploy</button></div>
+          <div class="meta">Pre-deploy migration command (optional):
+            <input id="migrateCmd" placeholder="npx prisma migrate deploy" style="width:220px">
+            <button onclick="saveMigrate()">save</button></div>
+          <div class="meta" id="migrateSuggest"></div>
+          <div id="deployProg" style="display:none"><div class="meta"><span id="deployStage">deploying…</span> <span id="deployPct"></span> <span id="deployTime"></span></div><div class="progress"><div id="deployBar"></div></div><pre id="deployTail"></pre></div>
+          <div class="meta" id="deployHist"></div>
+        </div>
+        <div class="card">
+          <b><span id="hookDot" class="opdot"></span> Deploy from GitHub</b>
+          <div class="meta">Choose webhook when GitHub can reach this panel, or polling when it cannot. Both pull GitHub and deploy.</div>
+          <div class="meta"><code id="hookUrl"></code></div>
+          <div class="actions"><button onclick="copyHook()">copy webhook</button><button onclick="regenHook()">regenerate</button></div>
+          <div class="meta">poll GitHub: <select id="pollSel" onchange="setPoll()"><option value="0">off — webhook only</option><option value="1">every minute</option><option value="5">every 5 min</option><option value="15">every 15 min</option></select></div>
+          <div class="meta" id="pollState"></div>
+          <div class="meta" id="hookHist"></div>
+          <div id="hookProg" style="display:none"><div class="meta"><span id="hookStage">deploying…</span> <span id="hookPct"></span> <span id="hookTime"></span></div><div class="progress"><div id="hookBar"></div></div></div>
+        </div>
+        <div class="card">
+          <b><span id="localDot" class="opdot"></span> Deploy from your machine</b>
+          <div class="meta">Push directly to this box without GitHub. The panel builds an isolated checkout and leaves the GitHub working tree untouched.</div>
+          <div class="meta" id="localGitBox"><button onclick="initLocalGit()">enable local git push</button></div>
+          <div id="localProg" style="display:none"><div class="meta"><span id="localStage">deploying…</span> <span id="localPct"></span> <span id="localTime"></span></div><div class="progress"><div id="localBar"></div></div></div>
+          <div class="meta" id="localHist"></div>
+        </div>
+        <div class="card recovery">
+          <b>Recovery tools</b>
+          <div class="meta">Use these only when a normal deploy fails. Sync backs up box edits, then restores the GitHub version.</div>
+          <div class="actions"><button onclick="diagnose()">run diagnostics</button><button class="btn danger" onclick="syncGithub()">sync checkout to GitHub</button></div>
+          <div id="doctorOut"></div>
+        </div>
       </div>
-      <div class="card">
-        <b>deployment</b> <span class="meta" id="deployInfo">…</span>
-        <div id="containerList"></div>
-        <div class="meta">open path (where Open lands — your API has no <code>/</code> route):
-          <input id="homePath" placeholder="/v1/live/events" style="width:200px">
-          <button onclick="saveHome()">save</button></div>
-        <div class="meta">migrate command (runs pre-swap after build, empty = skip):
-          <input id="migrateCmd" placeholder="npx prisma migrate deploy" style="width:220px">
-          <button onclick="saveMigrate()">save</button></div>
-        <div class="meta" id="migrateSuggest"></div>
-        <div class="actions"><button onclick="deployCurrent()">redeploy</button><button onclick="syncGithub()">sync to GitHub</button><button onclick="loadDeployStatus()">refresh</button><button onclick="diagnose()">diagnose</button></div>
-        <div id="deployProg" style="display:none"><div class="meta"><span id="deployStage">deploying…</span> <span id="deployPct"></span> <span id="deployTime"></span></div><div style="background:#222;height:8px"><div id="deployBar" style="height:8px;width:0%;background:#4caf50"></div></div><pre id="deployTail"></pre></div>
-        <div id="doctorOut"></div>
-        <div class="meta" id="deployHist"></div>
-      </div>
-      <div class="card">
-        <b>databases</b> <span class="meta" id="dbList"></span>
-        <div class="meta">Add one later — existing data and passwords untouched:
-          <select id="dbAdd">
-            <option value="postgres">postgres</option>
-            <option value="mysql">mysql</option>
-            <option value="mongo">mongo</option>
-            <option value="redis">redis</option>
-          </select>
-          <button onclick="addDb()">add database</button></div>
-        <pre id="dbOut"></pre>
-      </div>
-      <div class="card">
-        <b>environment</b> <span class="meta">managed keys are locked — custom keys editable, changes redeploy</span>
-        <div id="envList"></div>
-        <div class="meta"><input id="envKey" placeholder="KEY" style="width:140px"> <input id="envVal" placeholder="value" style="width:220px">
-        <button onclick="envAdd()">add</button> <button onclick="loadEnv()">reload</button></div>
-        <div class="actions"><button class="btn primary" onclick="saveEnv()">save all</button> <button onclick="fillEnvDefaults()">add defaults</button> <button onclick="envDownload(false)">download .env</button> <button onclick="envDownload(true)">download .env.example</button></div>
-        <pre id="envOut"></pre>
-      </div>
-      <div class="card" id="apiCard" style="display:none">
-        <b>api backend</b> <span class="meta" id="apiState"></span>
-        <div class="meta">Same-origin <code>/api/*</code> → backend, like the vite dev proxy. Links itself when exactly one backend exists — override or unlink here. Stored as <code>API_HOST</code>/<code>API_PORT</code> in this site's environment.</div>
-        <div class="meta" id="apiSvcRow" style="display:none">frontend service: <select id="apiService"></select></div>
-        <div class="meta"><select id="apiTarget"><option value="">— no link —</option></select>
-        <button onclick="saveApiLink()">save</button></div>
-      </div>
-      <div class="card">
-        <b>share</b>
-        <div class="meta">Offer this site to other sites as an API backend (default off — nothing lists this site until you opt in):
-          <select id="allowBackend"><option value="0">off</option><option value="1">on</option></select>
-          <button onclick="saveAllow()">save</button></div>
-      </div>
-      <div class="card">
-        <b><span id="hookDot" class="opdot"></span> auto-deploy webhook</b>
-        <div class="meta">GitHub push (the trigger) → panel git pull + rebuild (the action). Paste the URL into repo Settings → Webhooks, push events.</div>
-        <div class="meta"><code id="hookUrl"></code></div>
-        <div class="actions"><button onclick="copyHook()">copy</button><button onclick="regenHook()">regenerate</button></div>
-        <div class="meta">offline auto-deploy (no tunnel needed — panel polls GitHub): <select id="pollSel" onchange="setPoll()">
-          <option value="0">off — webhook only</option>
-          <option value="1">every minute</option>
-          <option value="5">every 5 min</option>
-          <option value="15">every 15 min</option>
-        </select></div>
-        <div class="meta" id="pollState"></div>
-        <div class="meta" id="hookHist"></div>
-        <div id="hookProg" style="display:none"><div class="meta"><span id="hookStage">deploying…</span> <span id="hookPct"></span> <span id="hookTime"></span></div><div style="background:#222;height:8px"><div id="hookBar" style="height:8px;width:0%;background:#4caf50"></div></div></div>
-        <div class="meta">repo deploy key (SSH remotes only — add to that repo, read-only): <button onclick="showRepoKey()">show key</button></div>
-        <div class="meta"><code id="repoKeyOut"></code></div>
-      </div>
-      <div class="card">
-        <b><span id="localDot" class="opdot"></span> local git push</b>
-        <div class="meta">Push straight from your machine to this box — no GitHub. Push checks out + rebuilds.</div>
-        <div class="meta" id="localGitBox"><button onclick="initLocalGit()">enable local git push</button></div>
-        <div id="localProg" style="display:none"><div class="meta"><span id="localStage">deploying…</span> <span id="localPct"></span> <span id="localTime"></span></div><div style="background:#222;height:8px"><div id="localBar" style="height:8px;width:0%;background:#4caf50"></div></div></div>
-        <div class="meta" id="localHist"></div>
-      </div>
-      <div id="tab-files" class="sitetab">
+      <div id="tab-files" class="sitetab" style="display:none">
         <div class="card">
           <button onclick="listFiles('')">list files</button>
           <div id="fileList"></div>

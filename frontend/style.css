@@ -71,6 +71,31 @@ main { flex: 1; padding: 24px; max-width: 1100px; }
 .meta { color: var(--muted); font-size: 13px; margin: 4px 0; }
 .meta code { color: var(--text); }
 .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.sitehero { margin-bottom: 0; }
+.site-tabs {
+  display: flex; gap: 4px; margin: 0 0 16px; padding: 10px 2px 0;
+  overflow-x: auto; border-bottom: 1px solid var(--border);
+}
+.site-tabs .tabbtn {
+  flex: 0 0 auto; border: 0; border-bottom: 3px solid transparent;
+  border-radius: 0; background: transparent; color: var(--muted); padding: 10px 14px;
+}
+.site-tabs .tabbtn.active { color: var(--text); border-bottom-color: var(--accent); }
+.sectionhead { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.statusline { font-size: 15px; font-weight: 650; margin: 12px 0; }
+.flowsteps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0; }
+.flowsteps span { background: var(--input); border: 1px solid var(--border); border-radius: 9px; padding: 11px; font-size: 13px; }
+.stepcard { padding: 18px; }
+.stephead { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.stepno {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px;
+  width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff;
+  font-size: 13px; font-weight: 800;
+}
+.progress { background: var(--input); height: 8px; border-radius: 8px; overflow: hidden; }
+.progress > div { height: 8px; width: 0; background: var(--ok); transition: width .25s ease; }
+.recovery { border-color: var(--danger); }
+hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
 button, .btn {
   padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 14px;
   border: 1px solid var(--border); background: var(--bg2); color: var(--text);
@@ -133,4 +158,6 @@ a { color: var(--accent); }
   .navitem { font-size: 0; text-align: center; }
   .navitem::first-letter { font-size: 15px; }
   main { padding: 14px; }
+  .flowsteps { grid-template-columns: 1fr; }
+  .site-tabs .tabbtn { padding: 9px 11px; }
 }

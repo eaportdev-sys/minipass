@@ -22,7 +22,7 @@ function openSite(id) {
   document.getElementById('filePath').value = '';
   document.getElementById('fileEdit').value = '';
   document.getElementById('fileOut').textContent = '';
-  refresh().then(() => { showSiteTab('files'); loadDeployStatus(); loadEnv(); loadServices(); loadMigrateSuggest(); });
+  refresh().then(() => { showSiteTab('overview'); loadDeployStatus(); loadEnv(); loadServices(); loadMigrateSuggest(); });
 }
 function appUrl(a) {
   if (!a.hostPort) return null;
@@ -35,7 +35,7 @@ async function deployCurrent() {
 }
 async function syncGithub() {
   if (!currentApp) return;
-  const ok = await uiConfirm({ title: 'Sync to GitHub?', body: 'Box edits are discarded (conflicting untracked files moved aside, never deleted) and the tree resets to GitHub. Type the site name to confirm.', requireText: currentApp, confirmLabel: 'Sync', danger: true });
+  const ok = await uiConfirm({ title: 'Sync checkout to GitHub?', body: 'Use this only for recovery. Tracked and untracked box edits are saved in a git stash, then code/ resets to GitHub. Databases and volumes are untouched. Type the site name to confirm.', requireText: currentApp, confirmLabel: 'Sync', danger: true });
   if (!ok) return;
   toast('syncing to GitHub…');
   try {
@@ -133,8 +133,9 @@ function fillSiteHeader(a) {
   document.getElementById('siteName').textContent = a.id;
   document.getElementById('siteBadges').innerHTML =
     `<span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}${a.hostPort ? `<span class="badge">:${a.hostPort}</span>` : ''}${a.subdir ? `<span class="badge">/${a.subdir}</span>` : ''}${a.github ? `<span class="badge">git: ${a.github.login ? a.github.login + '/' : ''}${a.github.repo}</span>` : ''}`;
-  document.getElementById('siteMeta').innerHTML = '';
-  document.getElementById('siteRedeploy').onclick = () => deploy(a.id);
+  const url = appUrl(a);
+  document.getElementById('siteMeta').innerHTML = url ? `live URL: <a href="${url}" target="_blank">${url.replace(/^http:\/\//, '')}</a>` : 'no published port';
+  document.getElementById('siteRedeploy').onclick = () => { showSiteTab('deploy'); deploy(a.id); };
   document.getElementById('siteStop').onclick = () => stopApp(a.id);
   document.getElementById('siteStart').onclick = () => startApp(a.id);
   document.getElementById('siteDelete').onclick = () => rmApp(a.id);
@@ -403,7 +404,11 @@ async function regenHook() {
 function showSiteTab(t) {
   document.querySelectorAll('.sitetab').forEach(s => s.style.display = 'none');
   document.getElementById('tab-' + t).style.display = 'block';
-  document.querySelectorAll('.tabbtn').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
+  document.querySelectorAll('.tabbtn').forEach(b => {
+    const active = b.dataset.tab === t;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
   if (!currentApp) return;
   if (t === 'files') listFiles('');
   if (t === 'logs') showLogs();
