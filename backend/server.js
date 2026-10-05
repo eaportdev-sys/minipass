@@ -417,7 +417,7 @@ async function deploy(id, opts = {}) {
     }
   } catch (e) {
     const shaSe = await currentSha(dir);
-    await recordDeploy(id, { sha: shaSe, at: stamp(), status: 'error', error: ('missing build file - running containers untouched: ' + e.message).slice(-500) });
+    await recordDeploy(id, { sha: shaSe, at: new Date().toISOString(), status: 'error', error: ('missing build file - running containers untouched: ' + e.message).slice(-500) });
     throw e;
   }
   // every build streams to deploy.log (host-persisted, per app) so the UI can show
