@@ -1802,8 +1802,12 @@ app.get('/api/apps/:id/migrate-suggest', (req, res) => {
       const rel = path.relative(codeDir, d) || '.';
       const pkg = pkgAt(d);
       if (pkg && pkg.scripts) {
-        for (const name of Object.keys(pkg.scripts)) {
-          if (/migrat/i.test(name)) push(`npm run ${name}`, `${name} in ${rel}/package.json`, rel);
+        for (const [name, val] of Object.entries(pkg.scripts)) {
+          // migration scripts by name (migrate, baseline, db:init, db:setup)
+          // or by value when they invoke a baseline runner. db:seed is left
+          // out on purpose - seeds are rarely idempotent, wrong for pre-deploy.
+          if (/migrat|baseline|^db:(init|setup)/i.test(name) || /baseline/i.test(String(val || '')))
+            push(`npm run ${name}`, `${name} in ${rel}/package.json`, rel);
         }
       }
       if (hasFile(d, 'knexfile.js', 'knexfile.ts', 'knexfile.cjs', 'knexfile.mjs')) push('npx knex migrate:latest', `knexfile in ${rel}/`, rel);
