@@ -114,7 +114,9 @@ them back.
   The command runs after build in a one-off container with the site `.env`
   (so `DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME` resolve); failure aborts
   before the swap and running containers are untouched. **Run now** / **verify**
-  execute the same way without deploying anything.
+  execute the same way without deploying anything — they use whatever is in
+  the boxes right now, so ad-hoc flows like `npm run db:init -- --db=newdbname`
+  (or a `DB_NAME=other` prefix override) run without touching saved settings.
 
 ### 5 · Upgrade the panel
 Upgrade page → **upgrade from git**: fetches `origin/main`, rebuilds the image in

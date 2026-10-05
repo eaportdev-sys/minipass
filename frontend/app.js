@@ -185,8 +185,13 @@ async function runMigrateNow() {
   if (!currentApp) return;
   const out = document.getElementById('migrateOut');
   out.textContent = 'running migration…';
+  const body = {
+    command: document.getElementById('migrateCmd').value,
+    service: document.getElementById('migrateSvc').value,
+    dir: document.getElementById('migrateDir').value
+  };
   try {
-    const r = await (await fetch(`/api/apps/${currentApp}/migrate-run`, { method: 'POST' })).json();
+    const r = await (await fetch(`/api/apps/${currentApp}/migrate-run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
     out.textContent = r.ok ? `ok in ${r.service}:\n${r.output}` : ('failed: ' + (r.error || 'unknown'));
   } catch (e) { out.textContent = 'run failed: ' + e.message; }
 }
@@ -194,8 +199,13 @@ async function verifyMigrate() {
   if (!currentApp) return;
   const out = document.getElementById('migrateOut');
   out.textContent = 'verifying…';
+  const body = {
+    check: document.getElementById('migrateCheck').value,
+    service: document.getElementById('migrateSvc').value,
+    dir: document.getElementById('migrateDir').value
+  };
   try {
-    const r = await (await fetch(`/api/apps/${currentApp}/migrate-check`, { method: 'POST' })).json();
+    const r = await (await fetch(`/api/apps/${currentApp}/migrate-check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
     out.textContent = r.ok ? `ok in ${r.service}:\n${r.output}` : ('failed: ' + (r.error || 'unknown'));
   } catch (e) { out.textContent = 'verify failed: ' + e.message; }
 }

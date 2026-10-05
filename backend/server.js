@@ -1676,7 +1676,10 @@ app.post('/api/apps/:id/home', (req, res) => {
 // Pre-swap migrate command (runs in a one-off container after build, before swap).
 // service/dir/check ride along so knex-style flows work: pick the backend
 // service, an optional subdir (cd without shell metachars), and a verify cmd.
-const MIGRATE_CMD_RE = /^[A-Za-z0-9_][A-Za-z0-9_ .:/-]{0,199}$/;
+// = is allowed (single words only, no quoting/$/backtick/;/&/|) so flag-style
+// args like `--db=newdbname` and VAR=x prefix overrides work. VAR=x at the
+// start of the command sets a per-run env override for that run only.
+const MIGRATE_CMD_RE = /^[A-Za-z0-9_][A-Za-z0-9_ .:/=-]{0,199}$/;
 const MIGRATE_DIR_RE = /^[A-Za-z0-9_][A-Za-z0-9_./-]{0,80}$/;
 function migrateTarget(meta, dir, svcName) {
   const list = svc.fullServices(meta, dir).filter(s => s.enabled !== false);
@@ -1699,7 +1702,7 @@ app.post('/api/apps/:id/migrate', (req, res) => {
     const meta = db_.apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
     const c = String((req.body && (req.body.command ?? req.body.cmd)) || '').trim();
-    if (c && !MIGRATE_CMD_RE.test(c)) return res.status(400).json({ error: 'bad command (letters/numbers/space _ . : / - only)' });
+    if (c && !MIGRATE_CMD_RE.test(c)) return res.status(400).json({ error: 'bad command (letters/numbers/space _ . : / - = only)' });
     const dir = String((req.body && req.body.dir) || '').trim().replace(/^\/+|\/+$/g, '');
     if (!migrateDirOk(dir)) return res.status(400).json({ error: 'bad migrate folder' });
     const check = String((req.body && req.body.check) || '').trim();
@@ -1715,33 +1718,45 @@ app.post('/api/apps/:id/migrate', (req, res) => {
     res.json({ ok: true, migrateCmd: meta.migrateCmd, migrateSvc: meta.migrateSvc, migrateDir: meta.migrateDir, migrateCheck: meta.migrateCheck });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-// Run the saved migrate command NOW in a one-off container (no swap, no deploy
+// Run a migrate command NOW in a one-off container (no swap, no deploy
 // record beyond the returned output). Same sandbox as the pre-deploy hook.
+// Accepts one-shot {command, service, dir} overrides (validated, not saved)
+// so ad-hoc flows like `npm run db:init -- --db=newdbname` run without
+// touching the saved pre-deploy settings.
 app.post('/api/apps/:id/migrate-run', async (req, res) => {
   try {
     const meta = load().apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
-    const cmd = String((meta && meta.migrateCmd) || '').trim();
+    const cmd = String((req.body && req.body.command) || (meta && meta.migrateCmd) || '').trim();
     if (!cmd) return res.status(400).json({ error: 'no migrate command saved' });
+    if (!MIGRATE_CMD_RE.test(cmd)) return res.status(400).json({ error: 'bad command (letters/numbers/space _ . : / - = only)' });
+    const dirIn = String((req.body && req.body.dir) || '').trim().replace(/^\/+|\/+$/g, '');
+    if (!migrateDirOk(dirIn)) return res.status(400).json({ error: 'bad migrate folder' });
     const dirAbs = appDir(APPS_DIR, meta.id);
-    const svcName = migrateTarget(meta, dirAbs, meta.migrateSvc);
-    const argv = migrateRunArgv(svcName, meta.migrateDir || '', cmd);
+    const svcName = migrateTarget(meta, dirAbs, String((req.body && req.body.service) || meta.migrateSvc || ''));
+    const dir = dirIn || meta.migrateDir || '';
+    const argv = migrateRunArgv(svcName, dir, cmd);
     const cap = { cwd: dirAbs, captureStderr: true };
     const out = await runOut(argv[0], argv.slice(1), cap);
     res.json({ ok: true, service: svcName, output: String(out).slice(-4000) || '(no output)' });
   } catch (e) { res.status(500).json({ error: ('migrate run failed: ' + e.message).slice(-500) }); }
 });
-// Verify-only: runs the saved verify command (e.g. knex migrate:list) and
-// returns its output. Never changes anything, never deploys.
+// Verify-only: runs a verify command (e.g. knex migrate:list) and
+// returns its output. Accepts a one-shot {check, service, dir} override.
+// Never changes anything, never deploys.
 app.post('/api/apps/:id/migrate-check', async (req, res) => {
   try {
     const meta = load().apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
-    const cmd = String((meta && meta.migrateCheck) || '').trim();
+    const cmd = String((req.body && req.body.check) || (meta && meta.migrateCheck) || '').trim();
     if (!cmd) return res.status(400).json({ error: 'no verify command saved' });
+    if (!MIGRATE_CMD_RE.test(cmd)) return res.status(400).json({ error: 'bad verify command' });
+    const dirIn = String((req.body && req.body.dir) || '').trim().replace(/^\/+|\/+$/g, '');
+    if (!migrateDirOk(dirIn)) return res.status(400).json({ error: 'bad migrate folder' });
     const dirAbs = appDir(APPS_DIR, meta.id);
-    const svcName = migrateTarget(meta, dirAbs, meta.migrateSvc);
-    const argv = migrateRunArgv(svcName, meta.migrateDir || '', cmd);
+    const svcName = migrateTarget(meta, dirAbs, String((req.body && req.body.service) || meta.migrateSvc || ''));
+    const dir = dirIn || meta.migrateDir || '';
+    const argv = migrateRunArgv(svcName, dir, cmd);
     const out = await runOut(argv[0], argv.slice(1), { cwd: dirAbs, captureStderr: true });
     res.json({ ok: true, service: svcName, output: String(out).slice(-4000) || '(no output)' });
   } catch (e) { res.status(500).json({ error: ('verify failed: ' + e.message).slice(-500) }); }
