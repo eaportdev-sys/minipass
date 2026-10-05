@@ -57,14 +57,19 @@
       <div id="tab-setup" class="sitetab" style="display:none">
         <div class="card stepcard">
           <div class="stephead"><span class="stepno">1</span><div><b>Connect the source</b><div class="meta" id="gitConnState"></div></div></div>
-          <div class="meta">Use a shared GitHub account:</div>
-          <select id="gitAccount"><option value="">—</option></select>
-          <button onclick="useAccount()">use account</button>
-          <div class="meta">Or store a token on this site only (wins over accounts):</div>
-          <input id="gitSiteToken" type="password" placeholder="github_pat_…" style="width:220px">
-          <button onclick="saveSiteToken()">save</button>
-          <button onclick="clearSiteToken()">clear</button>
-          <div class="meta">SSH remote deploy key (read-only): <button onclick="showRepoKey()">show key</button></div>
+          <div class="credential-grid">
+            <div class="credential-option">
+              <b>Shared GitHub account</b>
+              <div class="meta">Use a connected panel account.</div>
+              <div class="controlrow"><select id="gitAccount"><option value="">—</option></select><button onclick="useAccount()">use account</button></div>
+            </div>
+            <div class="credential-option">
+              <b>Site-only token</b>
+              <div class="meta">Private to this site and used before shared accounts.</div>
+              <div class="controlrow"><input id="gitSiteToken" type="password" placeholder="github_pat_…"><button onclick="saveSiteToken()">save</button><button onclick="clearSiteToken()">clear</button></div>
+            </div>
+          </div>
+          <div class="meta keyrow">SSH remote deploy key (read-only): <button id="repoKeyToggle" onclick="showRepoKey()">show key</button></div>
           <div class="meta"><code id="repoKeyOut"></code></div>
         </div>
         <div class="card stepcard">

@@ -87,6 +87,12 @@ main { flex: 1; padding: 24px; max-width: 1100px; }
 .flowsteps span { background: var(--input); border: 1px solid var(--border); border-radius: 9px; padding: 11px; font-size: 13px; }
 .stepcard { padding: 18px; }
 .stephead { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.credential-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.credential-option { background: var(--input); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+.controlrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.controlrow input, .controlrow select { flex: 1 1 150px; min-width: 0; margin-left: 0; }
+.keyrow { margin-top: 12px; }
+#repoKeyOut { overflow-wrap: anywhere; }
 .stepno {
   display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px;
   width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff;
@@ -159,5 +165,6 @@ a { color: var(--accent); }
   .navitem::first-letter { font-size: 15px; }
   main { padding: 14px; }
   .flowsteps { grid-template-columns: 1fr; }
+  .credential-grid { grid-template-columns: 1fr; }
   .site-tabs .tabbtn { padding: 9px 11px; }
 }

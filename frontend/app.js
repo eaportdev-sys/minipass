@@ -142,6 +142,14 @@ function fillSiteHeader(a) {
   document.getElementById('hookUrl').textContent = `${location.origin}/webhook/${a.id}?token=${a.token}`;
   document.getElementById('dbList').textContent = 'attached: ' + dbLabel(a);
   document.getElementById('dbOut').textContent = '';
+  const keyOut = document.getElementById('repoKeyOut');
+  const keyToggle = document.getElementById('repoKeyToggle');
+  if (keyOut.dataset.app !== a.id) {
+    keyOut.dataset.app = a.id;
+    keyOut.dataset.open = '0';
+    keyOut.textContent = '';
+    keyToggle.textContent = 'show key';
+  }
   fillApiLink(a);
   fillGitConn(a);
   const ps = document.getElementById('pollSel');
@@ -383,11 +391,24 @@ async function setPoll() {
 async function showRepoKey() {
   if (!currentApp) return;
   const el = document.getElementById('repoKeyOut');
+  const btn = document.getElementById('repoKeyToggle');
+  if (el.dataset.open === '1') {
+    el.dataset.open = '0';
+    el.textContent = '';
+    btn.textContent = 'show key';
+    return;
+  }
   el.textContent = 'loading…';
+  btn.disabled = true;
   try {
     const r = await (await fetch(`/api/apps/${currentApp}/repokey`)).json();
     el.textContent = r.pubkey || r.error;
+    if (r.pubkey) {
+      el.dataset.open = '1';
+      btn.textContent = 'hide key';
+    }
   } catch (e) { el.textContent = 'failed: ' + e.message; }
+  finally { btn.disabled = false; }
 }
 async function regenHook() {
   if (!currentApp) return;
