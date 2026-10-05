@@ -111,8 +111,9 @@ async function loadDeployStatus() {
     const fmtH = h => {
       const when = (h.at || '').replace('T', ' ').slice(0, 19);
       const dur = h.durationMs != null ? ` ${Math.round(h.durationMs / 1000)}s` : '';
+      const sha = h.sha ? ` @${String(h.sha).slice(0, 7)}` : '';
       const res = h.status === 'ok' ? 'ok' : ('FAILED' + (h.error ? ' — ' + String(h.error).split('\n').slice(-1)[0].slice(0, 120) : ''));
-      return `${when} ${res}${dur}`;
+      return `${when}${sha} ${res}${dur}`;
     };
     const lastSrc = (...srcs) => hist.find(h => srcs.includes(h.source));
     const hookLast = lastSrc('webhook', 'poll');
