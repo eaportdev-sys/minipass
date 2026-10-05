@@ -11,7 +11,7 @@ async function refresh() {
     return `<div class="card appcard" id="card-${a.id}"><div class="appcard-layout"><div class="appcard-main">` +
       `<div class="appcard-title"><div><h3>${safeHtml(a.id)}</h3><div class="badges"><span class="badge type">${safeHtml(a.type)}</span><span class="badge">db: ${safeHtml(dbLabel(a))}</span>` +
       (services.length > 1 ? `<span class="badge">${services.length} services</span>` : '') + (a.domain ? `<span class="badge">${safeHtml(a.domain)}</span>` : '') +
-      (a.dirty ? '<span class="badge pending">● changes pending</span>' : '') + `</div></div></div>` +
+      dirtyBadge(a) + `</div></div></div>` +
       `<div class="app-links">${appLinksMarkup(a, services)}</div>` +
       `<div class="appcard-actions"><button class="btn primary" onclick="openSite('${a.id}')">open details</button><span id="appLifecycle-${a.id}"><button disabled>checking…</button></span><button class="btn danger" onclick="rmApp('${a.id}')">delete</button></div></div>` +
       `<button id="appPower-${a.id}" class="power-control app-card-power is-checking" onclick="deploy('${a.id}')" title="Checking deployment state"><span class="power-symbol">⏻</span><span class="power-label">Checking</span></button>` +
@@ -819,6 +819,13 @@ async function ghDisconnect(login) {
   ghStatus();
 }
 function dbLabel(a) { return [].concat(a.db || []).join('+') || 'none'; }
+function dirtyBadge(a) {
+  if (!a.dirty) return '';
+  const reason = typeof a.dirty === 'object' ? (a.dirty.reason || '') : '';
+  const tip = reason ? `saved change not yet deployed: ${reason} — press the power button to redeploy` : 'saved change not yet deployed — press the power button to redeploy';
+  const short = reason ? ` ● ${reason}` : ' ● changes pending';
+  return `<span class="badge pending" title="${safeHtml(tip)}">${safeHtml(short.length > 42 ? short.slice(0, 42) + '…' : short)}</span>`;
+}
 function showView(view) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + view));
   document.querySelectorAll('.navitem').forEach(n => n.classList.toggle('active', n.dataset.view === view));

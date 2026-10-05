@@ -75,9 +75,9 @@ main { flex: 1; min-width: 0; width: 100%; padding: 24px; max-width: 1100px; }
 .app-link-row a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .app-links-empty { padding: 9px; color: var(--muted); border: 1px dashed var(--border); border-radius: 8px; font-size: 11px; }
 .appcard-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: auto; }
-.power-control.app-card-power { flex: 0 0 94px; min-height: 90px; align-self: flex-start; }
-.app-card-power .power-symbol { font-size: 32px; }
-.app-card-power .power-label { font-size: 10px; }
+.power-control.app-card-power { flex: 0 0 64px; min-height: 64px; padding: 6px; align-self: flex-start; }
+.app-card-power .power-symbol { font-size: 22px; }
+.app-card-power .power-label { font-size: 8px; }
 .badges { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
 .badge {
   font-size: 12px; padding: 2px 10px; border-radius: 20px;
@@ -389,9 +389,9 @@ a { color: var(--accent); }
   .power-control .power-symbol { font-size: 30px; }
   #apps { grid-template-columns: 1fr; }
   .appcard-layout { gap: 10px; }
-  .power-control.app-card-power { flex-basis: 74px; min-height: 74px; padding: 6px; }
-  .app-card-power .power-symbol { font-size: 27px; }
-  .app-card-power .power-label { font-size: 8px; }
+  .power-control.app-card-power { flex-basis: 58px; min-height: 58px; padding: 5px; }
+  .app-card-power .power-symbol { font-size: 20px; }
+  .app-card-power .power-label { font-size: 7px; }
   .flowsteps { grid-template-columns: 1fr; }
   .credential-grid { grid-template-columns: 1fr; }
   .deploy-top-grid, .deploy-source-grid { grid-template-columns: 1fr; }
