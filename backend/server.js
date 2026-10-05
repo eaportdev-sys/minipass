@@ -336,7 +336,10 @@ async function recordDeploy(id, rec) {
         if (!rec.durationMs) rec.durationMs = Date.now() - op.startedAt;
       }
       m.lastDeploy = rec;
-      if (rec.status === 'ok') delete m.dirty;
+      if (rec.status === 'ok') {
+        delete m.dirty;
+        m.lastGoodDeploy = { at: rec.at, sha: rec.sha, status: rec.status, source: rec.source || null, durationMs: rec.durationMs != null ? rec.durationMs : null };
+      }
       m.deployHistory = [{ at: rec.at, sha: rec.sha, status: rec.status, source: rec.source || null, durationMs: rec.durationMs != null ? rec.durationMs : null, error: rec.error || null }, ...(m.deployHistory || [])].slice(0, 10);
       save(db2);
     }
@@ -608,7 +611,9 @@ app.get('/api/apps/:id/build-log', (req, res) => {
 app.get('/api/apps/:id/status', async (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta) return res.status(404).json({ error: 'unknown app' });
-  res.json({ app: pubApp(meta), lastDeploy: meta.lastDeploy || null, history: (meta.deployHistory || []).slice(0, 5), containers: await appContainers(meta.id), deploying: deployLocks.has(meta.id), deployOp: deployOps.get(meta.id) || null, pushEvent: pushEvents.get(meta.id) || null });
+  const history = meta.deployHistory || [];
+  const liveDeploy = meta.lastGoodDeploy || history.find(h => h.status === 'ok') || (meta.lastDeploy && meta.lastDeploy.status === 'ok' ? meta.lastDeploy : null);
+  res.json({ app: pubApp(meta), services: svc.fullServices(meta, appDir(APPS_DIR, meta.id)), lastDeploy: meta.lastDeploy || null, liveDeploy, history: history.slice(0, 5), containers: await appContainers(meta.id), deploying: deployLocks.has(meta.id), deployOp: deployOps.get(meta.id) || null, pushEvent: pushEvents.get(meta.id) || null });
 });
 async function appContainers(id) {
   let containers = [];
@@ -624,6 +629,7 @@ async function appContainers(id) {
     containers = arr.map(c => ({
       id: c.ID || c.Id || c.id,
       service: c.Service || c.service || c.Name || c.name,
+      image: c.Image || c.image,
       state: c.State || c.state,
       status: c.Status || c.status
     }));

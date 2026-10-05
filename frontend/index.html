@@ -44,7 +44,7 @@
       </div>
       <div id="tab-overview" class="sitetab">
         <div class="card">
-          <div class="sectionhead"><div><b>Current deployment</b><div class="meta">What is running on this box right now.</div></div><button onclick="loadDeployStatus()">refresh</button></div>
+          <div class="sectionhead"><div><b id="runtimeHeading">Currently running versions</b><div class="meta" id="runtimeSummary">Application and database versions active for this site.</div></div><button onclick="loadDeployStatus()">refresh</button></div>
           <div class="statusline" id="deployInfo">…</div>
           <div id="containerList"></div>
         </div>

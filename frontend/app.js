@@ -97,6 +97,22 @@ async function loadMigrateSuggest() {
       : '';
   } catch { box.innerHTML = ''; }
 }
+function runtimeKind(container, service) {
+  if (service) return ({ node: 'Node.js service', react: 'React web app', static: 'Static website', php: 'PHP web app' })[service.type] || `${service.type || 'app'} service`;
+  const hint = `${container.service || ''} ${container.image || ''}`.toLowerCase();
+  if (hint.includes('postgres')) return 'PostgreSQL database';
+  if (hint.includes('redis')) return 'Redis cache';
+  if (hint.includes('mysql')) return 'MySQL database';
+  if (hint.includes('mongo')) return 'MongoDB database';
+  return 'Supporting container';
+}
+function runtimeVersion(container, service, liveDeploy) {
+  if (!service) return container.image ? `image ${container.image}` : 'image version unavailable';
+  const location = service.subdir ? `/${service.subdir}` : 'repository root';
+  const ports = service.hostPort ? ` · :${service.hostPort}→${service.port || '?'}` : (service.port ? ` · port ${service.port}` : '');
+  const source = liveDeploy && liveDeploy.sha ? `commit ${String(liveDeploy.sha).slice(0, 7)}` : 'source version unavailable';
+  return `${source} · ${location}${ports}`;
+}
 async function loadDeployStatus() {
   if (!currentApp) return;
   const info = document.getElementById('deployInfo');
@@ -110,8 +126,23 @@ async function loadDeployStatus() {
     info.textContent = d
       ? `${d.status === 'ok' ? 'live' : 'FAILED'} @ ${d.sha || '?'} · ${d.at || ''}${d.error ? ' — ' + d.error.split('\n').slice(-2).join(' ') : ''}`
       : 'never deployed by the panel';
-    list.innerHTML = (s.containers || []).map(c =>
-      `<div class="meta">${c.service} — <b>${c.state || '?'}</b> ${c.status || ''}</div>`).join('') || '<div class="meta">no containers</div>';
+    const containers = s.containers || [];
+    const running = containers.filter(c => /^running/i.test(c.state || '')).length;
+    document.getElementById('runtimeHeading').textContent = running === 1
+      ? 'The version currently running for this site'
+      : running > 1 ? `The ${running} versions currently running for this site` : 'No versions are currently running for this site';
+    const live = s.liveDeploy;
+    document.getElementById('runtimeSummary').textContent = live && live.sha
+      ? `Application source commit ${String(live.sha).slice(0, 7)}, deployed via ${live.source || 'panel'}${live.at ? ` on ${String(live.at).replace('T', ' ').slice(0, 19)}` : ''}. Database rows show their image versions.`
+      : 'Application source version is not recorded yet. Database rows show their image versions.';
+    const services = new Map((s.services || []).map(x => [x.name, x]));
+    list.innerHTML = containers.map(c => {
+      const service = services.get(c.service);
+      const up = /^running/i.test(c.state || '');
+      return `<div class="runtime-row"><div><span class="opdot ${up ? 'ok' : 'fail'}"></span> <b>${c.service}</b> <span class="badge type">${runtimeKind(c, service)}</span></div>` +
+        `<div class="runtime-version">${runtimeVersion(c, service, live)}</div>` +
+        `<div class="runtime-state"><b>${c.state || '?'}</b>${c.status ? ` · ${c.status}` : ''}</div></div>`;
+    }).join('') || '<div class="meta">No application or database containers are present.</div>';
     const hp = document.getElementById('homePath');
     if (hp && s.app) hp.value = s.app.homePath || '';
     const mc = document.getElementById('migrateCmd');

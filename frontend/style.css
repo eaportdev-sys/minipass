@@ -83,6 +83,12 @@ main { flex: 1; padding: 24px; max-width: 1100px; }
 .site-tabs .tabbtn.active { color: var(--text); border-bottom-color: var(--accent); }
 .sectionhead { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .statusline { font-size: 15px; font-weight: 650; margin: 12px 0; }
+.runtime-row {
+  display: grid; grid-template-columns: minmax(190px, 1fr) minmax(240px, 1.35fr) minmax(150px, .8fr);
+  gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid var(--border);
+}
+.runtime-version, .runtime-state { color: var(--muted); font-size: 13px; }
+.runtime-state { text-align: right; }
 .flowsteps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0; }
 .flowsteps span { background: var(--input); border: 1px solid var(--border); border-radius: 9px; padding: 11px; font-size: 13px; }
 .stepcard { padding: 18px; }
@@ -167,5 +173,7 @@ a { color: var(--accent); }
   main { padding: 14px; }
   .flowsteps { grid-template-columns: 1fr; }
   .credential-grid { grid-template-columns: 1fr; }
+  .runtime-row { grid-template-columns: 1fr; gap: 5px; }
+  .runtime-state { text-align: left; }
   .site-tabs .tabbtn { padding: 9px 11px; }
 }
