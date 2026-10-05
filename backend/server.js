@@ -213,6 +213,9 @@ const deployLocks = new Set();
 // Live ops: id -> { source, startedAt } so the UI can show per-card progress
 // for server-side triggers (webhook/poll/local-push) with no browser involved.
 const deployOps = new Map();
+// Push receipts: id -> { phase, at }. The hook pings `received` before checkout
+// so the UI shows a receiving state prior to the deploy op appearing.
+const pushEvents = new Map();
 // Container image IDs before a deploy, so a failed swap can retag + restart them.
 async function snapshotImages(dir) {
   const snaps = [];
@@ -327,6 +330,7 @@ async function deploy(id, opts = {}) {
   deployLocks.add(id);
   const opSource = ['webhook', 'poll', 'local-push', 'manual'].includes(opts.source) ? opts.source : 'manual';
   deployOps.set(id, { source: opSource, startedAt: Date.now() });
+  pushEvents.delete(id);
   try {
   const dir = appDir(APPS_DIR, id);
   const meta = load().apps.find(a => a.id === id);
@@ -486,7 +490,7 @@ app.get('/api/apps/:id/build-log', (req, res) => {
 app.get('/api/apps/:id/status', async (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta) return res.status(404).json({ error: 'unknown app' });
-  res.json({ app: pubApp(meta), lastDeploy: meta.lastDeploy || null, containers: await appContainers(meta.id), deploying: deployLocks.has(meta.id), deployOp: deployOps.get(meta.id) || null });
+  res.json({ app: pubApp(meta), lastDeploy: meta.lastDeploy || null, containers: await appContainers(meta.id), deploying: deployLocks.has(meta.id), deployOp: deployOps.get(meta.id) || null, pushEvent: pushEvents.get(meta.id) || null });
 });
 async function appContainers(id) {
   let containers = [];
@@ -822,7 +826,7 @@ app.post('/api/apps/:id/git-init', (req, res) => {
     // to push.log - the old silent `>/dev/null` made failures invisible.
     // Deploy curl runs in background so `git push` returns fast; the panel
     // keeps deploying server-side and records it under source local-push.
-    const hook = `#!/bin/sh\n# minipass push-to-deploy: checkout pushed branch into code/, rebuild\nLOG="${path.join(repo, 'push.log')}"\n{\necho "=== $(date -u +%FT%TZ) push received ==="\nBRANCH=""\nwhile read oldrev newrev ref; do\n  case "$ref" in refs/heads/*) BRANCH="\${ref#refs/heads/}";; esac\ndone\nBRANCH="\${BRANCH:-main}"\nif GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f "$BRANCH" 2>&1; then\n  echo "checked out $BRANCH"\nelse\n  echo "checkout $BRANCH failed, trying master"\n  GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f master 2>&1 || echo "checkout failed"\nfi\necho "triggering deploy…"\nnohup curl -s -X POST -H 'Content-Type: application/json' -d '{"source":"local-push"}' http://localhost:${port}/api/apps/${id}/deploy >> "$LOG" 2>&1 &\n} >> "$LOG" 2>&1\n`;
+    const hook = `#!/bin/sh\n# minipass push-to-deploy: checkout pushed branch into code/, rebuild\nLOG="${path.join(repo, 'push.log')}"\n{\necho "=== $(date -u +%FT%TZ) push received ==="\nBRANCH=""\nwhile read oldrev newrev ref; do\n  case "$ref" in refs/heads/*) BRANCH="\${ref#refs/heads/}";; esac\ndone\nBRANCH="\${BRANCH:-main}"\nif GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f "$BRANCH" 2>&1; then\n  echo "checked out $BRANCH"\nelse\n  echo "checkout $BRANCH failed, trying master"\n  GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f master 2>&1 || echo "checkout failed"\nfi\necho "triggering deploy…"\ncurl -s -m 5 -X POST -H 'Content-Type: application/json' -d '{"phase":"received"}' http://localhost:${port}/api/apps/${id}/git-push-event >> "$LOG" 2>&1\nnohup curl -s -X POST -H 'Content-Type: application/json' -d '{"source":"local-push"}' http://localhost:${port}/api/apps/${id}/deploy >> "$LOG" 2>&1 &\n} >> "$LOG" 2>&1\n`;
     fs.writeFileSync(path.join(repo, 'hooks', 'post-receive'), hook);
     fs.chmodSync(path.join(repo, 'hooks', 'post-receive'), 0o755);
     const db_ = load();
@@ -833,6 +837,15 @@ app.post('/api/apps/:id/git-init', (req, res) => {
 });
 // Disable local push-to-deploy: drop the hook, keep the repo (pushes land but
 // don't rebuild). Re-enable rewrites the hook.
+// Push receipt from the local-git hook (fires before checkout finishes, so the
+// UI can show receiving). Fixed phase string only - nothing reaches a shell.
+app.post('/api/apps/:id/git-push-event', (req, res) => {
+  const meta = load().apps.find(a => a.id === req.params.id);
+  if (!meta) return res.status(404).json({ error: 'unknown app' });
+  if (!req.body || req.body.phase !== 'received') return res.status(400).json({ error: 'bad phase' });
+  pushEvents.set(req.params.id, { phase: 'received', at: Date.now() });
+  res.json({ ok: true });
+});
 app.delete('/api/apps/:id/git-init', (req, res) => {
   try {
     const dir = appDir(APPS_DIR, req.params.id);

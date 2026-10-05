@@ -120,6 +120,11 @@ a { color: var(--accent); }
   border-radius: 10px; padding: 10px 14px; box-shadow: var(--shadow); font-size: 14px;
 }
 .toast.err { border-color: var(--danger); }
+.opdot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #666; vertical-align: baseline; }
+.opdot.busy { background: #ffc107; animation: opblink 1s steps(2, start) infinite; }
+.opdot.ok { background: #4caf50; animation: none; }
+.opdot.fail { background: var(--danger); animation: none; }
+@keyframes opblink { to { visibility: hidden; } }
 #cmOk.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 @media (max-width: 720px) {
   .sidebar { width: 64px; }

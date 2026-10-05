@@ -945,6 +945,8 @@ setInterval(async () => {
   try { st = await (await fetch(`/api/apps/${currentApp}/status`)).json(); } catch { return; }
   const op = st.deployOp && st.deployOp.source !== 'manual' ? st.deployOp : null;
   const slot = !op ? null : (op.source === 'local-push' ? 'local' : 'hook');
+  const recv = !op && st.pushEvent && (Date.now() - st.pushEvent.at) < 120000;
+  const setDot = (p, cls) => { const dot = document.getElementById(p + 'Dot'); if (dot) dot.className = 'opdot' + (cls ? ' ' + cls : ''); };
   for (const p of ['hook', 'local']) {
     const box = document.getElementById(p + 'Prog');
     if (!box) continue;
@@ -957,23 +959,37 @@ setInterval(async () => {
       bar.style.width = '100%'; pct.textContent = '100%';
       if (d && d.status === 'ok') {
         bar.style.background = '#4caf50';
+        setDot(p, 'ok');
         stage.textContent = `done — live via ${remoteOp.source}${secs != null ? ` in ${secs}s` : ''}`;
         toast(`deployed via ${remoteOp.source}${secs != null ? ` in ${secs}s` : ''}`, true);
       } else {
         bar.style.background = 'var(--danger)';
+        setDot(p, 'fail');
         stage.textContent = `failed via ${remoteOp.source}`;
         toast(`deploy via ${remoteOp.source} failed: ` + ((d && d.error) || 'unknown'), false);
       }
       loadDeployStatus(); loadServices(); refresh();
       setTimeout(() => { box.style.display = 'none'; }, 15000);
     }
-    if (p !== slot) box.style.display = 'none';
+    if (p !== slot && !(p === 'local' && recv)) box.style.display = 'none';
+  }
+  if (recv && !remoteOp) {
+    const box = document.getElementById('localProg');
+    if (box) {
+      box.style.display = 'block';
+      setDot('local', 'busy');
+      document.getElementById('localStage').textContent = 'receiving push…';
+      document.getElementById('localBar').style.width = '4%';
+      document.getElementById('localPct').textContent = '';
+      document.getElementById('localTime').textContent = Math.floor((Date.now() - st.pushEvent.at) / 1000) + 's';
+    }
   }
   if (!op) { remoteOp = null; return; }
   remoteOp = { app: currentApp, source: op.source, startedAt: op.startedAt, slot };
   const box = document.getElementById(slot + 'Prog');
   if (!box) return;
   box.style.display = 'block';
+  setDot(slot, 'busy');
   const s = Math.floor((Date.now() - op.startedAt) / 1000);
   document.getElementById(slot + 'Time').textContent = s + 's';
   const pctv = Math.min(95, 2 + (Date.now() - op.startedAt) / 90000 * 93);
