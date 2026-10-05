@@ -207,16 +207,14 @@ app.get('/api/apps/:id/databases/:type/dump', async (req, res) => {
   try {
     const ca = composeArgv();
     const cexec = (args) => runOut(ca[0], [...ca.slice(1), 'exec', '-T', ...args], { cwd: dir });
+    const cexecTo = (args) => runToFile(ca[0], [...ca.slice(1), 'exec', '-T', ...args], tmp, { cwd: dir });
     if (type === 'postgres') {
-      const out = await cexec(['-e', `PGPASSWORD=${cfg.pass}`, svc, 'pg_dump', '-U', cfg.user, '-h', 'localhost', cfg.db]);
-      fs.writeFileSync(tmp, out);
+      await cexecTo(['-e', `PGPASSWORD=${cfg.pass}`, svc, 'pg_dump', '-U', cfg.user, '-h', 'localhost', cfg.db]);
     } else if (type === 'mysql') {
-      const out = await cexec([svc, 'mysqldump', '-u', cfg.user, `-p${cfg.pass}`, cfg.db]);
-      fs.writeFileSync(tmp, out);
+      await cexecTo([svc, 'mysqldump', '-u', cfg.user, `-p${cfg.pass}`, cfg.db]);
     } else if (type === 'mongo') {
       const uri = `mongodb://${encodeURIComponent(cfg.user)}:${encodeURIComponent(cfg.pass)}@localhost:${cfg.port || 27017}/${encodeURIComponent(cfg.db || '')}?authSource=admin`;
-      const out = await cexec([svc, 'mongodump', `--uri=${uri}`, '--archive']);
-      fs.writeFileSync(tmp, out);
+      await cexecTo([svc, 'mongodump', `--uri=${uri}`, '--archive']);
     } else if (type === 'redis') {
       const cid = execSync(`${COMPOSE_BIN} ps -q ${svc}`, { cwd: dir }).toString().trim().split('\n')[0] || '';
       if (!/^[a-f0-9]{12,64}$/i.test(cid)) throw new Error('database container not running');
@@ -273,19 +271,48 @@ function sh(cmd, cwd, env) {
 }
 // argv-based runner (no shell) so generated passwords never touch a shell line.
 // captureStderr merges stderr into the resolved output (migrations print there).
+// stderr is always kept for failure messages, so `cd` into a wrong folder
+// reports the shell's reason instead of a bare exit code.
 function runOut(bin, args, opts = {}) {
   return new Promise((res, rej) => {
     const p = spawn(bin, args, opts);
     const chunks = [];
+    const errChunks = [];
     let settled = false;
+    const errTail = () => Buffer.concat(errChunks).toString().slice(-500);
     p.stdout.on('data', d => chunks.push(d));
-    p.stderr.on('data', d => { if (opts.captureStderr) chunks.push(d); });
+    p.stderr.on('data', d => {
+      if (opts.captureStderr) chunks.push(d);
+      errChunks.push(d);
+      if (errChunks.length > 32) errChunks.shift();
+    });
     p.on('error', e => { if (!settled) { settled = true; rej(e); } });
     p.on('close', code => {
       if (settled) return;
       settled = true;
       if (code === 0) res(Buffer.concat(chunks));
-      else rej(new Error(`${bin} exited with code ${code}`));
+      else rej(new Error(`${bin} exited with code ${code}${errTail() ? `: ${errTail()}` : ''}`));
+    });
+  });
+}
+// Stream stdout straight to a file (dumps can be larger than memory).
+function runToFile(bin, args, file, opts = {}) {
+  return new Promise((res, rej) => {
+    const out = fs.createWriteStream(file);
+    out.on('error', rej);
+    const p = spawn(bin, args, opts);
+    const errChunks = [];
+    const errTail = () => Buffer.concat(errChunks).toString().slice(-500);
+    p.stdout.on('data', d => {
+      if (!out.write(d)) { p.stdout.pause(); out.once('drain', () => { try { p.stdout.resume(); } catch {} }); }
+    });
+    p.stderr.on('data', d => { errChunks.push(d); if (errChunks.length > 32) errChunks.shift(); });
+    p.on('error', e => { out.destroy(); rej(e); });
+    p.on('close', code => {
+      out.end(() => {
+        if (code === 0) res();
+        else rej(new Error(`${bin} exited with code ${code}${errTail() ? `: ${errTail()}` : ''}`));
+      });
     });
   });
 }
@@ -1690,6 +1717,19 @@ function migrateTarget(meta, dir, svcName) {
 function migrateDirOk(d) {
   return !d || (MIGRATE_DIR_RE.test(d) && !d.split('/').includes('..'));
 }
+// The folder is relative to the service's repo root (code/<service-subdir>).
+// A file path here is the classic mistake - cd fails with a cryptic exit
+// code, so reject it up front with the fix spelled out.
+function migrateDirProblem(meta, dirAbs, svcName, dir) {
+  if (!dir) return null;
+  const list = svc.fullServices(meta, dirAbs).filter(s => s.enabled !== false);
+  const svcObj = list.find(s => s.name === svcName) || null;
+  const base = path.join(dirAbs, 'code', (svcObj && svcObj.subdir) || '');
+  let st = null;
+  try { st = fs.statSync(path.join(base, dir)); } catch { return `migrate folder '${dir}' not found in the repo`; }
+  if (!st.isDirectory()) return `'${dir}' is a file - use its folder instead`;
+  return null;
+}
 // dir/cmd are charset-validated (no quotes/$/backtick/semicolon/&/|), so the
 // sh -c wrapper cannot break out - it only adds a safe `cd`.
 function migrateRunArgv(svcName, dir, cmd) {
@@ -1714,6 +1754,8 @@ app.post('/api/apps/:id/migrate', (req, res) => {
     if (req.body && req.body.service !== undefined)
       meta.migrateSvc = migrateTarget(meta, dirAbs, String(req.body.service || '').trim());
     else if (!meta.migrateSvc) meta.migrateSvc = migrateTarget(meta, dirAbs, '');
+    const problem = migrateDirProblem(meta, dirAbs, meta.migrateSvc, dir);
+    if (problem) return res.status(400).json({ error: problem });
     save(db_);
     res.json({ ok: true, migrateCmd: meta.migrateCmd, migrateSvc: meta.migrateSvc, migrateDir: meta.migrateDir, migrateCheck: meta.migrateCheck });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1735,6 +1777,8 @@ app.post('/api/apps/:id/migrate-run', async (req, res) => {
     const dirAbs = appDir(APPS_DIR, meta.id);
     const svcName = migrateTarget(meta, dirAbs, String((req.body && req.body.service) || meta.migrateSvc || ''));
     const dir = dirIn || meta.migrateDir || '';
+    const problem = migrateDirProblem(meta, dirAbs, svcName, dir);
+    if (problem) return res.status(400).json({ error: problem });
     const argv = migrateRunArgv(svcName, dir, cmd);
     const cap = { cwd: dirAbs, captureStderr: true };
     const out = await runOut(argv[0], argv.slice(1), cap);
@@ -1756,6 +1800,8 @@ app.post('/api/apps/:id/migrate-check', async (req, res) => {
     const dirAbs = appDir(APPS_DIR, meta.id);
     const svcName = migrateTarget(meta, dirAbs, String((req.body && req.body.service) || meta.migrateSvc || ''));
     const dir = dirIn || meta.migrateDir || '';
+    const problem = migrateDirProblem(meta, dirAbs, svcName, dir);
+    if (problem) return res.status(400).json({ error: problem });
     const argv = migrateRunArgv(svcName, dir, cmd);
     const out = await runOut(argv[0], argv.slice(1), { cwd: dirAbs, captureStderr: true });
     res.json({ ok: true, service: svcName, output: String(out).slice(-4000) || '(no output)' });
