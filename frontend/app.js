@@ -1158,6 +1158,7 @@ function connectTerm(elId, appId, slotKey, svc) {
   const old = termSlots[slotKey];
   if (old) {
     old.ws.onopen = old.ws.onmessage = old.ws.onerror = old.ws.onclose = null;
+    if (old.resize) window.removeEventListener('resize', old.resize);
     try { old.input.dispose(); } catch {}
     try { old.ws.close(); } catch {}
     try { old.term.dispose(); } catch {}
@@ -1168,13 +1169,19 @@ function connectTerm(elId, appId, slotKey, svc) {
     el.textContent = 'terminal library failed to load - check this panel can reach cdn.jsdelivr.net';
     return;
   }
-  const t = new Terminal({ cursorBlink: true, convertEol: true, scrollback: 3000 });
+  const initialCols = Math.max(20, Math.floor(((el.clientWidth || 720) - 12) / 9));
+  const t = new Terminal({ cursorBlink: true, convertEol: true, scrollback: 3000, cols: initialCols });
+  const fit = typeof FitAddon !== 'undefined' ? new FitAddon.FitAddon() : null;
+  if (fit) t.loadAddon(fit);
   t.open(el);
+  const resize = () => { if (fit) { try { fit.fit(); } catch {} } };
+  resize();
   t.writeln('connecting to ' + appId + (svc && svc !== 'app' ? '/' + svc : '') + '…');
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const w = new WebSocket(`${protocol}//${location.host}/terminal?app=${encodeURIComponent(appId)}&service=${encodeURIComponent(svc || 'app')}`);
-  const session = { term: t, ws: w, input: null };
+  const session = { term: t, ws: w, input: null, resize };
   termSlots[slotKey] = session;
+  window.addEventListener('resize', resize);
   const active = () => termSlots[slotKey] === session;
   session.input = t.onData(d => {
     if (active() && w.readyState === WebSocket.OPEN) w.send(d);

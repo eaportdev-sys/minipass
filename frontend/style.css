@@ -54,7 +54,8 @@ body {
 .navitem.active { background: var(--accent); color: #fff; }
 .tabbtn.active { border-color: var(--accent); color: var(--accent); }
 .sidefoot { margin-top: auto; padding: 14px; border-top: 1px solid var(--border); display: flex; gap: 8px; }
-main { flex: 1; padding: 24px; max-width: 1100px; }
+main { flex: 1; min-width: 0; width: 100%; padding: 24px; max-width: 1100px; }
+.view, .sitetab, .card { min-width: 0; max-width: 100%; }
 .pagehead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .pagehead h1 { margin: 0; font-size: 24px; }
 .card {
@@ -216,7 +217,12 @@ pre {
   padding: 12px; overflow: auto; font-size: 13px; max-height: 320px;
 }
 a { color: var(--accent); }
-#term, #termGlobal { height: 320px; background: #000; border-radius: 8px; padding: 6px; }
+#term, #termGlobal {
+  width: 100%; max-width: 100%; height: 320px; margin-top: 10px;
+  overflow: hidden; background: #000; border-radius: 8px;
+}
+#term .xterm, #termGlobal .xterm { width: 100%; max-width: 100%; height: 100%; padding: 6px; overflow: hidden; }
+#term .xterm-screen, #termGlobal .xterm-screen { max-width: 100%; }
 .file-workspace { display: grid; grid-template-columns: minmax(240px, .36fr) minmax(0, 1fr); padding: 0; overflow: hidden; min-height: 590px; }
 .file-tree-pane { min-width: 0; border-right: 1px solid var(--border); background: var(--input); }
 .file-pane-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 14px; border-bottom: 1px solid var(--border); }
