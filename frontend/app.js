@@ -111,6 +111,7 @@ async function loadDeployStatus() {
     document.getElementById('deployHist').innerHTML = hist.length
       ? 'recent:<br>' + hist.map(h => `<div class="meta">${h.source || '?'} — ${fmtH(h)}</div>`).join('')
       : '';
+    siteDot(s);
   } catch { info.textContent = 'unreachable'; }
 }
 function backToSites() { currentApp = null; showView('websites'); refresh(); }
@@ -959,10 +960,29 @@ setInterval(async () => {
   if (!currentApp) return;
   let st;
   try { st = await (await fetch(`/api/apps/${currentApp}/status`)).json(); } catch { return; }
+// Connection light: always-on state, not deploy-only. Blinking yellow while
+// receiving/deploying, solid green when app containers run steady, red otherwise.
+function siteDot(st) {
+  const op = st && st.deployOp && st.deployOp.source !== 'manual';
+  const recv = st && !st.deployOp && st.pushEvent && (Date.now() - st.pushEvent.at) < 120000;
+  let cls = 'fail';
+  if (op || recv) cls = 'busy';
+  else {
+    const all = (st && st.containers) || [];
+    const appCs = all.filter(c => !/^db(-|$)/i.test(c.service || ''));
+    const rel = appCs.length ? appCs : all;
+    if (rel.length && rel.every(c => /^running/i.test(c.state || ''))) cls = 'ok';
+  }
+  for (const id of ['hookDot', 'localDot']) {
+    const dot = document.getElementById(id);
+    if (dot) dot.className = 'opdot ' + cls;
+  }
+  return cls;
+}
   const op = st.deployOp && st.deployOp.source !== 'manual' ? st.deployOp : null;
   const slot = !op ? null : (op.source === 'local-push' ? 'local' : 'hook');
   const recv = !op && st.pushEvent && (Date.now() - st.pushEvent.at) < 120000;
-  const setDot = (p, cls) => { const dot = document.getElementById(p + 'Dot'); if (dot) dot.className = 'opdot' + (cls ? ' ' + cls : ''); };
+  siteDot(st);
   for (const p of ['hook', 'local']) {
     const box = document.getElementById(p + 'Prog');
     if (!box) continue;
@@ -975,12 +995,10 @@ setInterval(async () => {
       bar.style.width = '100%'; pct.textContent = '100%';
       if (d && d.status === 'ok') {
         bar.style.background = '#4caf50';
-        setDot(p, 'ok');
         stage.textContent = `done — live via ${remoteOp.source}${secs != null ? ` in ${secs}s` : ''}`;
         toast(`deployed via ${remoteOp.source}${secs != null ? ` in ${secs}s` : ''}`, true);
       } else {
         bar.style.background = 'var(--danger)';
-        setDot(p, 'fail');
         stage.textContent = `failed via ${remoteOp.source}`;
         toast(`deploy via ${remoteOp.source} failed: ` + ((d && d.error) || 'unknown'), false);
       }
@@ -993,7 +1011,6 @@ setInterval(async () => {
     const box = document.getElementById('localProg');
     if (box) {
       box.style.display = 'block';
-      setDot('local', 'busy');
       document.getElementById('localStage').textContent = 'receiving push…';
       document.getElementById('localBar').style.width = '4%';
       document.getElementById('localPct').textContent = '';
