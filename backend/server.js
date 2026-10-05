@@ -371,7 +371,10 @@ async function deploy(id, opts = {}) {
         }
       }
     } catch (e) {
-      throw new Error(redactUrl(e.stderr ? String(e.stderr) : e.message));
+      const msg = redactUrl(e.stderr ? String(e.stderr) : e.message);
+      const sha0 = await currentSha(dir);
+      await recordDeploy(id, { sha: sha0, at: new Date().toISOString(), status: 'error', error: ('git sync failed - running containers untouched: ' + msg).slice(-500) });
+      throw new Error(msg);
     }
   }
   // every build streams to deploy.log (host-persisted, per app) so the UI can show
