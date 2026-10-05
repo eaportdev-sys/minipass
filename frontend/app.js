@@ -776,7 +776,7 @@ async function scan() {
 async function showKey() {
   const r = await (await fetch('/api/panel/pubkey')).json();
   document.getElementById('keyOut').textContent =
-    (r.pubkey || r.error) + '\n\nAdd this as a read-only deploy key on GitHub (repo Settings → Deploy keys) so the panel can pull.';
+    (r.pubkey || r.error) + '\n\nOnly needed for SSH remotes (git@github.com:…) — skip this if your sites pull over HTTPS + token.';
 }
 let curDir = '';
 async function listFiles(dir) {
