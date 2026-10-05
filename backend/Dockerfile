@@ -1,8 +1,9 @@
 FROM node:20-alpine
 ARG GIT_SHA=dev
 ENV GIT_SHA=${GIT_SHA}
-# docker CLI (to manage app containers via mounted sock) + git (for self-upgrade)
-RUN apk add --no-cache git unzip openssh-client docker-cli docker-compose 2>/dev/null || apk add --no-cache git unzip openssh-client docker docker-compose 2>/dev/null || apk add --no-cache git unzip openssh-client docker 2>/dev/null || true
+# docker CLI (to manage app containers via mounted sock) + git (for self-upgrade).
+# util-linux-misc provides `script`, used as the PTY relay for browser terminals.
+RUN apk add --no-cache git unzip openssh-client util-linux-misc docker-cli docker-compose 2>/dev/null || apk add --no-cache git unzip openssh-client util-linux-misc docker docker-compose 2>/dev/null || apk add --no-cache git unzip openssh-client util-linux-misc docker 2>/dev/null || true
 WORKDIR /srv/panel
 COPY backend/package.json ./
 RUN npm i --omit=dev

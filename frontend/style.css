@@ -216,7 +216,7 @@ pre {
   padding: 12px; overflow: auto; font-size: 13px; max-height: 320px;
 }
 a { color: var(--accent); }
-#term { height: 320px; background: #000; border-radius: 8px; padding: 6px; }
+#term, #termGlobal { height: 320px; background: #000; border-radius: 8px; padding: 6px; }
 .file-workspace { display: grid; grid-template-columns: minmax(240px, .36fr) minmax(0, 1fr); padding: 0; overflow: hidden; min-height: 590px; }
 .file-tree-pane { min-width: 0; border-right: 1px solid var(--border); background: var(--input); }
 .file-pane-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 14px; border-bottom: 1px solid var(--border); }

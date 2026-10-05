@@ -1157,21 +1157,40 @@ function connectTerm(elId, appId, slotKey, svc) {
   // dispose any previous session first - reconnects replace instead of stacking blank terminals
   const old = termSlots[slotKey];
   if (old) {
+    old.ws.onopen = old.ws.onmessage = old.ws.onerror = old.ws.onclose = null;
+    try { old.input.dispose(); } catch {}
     try { old.ws.close(); } catch {}
     try { old.term.dispose(); } catch {}
   }
   const el = document.getElementById(elId);
   el.innerHTML = '';
-  const t = new Terminal();
+  if (typeof Terminal === 'undefined') {
+    el.textContent = 'terminal library failed to load - check this panel can reach cdn.jsdelivr.net';
+    return;
+  }
+  const t = new Terminal({ cursorBlink: true, convertEol: true, scrollback: 3000 });
   t.open(el);
   t.writeln('connecting to ' + appId + (svc && svc !== 'app' ? '/' + svc : '') + '…');
-  const w = new WebSocket(`ws://${location.host}/terminal?app=${appId}&service=${encodeURIComponent(svc || 'app')}`);
-  termSlots[slotKey] = { term: t, ws: w };
-  w.onopen = () => t.writeln('connected - type commands below.\r\n');
-  w.onmessage = e => t.write(e.data);
-  w.onerror = () => t.writeln('\r\nconnection error - is the app container running?');
-  w.onclose = () => t.writeln('\r\nsession closed. Press connect to reopen.');
-  t.onData = d => { try { w.send(d); } catch {} };
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const w = new WebSocket(`${protocol}//${location.host}/terminal?app=${encodeURIComponent(appId)}&service=${encodeURIComponent(svc || 'app')}`);
+  const session = { term: t, ws: w, input: null };
+  termSlots[slotKey] = session;
+  const active = () => termSlots[slotKey] === session;
+  session.input = t.onData(d => {
+    if (active() && w.readyState === WebSocket.OPEN) w.send(d);
+  });
+  w.onopen = () => {
+    if (!active()) return;
+    t.writeln('connected - type commands below.\r\n');
+    t.focus();
+  };
+  w.onmessage = e => { if (active()) t.write(e.data); };
+  w.onerror = () => { if (active()) t.writeln('\r\nconnection error - is the app container running?'); };
+  w.onclose = e => {
+    if (!active()) return;
+    const reason = e.reason ? ' (' + e.reason + ')' : '';
+    t.writeln(`\r\nsession closed${reason}. Press connect to reopen.`);
+  };
 }
 async function loadServices() {
   if (!currentApp) return;
