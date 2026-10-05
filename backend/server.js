@@ -137,7 +137,10 @@ app.get('/api/types', (req, res) => {
   ]);
 });
 
-app.get('/api/apps', (req, res) => res.json(load().apps.map(pubApp)));
+app.get('/api/apps', (req, res) => res.json(load().apps.map(meta => ({
+  ...pubApp(meta),
+  services: svc.fullServices(meta, appDir(APPS_DIR, meta.id))
+}))));
 
 app.post('/api/apps', async (req, res) => {
   try {

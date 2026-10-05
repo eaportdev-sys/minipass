@@ -62,7 +62,22 @@ main { flex: 1; min-width: 0; width: 100%; padding: 24px; max-width: 1100px; }
   background: var(--card); border: 1px solid var(--border);
   border-radius: 12px; padding: 16px; margin: 12px 0; box-shadow: var(--shadow);
 }
-.appcard h3 { margin: 0 0 6px; }
+#apps { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 12px; }
+.appcard { margin: 0; min-width: 0; }
+.appcard-layout { display: flex; align-items: stretch; justify-content: space-between; gap: 16px; min-width: 0; }
+.appcard-main { display: flex; flex: 1 1 auto; min-width: 0; flex-direction: column; }
+.appcard h3 { margin: 0 0 6px; font-size: 18px; }
+.appcard-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.badge.pending { color: #ffc107; border-color: rgba(255, 193, 7, .55); }
+.app-links { display: grid; gap: 6px; margin: 7px 0 12px; }
+.app-link-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 7px; min-width: 0; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--input); }
+.app-link-row > span { color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; }
+.app-link-row a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.app-links-empty { padding: 9px; color: var(--muted); border: 1px dashed var(--border); border-radius: 8px; font-size: 11px; }
+.appcard-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: auto; }
+.power-control.app-card-power { flex: 0 0 94px; min-height: 90px; align-self: flex-start; }
+.app-card-power .power-symbol { font-size: 32px; }
+.app-card-power .power-label { font-size: 10px; }
 .badges { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
 .badge {
   font-size: 12px; padding: 2px 10px; border-radius: 20px;
@@ -341,6 +356,11 @@ a { color: var(--accent); }
   .sitehero-layout { align-items: flex-start; }
   .power-control { flex-basis: 88px; min-height: 84px; }
   .power-control .power-symbol { font-size: 30px; }
+  #apps { grid-template-columns: 1fr; }
+  .appcard-layout { gap: 10px; }
+  .power-control.app-card-power { flex-basis: 74px; min-height: 74px; padding: 6px; }
+  .app-card-power .power-symbol { font-size: 27px; }
+  .app-card-power .power-label { font-size: 8px; }
   .flowsteps { grid-template-columns: 1fr; }
   .credential-grid { grid-template-columns: 1fr; }
   .deploy-top-grid, .deploy-source-grid { grid-template-columns: 1fr; }

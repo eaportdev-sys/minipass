@@ -1,14 +1,23 @@
 let currentApp = null;
 let serviceCheckTimer = null;
 let serviceCheckSeq = 0;
+let appsRefreshSeq = 0;
 const dbPopupSlots = new Map();
 async function refresh() {
+  const seq = ++appsRefreshSeq;
   const apps = await (await fetch('/api/apps')).json();
-  document.getElementById('apps').innerHTML = apps.map(a =>
-    `<div class="card appcard" id="card-${a.id}"><h3>${a.id}</h3>
-    <div class="badges"><span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}${a.dirty ? `<span class="badge">● changes pending</span>` : ''}</div>
-    <div class="meta">local: ${appUrl(a) ? `<a href="${appUrl(a)}" target="_blank">${appUrl(a).replace(/^http:\/\//, '')}</a>` : 'recreate app to get localhost port'}</div>
-    <div class="actions"><button class="btn primary" onclick="openSite('${a.id}')">open</button><button onclick="deploy('${a.id}')">redeploy</button><button onclick="stopApp('${a.id}')">stop</button><button onclick="startApp('${a.id}')">start</button><button class="btn danger" onclick="rmApp('${a.id}')">delete</button></div></div>`).join('') || '<div class="card">No websites yet - hit + Create.</div>';
+  document.getElementById('apps').innerHTML = apps.map(a => {
+    const services = appPublishedServices(a);
+    return `<div class="card appcard" id="card-${a.id}"><div class="appcard-layout"><div class="appcard-main">` +
+      `<div class="appcard-title"><div><h3>${safeHtml(a.id)}</h3><div class="badges"><span class="badge type">${safeHtml(a.type)}</span><span class="badge">db: ${safeHtml(dbLabel(a))}</span>` +
+      (services.length > 1 ? `<span class="badge">${services.length} services</span>` : '') + (a.domain ? `<span class="badge">${safeHtml(a.domain)}</span>` : '') +
+      (a.dirty ? '<span class="badge pending">● changes pending</span>' : '') + `</div></div></div>` +
+      `<div class="app-links">${appLinksMarkup(a, services)}</div>` +
+      `<div class="appcard-actions"><button class="btn primary" onclick="openSite('${a.id}')">open details</button><span id="appLifecycle-${a.id}"><button disabled>checking…</button></span><button class="btn danger" onclick="rmApp('${a.id}')">delete</button></div></div>` +
+      `<button id="appPower-${a.id}" class="power-control app-card-power is-checking" onclick="deploy('${a.id}')" title="Checking deployment state"><span class="power-symbol">⏻</span><span class="power-label">Checking</span></button>` +
+      `</div></div>`;
+  }).join('') || '<div class="card">No websites yet - hit + Create.</div>';
+  hydrateAppCards(apps, seq);
   // keep detail header + global terminal picker in sync
   if (currentApp && !apps.some(a => a.id === currentApp)) backToSites();
   else if (currentApp) fillSiteHeader(apps.find(a => a.id === currentApp));
@@ -18,6 +27,44 @@ async function refresh() {
     tsel.innerHTML = apps.map(a => `<option value="${a.id}">${a.id}</option>`).join('');
     if (apps.some(a => a.id === prev)) tsel.value = prev;
   }
+}
+function appPublishedServices(a) {
+  const list = Array.isArray(a.services) && a.services.length
+    ? a.services
+    : [{ name: 'app', type: a.type, hostPort: a.hostPort, enabled: true }];
+  return list.filter(s => s.enabled !== false && s.hostPort);
+}
+function appLinksMarkup(a, services) {
+  if (!services.length) return '<div class="app-links-empty">No published local service.</div>';
+  return services.map((s, i) => {
+    const path = (s.name === 'app' || (i === 0 && services.length === 1)) ? (a.homePath || '') : '';
+    const url = `http://${location.hostname}:${s.hostPort}${path}`;
+    return `<div class="app-link-row"><span>${safeHtml(s.name || 'app')}</span><a href="${safeHtml(url)}" target="_blank" rel="noopener noreferrer">${safeHtml(url.replace(/^http:\/\//, ''))}</a></div>`;
+  }).join('');
+}
+function setAppCardState(id, state, running) {
+  const power = document.getElementById('appPower-' + id);
+  const lifecycle = document.getElementById('appLifecycle-' + id);
+  if (!power || !lifecycle) return;
+  const label = state === 'deploying' ? 'Deploying' : state === 'checking' ? 'Checking' : running ? 'Redeploy' : state === 'failed' ? 'Retry' : 'Deploy';
+  setPowerState('appPower-' + id, state, label);
+  power.disabled = state === 'deploying' || state === 'checking';
+  power.title = state === 'deploying' ? 'Deployment in progress' : running ? 'Rebuild and redeploy this site' : 'Build and deploy this site';
+  lifecycle.innerHTML = state === 'deploying' || state === 'checking'
+    ? '<button disabled>busy…</button>'
+    : running ? `<button onclick="stopApp('${id}')">stop</button>` : `<button onclick="startApp('${id}')">start</button>`;
+}
+async function hydrateAppCards(apps, seq) {
+  await Promise.all(apps.map(async a => {
+    try {
+      const st = await (await fetch(`/api/apps/${a.id}/status`)).json();
+      if (seq !== appsRefreshSeq) return;
+      const running = appIsRunning(st);
+      setAppCardState(a.id, st.deploying ? 'deploying' : (running ? 'deployed' : 'off'), running);
+    } catch {
+      if (seq === appsRefreshSeq) setAppCardState(a.id, 'failed', false);
+    }
+  }));
 }
 function openSite(id) {
   currentApp = id;
@@ -808,12 +855,15 @@ function toggleTheme() {
 }
 try { document.documentElement.dataset.theme = localStorage.getItem('mp-theme') || 'dark'; } catch {}
 async function deploy(id) {
-  if (id === currentApp && document.getElementById('deployProg')) return runDeploy(id, null);
+  const siteView = document.getElementById('view-site');
+  if (id === currentApp && siteView && siteView.classList.contains('active')) return runDeploy(id, null);
+  setAppCardState(id, 'deploying', false);
   toast('redeploying ' + id + '…');
   try {
     const r = await (await fetch('/api/apps/' + id + '/deploy', { method: 'POST' })).json();
     toast(r.ok ? id + ' redeployed' : ('redeploy failed: ' + (r.error || 'unknown')), !!r.ok);
   } catch (e) { toast('redeploy failed: ' + e.message, false); }
+  await refresh();
 }
 // Deploy with live notice: elapsed timer, progress bar to 100%, stage + log tail,
 // success/fail at the end. Polls /status (deploying flag) + build log; the bar
@@ -915,21 +965,25 @@ function uiConfirm({ title, body, requireText, confirmLabel, danger }) {
 }
 async function stopApp(id) {
   if (id === currentApp) setPowerState('sitePower', 'checking', 'Stopping');
+  setAppCardState(id, 'checking', true);
   toast('stopping ' + id + '…');
   try {
     const r = await (await fetch('/api/apps/' + id + '/stop', { method: 'POST' })).json();
     toast(r.ok ? id + ' stopped' : ('stop failed: ' + (r.error || 'unknown')), !!r.ok);
-    if (id === currentApp) await loadDeployStatus();
-  } catch (e) { toast('stop failed: ' + e.message, false); if (id === currentApp) await loadDeployStatus(); }
+  } catch (e) { toast('stop failed: ' + e.message, false); }
+  await refresh();
+  if (id === currentApp) await loadDeployStatus();
 }
 async function startApp(id) {
   if (id === currentApp) setPowerState('sitePower', 'checking', 'Starting');
+  setAppCardState(id, 'checking', false);
   toast('starting ' + id + '…');
   try {
     const r = await (await fetch('/api/apps/' + id + '/start', { method: 'POST' })).json();
     toast(r.ok ? id + ' started' : ('start failed: ' + (r.error || 'unknown')), !!r.ok);
-    if (id === currentApp) await loadDeployStatus();
-  } catch (e) { toast('start failed: ' + e.message, false); if (id === currentApp) await loadDeployStatus(); }
+  } catch (e) { toast('start failed: ' + e.message, false); }
+  await refresh();
+  if (id === currentApp) await loadDeployStatus();
 }
 async function toggleSitePower() {
   if (!currentApp) return;
