@@ -70,6 +70,7 @@
         <div class="actions"><button onclick="deployCurrent()">redeploy</button><button onclick="loadDeployStatus()">refresh</button><button onclick="diagnose()">diagnose</button></div>
         <div id="deployProg" style="display:none"><div class="meta"><span id="deployStage">deploying…</span> <span id="deployPct"></span> <span id="deployTime"></span></div><div style="background:#222;height:8px"><div id="deployBar" style="height:8px;width:0%;background:#4caf50"></div></div><pre id="deployTail"></pre></div>
         <div id="doctorOut"></div>
+        <div class="meta" id="deployHist"></div>
       </div>
       <div class="card">
         <b>databases</b> <span class="meta" id="dbList"></span>
@@ -116,6 +117,7 @@
           <option value="15">every 15 min</option>
         </select></div>
         <div class="meta" id="pollState"></div>
+        <div class="meta" id="hookHist"></div>
         <div id="hookProg" style="display:none"><div class="meta"><span id="hookDot" class="opdot"></span> <span id="hookStage">deploying…</span> <span id="hookPct"></span> <span id="hookTime"></span></div><div style="background:#222;height:8px"><div id="hookBar" style="height:8px;width:0%;background:#4caf50"></div></div></div>
         <div class="meta">repo deploy key (SSH remotes only — add to that repo, read-only): <button onclick="showRepoKey()">show key</button></div>
         <div class="meta"><code id="repoKeyOut"></code></div>
@@ -125,6 +127,7 @@
         <div class="meta">Push straight from your machine to this box — no GitHub. Push checks out + rebuilds.</div>
         <div class="meta" id="localGitBox"><button onclick="initLocalGit()">enable local git push</button></div>
         <div id="localProg" style="display:none"><div class="meta"><span id="localDot" class="opdot"></span> <span id="localStage">deploying…</span> <span id="localPct"></span> <span id="localTime"></span></div><div style="background:#222;height:8px"><div id="localBar" style="height:8px;width:0%;background:#4caf50"></div></div></div>
+        <div class="meta" id="localHist"></div>
       </div>
       <div id="tab-files" class="sitetab">
         <div class="card">

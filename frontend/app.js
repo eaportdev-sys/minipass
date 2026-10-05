@@ -95,6 +95,22 @@ async function loadDeployStatus() {
     if (hp && s.app) hp.value = s.app.homePath || '';
     const mc = document.getElementById('migrateCmd');
     if (mc && s.app) mc.value = s.app.migrateCmd || '';
+    // persistent per-trigger record: visible anytime, no open page needed
+    const hist = s.history || [];
+    const fmtH = h => {
+      const when = (h.at || '').replace('T', ' ').slice(0, 19);
+      const dur = h.durationMs != null ? ` ${Math.round(h.durationMs / 1000)}s` : '';
+      const res = h.status === 'ok' ? 'ok' : ('FAILED' + (h.error ? ' — ' + String(h.error).split('\n').slice(-1)[0].slice(0, 120) : ''));
+      return `${when} ${res}${dur}`;
+    };
+    const lastSrc = (...srcs) => hist.find(h => srcs.includes(h.source));
+    const hookLast = lastSrc('webhook', 'poll');
+    document.getElementById('hookHist').textContent = hookLast ? `last auto-deploy (${hookLast.source}): ${fmtH(hookLast)}` : '';
+    const localLast = lastSrc('local-push');
+    document.getElementById('localHist').textContent = localLast ? `last push: ${fmtH(localLast)}` : '';
+    document.getElementById('deployHist').innerHTML = hist.length
+      ? 'recent:<br>' + hist.map(h => `<div class="meta">${h.source || '?'} — ${fmtH(h)}</div>`).join('')
+      : '';
   } catch { info.textContent = 'unreachable'; }
 }
 function backToSites() { currentApp = null; showView('websites'); refresh(); }

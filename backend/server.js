@@ -279,6 +279,7 @@ async function recordDeploy(id, rec) {
       }
       m.lastDeploy = rec;
       if (rec.status === 'ok') delete m.dirty;
+      m.deployHistory = [{ at: rec.at, sha: rec.sha, status: rec.status, source: rec.source || null, durationMs: rec.durationMs != null ? rec.durationMs : null, error: rec.error || null }, ...(m.deployHistory || [])].slice(0, 10);
       save(db2);
     }
   } catch {}
@@ -490,7 +491,7 @@ app.get('/api/apps/:id/build-log', (req, res) => {
 app.get('/api/apps/:id/status', async (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta) return res.status(404).json({ error: 'unknown app' });
-  res.json({ app: pubApp(meta), lastDeploy: meta.lastDeploy || null, containers: await appContainers(meta.id), deploying: deployLocks.has(meta.id), deployOp: deployOps.get(meta.id) || null, pushEvent: pushEvents.get(meta.id) || null });
+  res.json({ app: pubApp(meta), lastDeploy: meta.lastDeploy || null, history: (meta.deployHistory || []).slice(0, 5), containers: await appContainers(meta.id), deploying: deployLocks.has(meta.id), deployOp: deployOps.get(meta.id) || null, pushEvent: pushEvents.get(meta.id) || null });
 });
 async function appContainers(id) {
   let containers = [];
