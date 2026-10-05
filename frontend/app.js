@@ -6,17 +6,7 @@ const dbPopupSlots = new Map();
 async function refresh() {
   const seq = ++appsRefreshSeq;
   const apps = await (await fetch('/api/apps')).json();
-  document.getElementById('apps').innerHTML = apps.map(a => {
-    const services = appPublishedServices(a);
-    return `<div class="card appcard" id="card-${a.id}"><div class="appcard-layout"><div class="appcard-main">` +
-      `<div class="appcard-title"><div><h3>${safeHtml(a.id)}</h3><div class="badges"><span class="badge type">${safeHtml(a.type)}</span><span class="badge">db: ${safeHtml(dbLabel(a))}</span>` +
-      (services.length > 1 ? `<span class="badge">${services.length} services</span>` : '') + (a.domain ? `<span class="badge">${safeHtml(a.domain)}</span>` : '') +
-      dirtyBadge(a) + `</div></div></div>` +
-      `<div class="app-links">${appLinksMarkup(a, services)}</div>` +
-      `<div class="appcard-actions"><button class="btn primary" onclick="openSite('${a.id}')">open details</button><span id="appLifecycle-${a.id}"><button disabled>checking…</button></span><button class="btn danger" onclick="rmApp('${a.id}')">delete</button></div></div>` +
-      `<button id="appPower-${a.id}" class="power-control app-card-power is-checking" onclick="deploy('${a.id}')" title="Checking deployment state"><span class="power-symbol">⏻</span><span class="power-label">Checking</span></button>` +
-      `</div></div>`;
-  }).join('') || '<div class="card">No websites yet - hit + Create.</div>';
+  document.getElementById('apps').innerHTML = appsGroupedMarkup(apps);
   hydrateAppCards(apps, seq);
   // keep detail header + global terminal picker in sync
   if (currentApp && !apps.some(a => a.id === currentApp)) backToSites();
@@ -27,6 +17,39 @@ async function refresh() {
     tsel.innerHTML = apps.map(a => `<option value="${a.id}">${a.id}</option>`).join('');
     if (apps.some(a => a.id === prev)) tsel.value = prev;
   }
+}
+function appCardMarkup(a) {
+  const services = appPublishedServices(a);
+  return `<div class="card appcard" id="card-${a.id}"><div class="appcard-layout"><div class="appcard-main">` +
+    `<div class="appcard-title"><div><h3>${safeHtml(a.id)}</h3><div class="badges"><span class="badge type">${safeHtml(a.type)}</span><span class="badge">db: ${safeHtml(dbLabel(a))}</span>` +
+    (services.length > 1 ? `<span class="badge">${services.length} services</span>` : '') + (a.domain ? `<span class="badge">${safeHtml(a.domain)}</span>` : '') +
+    dirtyBadge(a) + `</div></div></div>` +
+    `<div class="app-links">${appLinksMarkup(a, services)}</div>` +
+    `<div class="appcard-actions"><button class="btn primary" onclick="openSite('${a.id}')">open details</button><span id="appLifecycle-${a.id}"><button disabled>checking…</button></span><button class="btn danger" onclick="rmApp('${a.id}')">delete</button></div></div>` +
+    `<button id="appPower-${a.id}" class="power-control app-card-power is-checking" onclick="deploy('${a.id}')" title="Checking deployment state"><span class="power-symbol">⏻</span><span class="power-label">Checking</span></button>` +
+    `</div></div>`;
+}
+function appsGroupedMarkup(apps) {
+  if (!apps.length) return '<div class="card">No websites yet - hit + Create.</div>';
+  const order = ['static', 'react', 'node', 'php'];
+  const labels = { static: 'Static sites', react: 'React apps', node: 'Node.js APIs', php: 'PHP sites' };
+  const groups = new Map();
+  for (const a of apps) {
+    const t = order.includes(a.type) ? a.type : 'other';
+    if (!groups.has(t)) groups.set(t, []);
+    groups.get(t).push(a);
+  }
+  const keys = [...groups.keys()].sort((x, y) => {
+    const ix = order.includes(x) ? order.indexOf(x) : 99;
+    const iy = order.includes(y) ? order.indexOf(y) : 99;
+    return ix - iy || x.localeCompare(y);
+  });
+  return keys.map(k => {
+    const list = groups.get(k).slice().sort((a, b) => a.id.localeCompare(b.id));
+    const title = labels[k] || 'Other sites';
+    return `<section class="app-group"><div class="app-group-head"><b>${safeHtml(title)}</b><span class="badge">${list.length}</span></div>` +
+      `<div class="app-group-grid">${list.map(appCardMarkup).join('')}</div></section>`;
+  }).join('');
 }
 function appPublishedServices(a) {
   const list = Array.isArray(a.services) && a.services.length
