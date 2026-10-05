@@ -988,10 +988,40 @@ function hostPortsInUse() {
   } catch {}
   return used;
 }
+function serviceCandidate(meta, dir, input, requireSubdir = false) {
+  const name = String((input && input.name) || '').trim().toLowerCase();
+  const requestedType = String((input && input.type) || 'auto').trim();
+  const rawSubdir = String((input && input.subdir) || '').trim().replace(/\\/g, '/');
+  const subdir = rawSubdir.replace(/^\/+|\/+$/g, '');
+  if (!svc.validSvcName(name) || name === 'app') return { error: 'use a unique name with lowercase letters, numbers, or dashes' };
+  if (!['auto', 'static', 'react', 'node', 'php'].includes(requestedType)) return { error: 'choose a valid service type' };
+  if (requireSubdir && !subdir) return { error: 'enter the existing repository subfolder' };
+  if (subdir && (subdir.split('/').includes('..') || !/^[A-Za-z0-9._/-]+$/.test(subdir))) return { error: 'subfolder contains unsupported characters' };
+  const ctxDir = path.resolve(dir, 'code', subdir);
+  const codeRoot = path.resolve(dir, 'code');
+  if (ctxDir !== codeRoot && !ctxDir.startsWith(codeRoot + path.sep)) return { error: 'subfolder must stay inside the repository' };
+  try { if (!fs.statSync(ctxDir).isDirectory()) return { error: `subfolder '${subdir}' is not a directory` }; }
+  catch { return { error: `subfolder '${subdir}' does not exist in the repository` }; }
+  const services = svc.fullServices(meta, dir);
+  if (services.some(s => s.name === name)) return { error: `service name '${name}' is already used` };
+  const folderOwner = services.find(s => (s.subdir || '') === subdir);
+  if (folderOwner) return { error: `folder '${subdir || '.'}' already runs as ${folderOwner.name}` };
+  const detected = svc.detectServiceType(ctxDir);
+  const type = detected.type || (requestedType === 'auto' ? null : requestedType);
+  if (!type) return { error: `could not detect a runnable service: ${detected.reason}` };
+  return { name, requestedType, subdir, ctxDir, services, detected, type };
+}
 app.get('/api/apps/:id/services', (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta) return res.status(404).json({ error: 'unknown app' });
   res.json({ services: svc.fullServices(meta, appDir(APPS_DIR, meta.id)), dirty: meta.dirty || null, homePath: meta.homePath || '' });
+});
+app.get('/api/apps/:id/services/check', (req, res) => {
+  const meta = load().apps.find(a => a.id === req.params.id);
+  if (!meta) return res.status(404).json({ error: 'unknown app' });
+  const check = serviceCandidate(meta, appDir(APPS_DIR, meta.id), req.query, true);
+  if (check.error) return res.status(400).json({ ok: false, error: check.error });
+  res.json({ ok: true, name: check.name, subdir: check.subdir, type: check.type, detected: check.detected.detected, reason: check.detected.reason });
 });
 app.post('/api/apps/:id/services', async (req, res) => {
   try {
@@ -999,18 +1029,9 @@ app.post('/api/apps/:id/services', async (req, res) => {
     const meta = db_.apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
     const dir = appDir(APPS_DIR, meta.id);
-    const name = String((req.body && req.body.name) || '').trim().toLowerCase();
-    const requestedType = String((req.body && req.body.type) || 'auto').trim();
-    const subdir = String((req.body && req.body.subdir) || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '');
-    if (!svc.validSvcName(name) || name === 'app') return res.status(400).json({ error: 'bad service name (lowercase letters/numbers/dashes, not "app")' });
-    if (!['auto', 'static', 'react', 'node', 'php'].includes(requestedType)) return res.status(400).json({ error: 'bad type' });
-    if (!fs.existsSync(path.join(dir, 'code', subdir))) return res.status(400).json({ error: `subfolder '${subdir}' not in repo - push it first? (empty means repo root, already taken here)` });
-    const detected = svc.detectServiceType(path.join(dir, 'code', subdir));
-    const type = detected.type || (requestedType === 'auto' ? null : requestedType);
-    if (!type) return res.status(400).json({ error: `could not detect service type: ${detected.reason}` });
-    const services = svc.fullServices(meta, dir);
-    if (services.some(s => s.name === name)) return res.status(400).json({ error: 'service name taken' });
-    if (services.some(s => (s.subdir || '') === subdir)) return res.status(400).json({ error: 'that folder already runs as ' + services.find(s => (s.subdir || '') === subdir).name });
+    const candidate = serviceCandidate(meta, dir, req.body);
+    if (candidate.error) return res.status(400).json({ error: candidate.error });
+    const { name, requestedType, subdir, detected, type, services } = candidate;
     const { inferPort, TYPE_PORT } = require('./lib/generator');
     const port = inferPort(path.join(dir, 'code', subdir), TYPE_PORT[type] || 3000);
     const used = hostPortsInUse();

@@ -89,6 +89,7 @@ main { flex: 1; padding: 24px; max-width: 1100px; }
 .stephead { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
 .credential-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .credential-option { background: var(--input); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+.service-add { background: var(--input); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
 .controlrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .controlrow input, .controlrow select { flex: 1 1 150px; min-width: 0; margin-left: 0; }
 .keyrow { margin-top: 12px; }

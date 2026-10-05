@@ -74,12 +74,16 @@
         </div>
         <div class="card stepcard">
           <div class="stephead"><span class="stepno">2</span><div><b>Confirm services</b><div class="meta">Each runnable folder becomes one service; type is detected from that folder.</div></div></div>
-          <div id="svcList"></div>
-          <div class="meta">add: <input id="svcName" placeholder="name" style="width:100px">
-          <input id="svcSub" placeholder="subfolder (empty = root)" style="width:170px">
-          <select id="svcType"><option value="auto">auto-detect</option><option value="node">node</option><option value="static">static</option><option value="react">react</option><option value="php">php</option></select>
-          <button onclick="addService()">add</button></div>
+          <div class="service-add">
+            <b>Add a service</b>
+            <div class="controlrow"><input id="svcName" placeholder="name" style="width:120px" oninput="scheduleServiceCheck()">
+            <input id="svcSub" placeholder="subfolder" style="width:190px" oninput="scheduleServiceCheck()">
+            <select id="svcType" onchange="scheduleServiceCheck()"><option value="auto">auto-detect</option><option value="node">node</option><option value="static">static</option><option value="react">react</option><option value="php">php</option></select>
+            <button id="svcAddBtn" onclick="addService()" disabled>add</button></div>
+            <div class="meta" id="svcAddCheck">Enter a unique name and an existing repository subfolder.</div>
+          </div>
           <div class="meta" id="svcSuggest"></div>
+          <div id="svcList"></div>
         </div>
         <div class="card stepcard">
           <div class="stephead"><span class="stepno">3</span><div><b>Attach databases</b><div class="meta" id="dbList"></div></div></div>

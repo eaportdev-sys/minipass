@@ -1,4 +1,6 @@
 let currentApp = null;
+let serviceCheckTimer = null;
+let serviceCheckSeq = 0;
 async function refresh() {
   const apps = await (await fetch('/api/apps')).json();
   document.getElementById('apps').innerHTML = apps.map(a =>
@@ -22,6 +24,13 @@ function openSite(id) {
   document.getElementById('filePath').value = '';
   document.getElementById('fileEdit').value = '';
   document.getElementById('fileOut').textContent = '';
+  document.getElementById('svcName').value = '';
+  document.getElementById('svcSub').value = '';
+  document.getElementById('svcType').value = 'auto';
+  document.getElementById('svcAddBtn').disabled = true;
+  document.getElementById('svcAddCheck').textContent = 'Enter a unique name and an existing repository subfolder.';
+  serviceCheckSeq++;
+  if (serviceCheckTimer) clearTimeout(serviceCheckTimer);
   refresh().then(() => { showSiteTab('overview'); loadDeployStatus(); loadEnv(); loadServices(); loadMigrateSuggest(); });
 }
 function appUrl(a) {
@@ -939,17 +948,57 @@ async function loadServices() {
       const sug = await (await fetch(`/api/apps/${currentApp}/suggest`)).json();
       const fronts = (sug.suggestions || []).map(f => `<button onclick="fillService('${f}', 'react')">${f} (web)</button>`).join(' ');
       const backs = (sug.backends || []).map(b => `<button onclick="fillService('${b}', 'node')">${b} (api)</button>`).join(' ');
-      document.getElementById('svcSuggest').innerHTML = (fronts || backs) ? ('detected in repo: ' + fronts + ' ' + backs) : '';
+      document.getElementById('svcSuggest').innerHTML = (fronts || backs)
+        ? ('detected unused folders: ' + fronts + ' ' + backs)
+        : 'no additional runnable folders detected';
     } catch {}
+    scheduleServiceCheck();
   } catch {}
 }
 function fillService(sub, type) {
   document.getElementById('svcSub').value = sub;
   document.getElementById('svcName').value = sub.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'web';
   if (type) document.getElementById('svcType').value = type;
+  scheduleServiceCheck();
+}
+function scheduleServiceCheck() {
+  const btn = document.getElementById('svcAddBtn');
+  const out = document.getElementById('svcAddCheck');
+  if (!btn || !out) return;
+  if (serviceCheckTimer) clearTimeout(serviceCheckTimer);
+  const seq = ++serviceCheckSeq;
+  btn.disabled = true;
+  const name = document.getElementById('svcName').value.trim().toLowerCase();
+  const subdir = document.getElementById('svcSub').value.trim();
+  if (!name || !subdir) {
+    out.textContent = 'Enter a unique name and an existing repository subfolder.';
+    return;
+  }
+  if (!/^[a-z0-9][a-z0-9-]{0,30}$/.test(name) || name === 'app') {
+    out.textContent = 'Name must use lowercase letters, numbers, or dashes.';
+    return;
+  }
+  out.textContent = 'checking folder…';
+  const appId = currentApp;
+  serviceCheckTimer = setTimeout(async () => {
+    try {
+      const q = new URLSearchParams({ name, subdir, type: document.getElementById('svcType').value });
+      const r = await (await fetch(`/api/apps/${appId}/services/check?${q}`)).json();
+      if (seq !== serviceCheckSeq || appId !== currentApp) return;
+      btn.disabled = !r.ok;
+      out.textContent = r.ok ? `Ready: ${r.subdir} will run as ${r.type}.` : (r.error || 'folder cannot be added');
+    } catch (e) {
+      if (seq !== serviceCheckSeq || appId !== currentApp) return;
+      out.textContent = 'could not validate folder';
+    }
+  }, 300);
 }
 async function addService() {
   if (!currentApp) return;
+  const btn = document.getElementById('svcAddBtn');
+  const check = document.getElementById('svcAddCheck');
+  btn.disabled = true;
+  check.textContent = 'adding service…';
   const body = {
     name: document.getElementById('svcName').value.trim().toLowerCase(),
     subdir: document.getElementById('svcSub').value.trim(),
@@ -957,9 +1006,15 @@ async function addService() {
   };
   const r = await (await fetch(`/api/apps/${currentApp}/services`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
   toast(r.ok ? (`service ${body.name} added as ${r.type || body.type}${r.correctedFrom ? ` (corrected from ${r.correctedFrom})` : ''} - redeploy to start it`) : (r.error || 'failed'), !!r.ok);
-  document.getElementById('svcName').value = '';
-  document.getElementById('svcSub').value = '';
-  document.getElementById('svcType').value = 'auto';
+  if (r.ok) {
+    document.getElementById('svcName').value = '';
+    document.getElementById('svcSub').value = '';
+    document.getElementById('svcType').value = 'auto';
+    check.textContent = 'Enter a unique name and an existing repository subfolder.';
+  } else {
+    check.textContent = r.error || 'service could not be added';
+    scheduleServiceCheck();
+  }
   refresh();
   loadServices();
 }
