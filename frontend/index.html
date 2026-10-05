@@ -25,13 +25,20 @@
     <section id="view-site" class="view">
       <div class="pagehead"><h1 id="siteName">site</h1><button onclick="backToSites()">&larr; all sites</button></div>
       <div class="card sitehero">
-        <div class="badges" id="siteBadges"></div>
-        <div class="meta" id="siteMeta"></div>
-        <div class="actions">
-          <button class="btn primary" id="siteRedeploy">redeploy</button>
-          <button id="siteStop">stop</button>
-          <button id="siteStart">start</button>
-          <button class="btn danger" id="siteDelete">delete</button>
+        <div class="sitehero-layout">
+          <div class="sitehero-content">
+            <div class="badges" id="siteBadges"></div>
+            <div class="meta" id="siteMeta"></div>
+            <div class="actions">
+              <button class="btn primary" id="siteRedeploy">redeploy</button>
+              <button id="siteStop">stop</button>
+              <button id="siteStart">start</button>
+              <button class="btn danger" id="siteDelete">delete</button>
+            </div>
+          </div>
+          <button id="sitePower" class="power-control is-checking" onclick="toggleSitePower()" title="Checking site state">
+            <span class="power-symbol">⏻</span><span class="power-label">Checking</span>
+          </button>
         </div>
       </div>
       <div class="site-tabs" role="tablist" aria-label="Site sections">
@@ -76,14 +83,16 @@
         <div class="card stepcard">
           <div class="stephead"><span class="stepno">2</span><div><b>Confirm services</b><div class="meta">Each runnable folder becomes one service; type is detected from that folder.</div></div></div>
           <div class="service-add">
-            <b>Add a service</b>
-            <div class="controlrow"><input id="svcName" placeholder="name" style="width:120px" oninput="scheduleServiceCheck()">
-            <input id="svcSub" placeholder="subfolder" style="width:190px" oninput="scheduleServiceCheck()">
-            <select id="svcType" onchange="scheduleServiceCheck()"><option value="auto">auto-detect</option><option value="node">node</option><option value="static">static</option><option value="react">react</option><option value="php">php</option></select>
-            <button id="svcAddBtn" onclick="addService()" disabled>add</button></div>
+            <div class="sectionhead"><div><b>Add a service</b><div class="meta">Select a detected folder or enter one manually.</div></div></div>
+            <div class="meta service-suggestions" id="svcSuggest"></div>
+            <div class="service-form-grid">
+              <label>Service name<input id="svcName" placeholder="eaport-web" oninput="scheduleServiceCheck()"></label>
+              <label>Repository subfolder<input id="svcSub" placeholder="apps/web" oninput="scheduleServiceCheck()"></label>
+              <label>Runtime type<select id="svcType" onchange="scheduleServiceCheck()"><option value="auto">auto-detect</option><option value="node">node</option><option value="static">static</option><option value="react">react</option><option value="php">php</option></select></label>
+              <button id="svcAddBtn" class="btn primary" onclick="addService()" disabled>add service</button>
+            </div>
             <div class="meta" id="svcAddCheck">Enter a unique name and an existing repository subfolder.</div>
           </div>
-          <div class="meta" id="svcSuggest"></div>
           <div id="svcList"></div>
         </div>
         <div class="card stepcard">
@@ -135,8 +144,8 @@
           <div id="deployProg" style="display:none"><div class="meta"><span id="deployStage">deploying…</span> <span id="deployPct"></span> <span id="deployTime"></span></div><div class="progress"><div id="deployBar"></div></div><pre id="deployTail"></pre></div>
           <div class="meta" id="deployHist"></div>
         </div>
-        <div class="card">
-          <b><span id="hookDot" class="opdot"></span> Deploy from GitHub</b>
+        <div class="card deploy-source-card">
+          <div class="deploy-source-head"><b>Deploy from GitHub</b><div id="hookPower" class="source-power is-checking"><span class="power-symbol">⏻</span><span class="power-label">Checking</span></div></div>
           <div class="meta">Choose webhook when GitHub can reach this panel, or polling when it cannot. Both pull GitHub and deploy.</div>
           <div class="meta"><code id="hookUrl"></code></div>
           <div class="actions"><button onclick="copyHook()">copy webhook</button><button onclick="regenHook()">regenerate</button></div>
@@ -145,8 +154,8 @@
           <div class="meta" id="hookHist"></div>
           <div id="hookProg" style="display:none"><div class="meta"><span id="hookStage">deploying…</span> <span id="hookPct"></span> <span id="hookTime"></span></div><div class="progress"><div id="hookBar"></div></div></div>
         </div>
-        <div class="card">
-          <b><span id="localDot" class="opdot"></span> Deploy from your machine</b>
+        <div class="card deploy-source-card">
+          <div class="deploy-source-head"><b>Deploy from your machine</b><div id="localPower" class="source-power is-checking"><span class="power-symbol">⏻</span><span class="power-label">Checking</span></div></div>
           <div class="meta">Push directly to this box without GitHub. The panel builds an isolated checkout and leaves the GitHub working tree untouched.</div>
           <div class="meta" id="localGitBox"><button onclick="initLocalGit()">enable local git push</button></div>
           <div id="localProg" style="display:none"><div class="meta"><span id="localStage">deploying…</span> <span id="localPct"></span> <span id="localTime"></span></div><div class="progress"><div id="localBar"></div></div></div>
@@ -160,22 +169,30 @@
         </div>
       </div>
       <div id="tab-files" class="sitetab" style="display:none">
-        <div class="card">
-          <button onclick="listFiles('')">list files</button>
-          <div id="fileList"></div>
-          <input id="filePath" placeholder="path (index.html)" style="width:240px">
-          <button onclick="openFile()">open</button>
-          <button onclick="saveFile()">save</button>
-          <button class="btn danger" onclick="deleteFile()">delete</button><br>
-          <textarea id="fileEdit" rows="12"></textarea><br>
-          <select id="upMode" onchange="upModeChange()">
-            <option value="zip">zip file</option>
-            <option value="files">files</option>
-            <option value="folder">folder</option>
-          </select>
-          <input type="file" id="upPick" accept=".zip">
-          <button onclick="uploadUnified()">upload</button>
-          <pre id="fileOut"></pre>
+        <div class="card file-workspace">
+          <aside class="file-tree-pane">
+            <div class="file-pane-head"><div><b>Project files</b><div class="meta">Folders load when opened.</div></div><button onclick="refreshFileTree()">refresh</button></div>
+            <div id="fileList" class="file-tree"></div>
+          </aside>
+          <section class="file-reader-pane">
+            <div class="file-reader-head">
+              <input id="filePath" placeholder="path/to/file" autocomplete="off">
+              <button onclick="openFile()">open</button>
+              <button class="btn primary" onclick="saveFile()">save</button>
+              <button class="btn danger" onclick="deleteFile()">delete</button>
+            </div>
+            <textarea id="fileEdit" rows="24" placeholder="Select a text file from the tree"></textarea>
+            <div class="file-upload-row">
+              <select id="upMode" onchange="upModeChange()">
+                <option value="zip">zip file</option>
+                <option value="files">files</option>
+                <option value="folder">folder</option>
+              </select>
+              <input type="file" id="upPick" accept=".zip">
+              <button onclick="uploadUnified()">upload</button>
+            </div>
+            <pre id="fileOut"></pre>
+          </section>
         </div>
       </div>
       <div id="tab-logs" class="sitetab" style="display:none">

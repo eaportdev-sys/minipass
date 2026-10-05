@@ -25,6 +25,9 @@ function openSite(id) {
   document.getElementById('filePath').value = '';
   document.getElementById('fileEdit').value = '';
   document.getElementById('fileOut').textContent = '';
+  fileTreeApp = null;
+  fileTreeNodes = new Map();
+  selectedFile = '';
   document.getElementById('svcName').value = '';
   document.getElementById('svcSub').value = '';
   document.getElementById('svcType').value = 'auto';
@@ -165,8 +168,13 @@ async function loadDeployStatus() {
     document.getElementById('deployHist').innerHTML = hist.length
       ? 'recent:<br>' + hist.map(h => `<div class="meta">${h.source || '?'} — ${fmtH(h)}</div>`).join('')
       : '';
-    siteDot(s);
-  } catch { if (!info.dataset.live) info.textContent = 'unreachable'; }
+    updatePowerStates(s);
+  } catch {
+    if (!info.dataset.live) info.textContent = 'unreachable';
+    setPowerState('sitePower', 'failed', 'Unreachable');
+    setPowerState('hookPower', 'failed', 'Unknown');
+    setPowerState('localPower', 'failed', 'Unknown');
+  }
 }
 function backToSites() { currentApp = null; showView('websites'); refresh(); }
 function fillSiteHeader(a) {
@@ -180,6 +188,11 @@ function fillSiteHeader(a) {
   document.getElementById('siteStop').onclick = () => stopApp(a.id);
   document.getElementById('siteStart').onclick = () => startApp(a.id);
   document.getElementById('siteDelete').onclick = () => rmApp(a.id);
+  const power = document.getElementById('sitePower');
+  if (power && power.dataset.app !== a.id) {
+    power.dataset.app = a.id;
+    setPowerState('sitePower', 'checking', 'Checking');
+  }
   document.getElementById('hookUrl').textContent = `${location.origin}/webhook/${a.id}?token=${a.token}`;
   document.getElementById('dbList').textContent = 'attached: ' + dbLabel(a);
   document.getElementById('dbOut').textContent = '';
@@ -795,6 +808,7 @@ async function runDeploy(id, services) {
   const t0 = Date.now();
   let done = false;
   let outcome = null;
+  if (id === currentApp) setPowerState('sitePower', 'deploying', 'Deploying');
   prog.style.display = 'block';
   bar.style.width = '2%'; bar.style.background = '#4caf50';
   const tick = setInterval(() => {
@@ -880,20 +894,28 @@ function uiConfirm({ title, body, requireText, confirmLabel, danger }) {
   });
 }
 async function stopApp(id) {
+  if (id === currentApp) setPowerState('sitePower', 'checking', 'Stopping');
   toast('stopping ' + id + '…');
   try {
     const r = await (await fetch('/api/apps/' + id + '/stop', { method: 'POST' })).json();
     toast(r.ok ? id + ' stopped' : ('stop failed: ' + (r.error || 'unknown')), !!r.ok);
-    if (id === currentApp) setTimeout(loadDeployStatus, 2000);
-  } catch (e) { toast('stop failed: ' + e.message, false); }
+    if (id === currentApp) await loadDeployStatus();
+  } catch (e) { toast('stop failed: ' + e.message, false); if (id === currentApp) await loadDeployStatus(); }
 }
 async function startApp(id) {
+  if (id === currentApp) setPowerState('sitePower', 'checking', 'Starting');
   toast('starting ' + id + '…');
   try {
     const r = await (await fetch('/api/apps/' + id + '/start', { method: 'POST' })).json();
     toast(r.ok ? id + ' started' : ('start failed: ' + (r.error || 'unknown')), !!r.ok);
-    if (id === currentApp) setTimeout(loadDeployStatus, 2000);
-  } catch (e) { toast('start failed: ' + e.message, false); }
+    if (id === currentApp) await loadDeployStatus();
+  } catch (e) { toast('start failed: ' + e.message, false); if (id === currentApp) await loadDeployStatus(); }
+}
+async function toggleSitePower() {
+  if (!currentApp) return;
+  const state = document.getElementById('sitePower').dataset.state;
+  if (state === 'deployed') await stopApp(currentApp);
+  else if (state === 'off' || state === 'failed') await startApp(currentApp);
 }
 async function rmApp(id) {
   const ok = await uiConfirm({
@@ -969,34 +991,109 @@ async function showKey() {
   document.getElementById('keyOut').textContent =
     (r.pubkey || r.error) + '\n\nOnly needed for SSH remotes (git@github.com:…) — skip this if your sites pull over HTTPS + token.';
 }
-let curDir = '';
-async function listFiles(dir) {
-  curDir = dir || '';
-  if (!dir) { document.getElementById('filePath').value = ''; document.getElementById('fileEdit').value = ''; }
+let fileTreeApp = null;
+let fileTreeNodes = new Map();
+let selectedFile = '';
+function joinFilePath(dir, name) { return dir ? `${dir}/${name}` : name; }
+async function loadFileDir(dir, force) {
   if (!currentApp) return;
-  const files = await (await fetch(`/api/apps/${currentApp}/files?path=${encodeURIComponent(curDir)}`)).json();
-  const up = curDir ? `<button onclick="listFiles('${curDir.split('/').slice(0, -1).join('/')}')">.. up</button><br>` : '';
-  document.getElementById('fileList').innerHTML = up + (files.error || files.map(f =>
-    f.dir ? `<button onclick="listFiles('${(curDir ? curDir + '/' : '') + f.name}')">${f.name}/</button>`
-          : `<button onclick="openFile('${(curDir ? curDir + '/' : '') + f.name}')">${f.name}</button>`).join(' ') || '(empty)');
+  const appId = currentApp;
+  let node = fileTreeNodes.get(dir);
+  if (!node) { node = { open: dir === '', items: null, loading: false, error: '' }; fileTreeNodes.set(dir, node); }
+  if (!force && node.items) return;
+  node.loading = true;
+  node.error = '';
+  renderFileTree();
+  try {
+    const files = await (await fetch(`/api/apps/${appId}/files?path=${encodeURIComponent(dir)}`)).json();
+    if (appId !== currentApp || fileTreeApp !== appId) return;
+    if (files.error) { node.error = files.error; node.items = []; }
+    else node.items = files;
+  } catch (e) {
+    if (appId === currentApp && fileTreeApp === appId) { node.error = e.message; node.items = []; }
+  }
+  node.loading = false;
+  renderFileTree();
+}
+function renderFileTreeDir(dir, depth) {
+  const node = fileTreeNodes.get(dir);
+  if (!node) return '';
+  if (node.loading && !node.items) return `<div class="file-tree-note" style="padding-left:${10 + depth * 16}px">loading…</div>`;
+  if (node.error) return `<div class="file-tree-note error" style="padding-left:${10 + depth * 16}px">${safeHtml(node.error)}</div>`;
+  if (!node.items || !node.items.length) return `<div class="file-tree-note" style="padding-left:${10 + depth * 16}px">(empty)</div>`;
+  return node.items.map(item => {
+    const full = joinFilePath(dir, item.name);
+    const encoded = safeHtml(full);
+    if (item.dir) {
+      const child = fileTreeNodes.get(full);
+      const open = !!(child && child.open);
+      return `<div class="file-tree-branch"><button class="file-tree-row folder" style="padding-left:${8 + depth * 16}px" data-path="${encoded}" onclick="toggleFileDir(this.dataset.path)" aria-expanded="${open}">` +
+        `<span class="tree-chevron">${open ? '▾' : '▸'}</span><span class="tree-icon">▰</span><span>${safeHtml(item.name)}</span></button>` +
+        (open ? `<div>${renderFileTreeDir(full, depth + 1)}</div>` : '') + `</div>`;
+    }
+    return `<button class="file-tree-row file${selectedFile === full ? ' active' : ''}" style="padding-left:${8 + depth * 16}px" data-path="${encoded}" onclick="openFile(this.dataset.path)">` +
+      `<span class="tree-chevron"></span><span class="tree-icon">▪</span><span>${safeHtml(item.name)}</span></button>`;
+  }).join('');
+}
+function renderFileTree() {
+  const box = document.getElementById('fileList');
+  if (box) box.innerHTML = renderFileTreeDir('', 0) || '<div class="file-tree-note">(empty)</div>';
+}
+async function listFiles(dir = '') {
+  if (!currentApp) return;
+  if (fileTreeApp !== currentApp) {
+    fileTreeApp = currentApp;
+    fileTreeNodes = new Map([['', { open: true, items: null, loading: false, error: '' }]]);
+    selectedFile = '';
+    document.getElementById('filePath').value = '';
+    document.getElementById('fileEdit').value = '';
+  }
+  const path = dir || '';
+  let node = fileTreeNodes.get(path);
+  if (!node) { node = { open: true, items: null, loading: false, error: '' }; fileTreeNodes.set(path, node); }
+  node.open = true;
+  await loadFileDir(path, path === '');
+}
+async function toggleFileDir(dir) {
+  let node = fileTreeNodes.get(dir);
+  if (!node) { node = { open: false, items: null, loading: false, error: '' }; fileTreeNodes.set(dir, node); }
+  node.open = !node.open;
+  renderFileTree();
+  if (node.open && !node.items) await loadFileDir(dir, false);
+}
+async function refreshFileTree() {
+  if (!currentApp) return;
+  if (fileTreeApp !== currentApp) return listFiles('');
+  const loaded = [...fileTreeNodes.entries()].filter(([, node]) => node.items).map(([dir]) => dir);
+  if (!loaded.includes('')) loaded.unshift('');
+  await Promise.all(loaded.map(dir => loadFileDir(dir, true)));
 }
 async function openFile(p) {
   const id = currentApp;
   const fp = p || document.getElementById('filePath').value.trim() || 'index.html';
   if (!id) { document.getElementById('fileEdit').value = 'no app selected'; return; }
+  selectedFile = fp;
   document.getElementById('filePath').value = fp;
+  document.getElementById('fileOut').textContent = 'opening ' + fp + '…';
+  renderFileTree();
   try {
     const r = await (await fetch(`/api/apps/${id}/file?path=${encodeURIComponent(fp)}`)).json();
-    document.getElementById('fileEdit').value = r.content || JSON.stringify(r);
+    if (r.error) { document.getElementById('fileEdit').value = ''; document.getElementById('fileOut').textContent = r.error; return; }
+    document.getElementById('fileEdit').value = r.content || '';
+    document.getElementById('fileOut').textContent = `opened ${fp}`;
   } catch (e) { document.getElementById('fileEdit').value = 'open failed: ' + e.message; }
 }
 async function saveFile() {
   const id = currentApp;
-  const body = { path: document.getElementById('filePath').value, content: document.getElementById('fileEdit').value };
+  const filePath = document.getElementById('filePath').value.trim();
+  if (!id || !filePath) { toast('enter a file path first', false); return; }
+  const body = { path: filePath, content: document.getElementById('fileEdit').value };
   document.getElementById('fileOut').textContent = 'saving… (redeploy to apply)';
   try {
     const r = await (await fetch(`/api/apps/${id}/file`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
-    document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2); listFiles(curDir); refresh(); loadServices();
+    document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2);
+    selectedFile = filePath;
+    await refreshFileTree(); refresh(); loadServices();
   } catch (e) { document.getElementById('fileOut').textContent = 'save failed: ' + e.message; }
 }
 async function deleteFile() {
@@ -1013,7 +1110,8 @@ async function deleteFile() {
     const r = await (await fetch(`/api/apps/${id}/file?path=${encodeURIComponent(fp)}`, { method: 'DELETE' })).json();
     document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2);
     document.getElementById('filePath').value = ''; document.getElementById('fileEdit').value = '';
-    listFiles(curDir); refresh(); loadServices();
+    selectedFile = '';
+    await refreshFileTree(); refresh(); loadServices();
   } catch (e) { document.getElementById('fileOut').textContent = 'delete failed: ' + e.message; }
 }
 function upModeChange() {
@@ -1049,7 +1147,7 @@ async function uploadUnified() {
       }
     }
     const r = await (await fetch(url, { method: 'POST', body: fd })).json();
-    out.textContent = JSON.stringify(r, null, 2); listFiles(''); refresh(); loadServices();
+    out.textContent = JSON.stringify(r, null, 2); refreshFileTree(); refresh(); loadServices();
   } catch (e) { out.textContent = 'upload failed: ' + e.message; }
   input.value = '';
 }
@@ -1085,14 +1183,14 @@ async function loadServices() {
     document.getElementById('svcList').innerHTML = list.map(s => {
       const url = s.hostPort ? `http://${location.hostname}:${s.hostPort}${s.name === 'app' ? homePath : ''}` : null;
       const label = s.hostPort ? `${location.hostname}:${s.hostPort}${s.name === 'app' ? homePath : ''}` : '';
-      return `<div class="meta" id="svc-${s.name}"><b>${s.name}</b> [${s.type}] ${s.subdir ? `/${s.subdir}` : '(root)'} ` +
-      `${s.hostPort ? `:${s.hostPort}→${s.port}` : 'no port'} ` +
-      `${s.enabled === false ? '<span class="badge">off</span>' : '<span class="badge">on</span>'}` +
-      `${url ? `<br>local: <a href="${url}" target="_blank">${label}</a>` : ''}<br>` +
-      `<button onclick="deploySvc('${s.name}')" ${dirty ? '' : 'disabled'}>redeploy</button> ` +
-      `<button onclick="toggleService('${s.name}', ${s.enabled === false})">${s.enabled === false ? 'start' : 'stop'}</button>` +
-      (s.name === 'app' ? '' : ` <button class="btn danger" onclick="removeService('${s.name}')">remove</button>`) +
-      `</div>`;
+      const enabled = s.enabled !== false;
+      return `<div class="service-card" id="svc-${s.name}"><div class="service-card-head"><div><b>${safeHtml(s.name)}</b><span class="badge type">${safeHtml(s.type)}</span>` +
+        `<div class="meta">${s.subdir ? `/${safeHtml(s.subdir)}` : 'repository root'}</div></div><span class="badge service-state ${enabled ? 'on' : 'off'}">${enabled ? 'enabled' : 'disabled'}</span></div>` +
+        `<div class="service-facts"><div><span>Published port</span><b>${s.hostPort ? `:${s.hostPort} → ${s.port}` : 'not published'}</b></div>` +
+        `<div><span>Local URL</span>${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${safeHtml(label)}</a>` : '<b>unavailable</b>'}</div></div>` +
+        `<div class="service-card-actions"><button onclick="deploySvc('${s.name}')" ${dirty ? '' : 'disabled'}>redeploy</button>` +
+        `<button onclick="toggleService('${s.name}', ${!enabled})">${enabled ? 'stop' : 'start'}</button>` +
+        (s.name === 'app' ? '' : `<button class="btn danger" onclick="removeService('${s.name}')">remove</button>`) + `</div></div>`;
     }).join('') || '<div class="meta">no services</div>';
     for (const selId of ['logSvc', 'termSvc']) {
       const sel = document.getElementById(selId);
@@ -1102,11 +1200,12 @@ async function loadServices() {
     }
     try {
       const sug = await (await fetch(`/api/apps/${currentApp}/suggest`)).json();
-      const fronts = (sug.suggestions || []).map(f => `<button onclick="fillService('${f}', 'react')">${f} (web)</button>`).join(' ');
-      const backs = (sug.backends || []).map(b => `<button onclick="fillService('${b}', 'node')">${b} (api)</button>`).join(' ');
+      const candidate = (folder, type, role) => `<button class="service-suggestion" data-folder="${safeHtml(folder)}" data-type="${type}" onclick="fillService(this.dataset.folder, this.dataset.type)"><span><b>${safeHtml(folder)}</b><small>${role}</small></span><span class="badge">${type}</span></button>`;
+      const fronts = (sug.suggestions || []).map(f => candidate(f, 'react', 'Web frontend')).join('');
+      const backs = (sug.backends || []).map(b => candidate(b, 'node', 'API or worker')).join('');
       document.getElementById('svcSuggest').innerHTML = (fronts || backs)
-        ? ('detected unused folders: ' + fronts + ' ' + backs)
-        : 'no additional runnable folders detected';
+        ? `<div class="service-suggestion-label">Detected runnable folders</div><div class="service-suggestion-list">${fronts}${backs}</div>`
+        : '<div class="service-suggestion-empty">No additional runnable folders detected.</div>';
     } catch {}
     scheduleServiceCheck();
   } catch {}
@@ -1206,24 +1305,48 @@ function openTermGlobal() {
 // involved, so poll /status while a site is open and mirror the progress UI into
 // the card the trigger came from (webhook card vs local-git card). Manual ops
 // stay with runDeploy to avoid double toasts.
-// Connection light: always-on state, not deploy-only. Blinking yellow while
-// receiving/deploying, solid green when app containers run steady, red otherwise.
-function siteDot(st) {
-  const op = st && st.deployOp && st.deployOp.source !== 'manual';
-  const recv = st && !st.deployOp && st.pushEvent && (Date.now() - st.pushEvent.at) < 120000;
-  let cls = 'fail';
-  if (op || recv) cls = 'busy';
-  else {
-    const all = (st && st.containers) || [];
-    const appCs = all.filter(c => !/^db(-|$)/i.test(c.service || ''));
-    const rel = appCs.length ? appCs : all;
-    if (rel.length && rel.every(c => /^running/i.test(c.state || ''))) cls = 'ok';
+// Power states are source-specific: only the trigger handling the current deploy
+// pulses yellow. The persistent site control reflects the whole deployment.
+function setPowerState(id, state, label) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  for (const s of ['checking', 'deployed', 'deploying', 'off', 'failed', 'idle']) el.classList.remove('is-' + s);
+  el.classList.add('is-' + state);
+  el.dataset.state = state;
+  const text = el.querySelector('.power-label');
+  if (text) text.textContent = label;
+  if (id === 'sitePower') {
+    el.disabled = state === 'deploying' || state === 'checking';
+    el.title = state === 'deployed' ? 'Site is deployed — click to stop' : state === 'off' || state === 'failed' ? 'Site is off — click to start' : label;
   }
-  for (const id of ['hookDot', 'localDot']) {
-    const dot = document.getElementById(id);
-    if (dot) dot.className = 'opdot ' + cls;
+}
+function sourceSlot(source) {
+  if (source === 'local-push') return 'local';
+  if (source === 'webhook' || source === 'poll') return 'hook';
+  return null;
+}
+function appIsRunning(st) {
+  const containers = (st && st.containers) || [];
+  const enabled = ((st && st.services) || []).filter(s => s.enabled !== false);
+  if (enabled.length) return enabled.every(s => containers.some(c => c.service === s.name && /^running/i.test(c.state || '')));
+  const appContainers = containers.filter(c => !/^db(-|$)/i.test(c.service || ''));
+  return appContainers.length > 0 && appContainers.every(c => /^running/i.test(c.state || ''));
+}
+function updatePowerStates(st) {
+  const receiving = st && !st.deployOp && st.pushEvent && (Date.now() - st.pushEvent.at) < 120000;
+  const activeSlot = st && st.deployOp ? sourceSlot(st.deployOp.source) : (receiving ? 'local' : null);
+  const deploying = !!(st && st.deploying) || !!receiving;
+  const running = appIsRunning(st);
+  setPowerState('sitePower', deploying ? 'deploying' : (running ? 'deployed' : 'off'), deploying ? 'Deploying' : (running ? 'Deployed' : 'Off'));
+  const liveSlot = sourceSlot(st && st.liveDeploy && st.liveDeploy.source);
+  const failedSlot = st && st.lastDeploy && st.lastDeploy.status !== 'ok' ? sourceSlot(st.lastDeploy.source) : null;
+  for (const slot of ['hook', 'local']) {
+    if (activeSlot) setPowerState(slot + 'Power', slot === activeSlot ? 'deploying' : 'idle', slot === activeSlot ? 'Deploying' : 'Idle');
+    else if (!running) setPowerState(slot + 'Power', 'off', 'Off');
+    else if (failedSlot === slot) setPowerState(slot + 'Power', 'failed', 'Failed');
+    else if (liveSlot === slot) setPowerState(slot + 'Power', 'deployed', 'Deployed');
+    else setPowerState(slot + 'Power', 'idle', 'Idle');
   }
-  return cls;
 }
 let remoteOp = null;
 setInterval(async () => {
@@ -1233,7 +1356,7 @@ setInterval(async () => {
   const op = st.deployOp && st.deployOp.source !== 'manual' ? st.deployOp : null;
   const slot = !op ? null : (op.source === 'local-push' ? 'local' : 'hook');
   const recv = !op && st.pushEvent && (Date.now() - st.pushEvent.at) < 120000;
-  siteDot(st);
+  updatePowerStates(st);
   for (const p of ['hook', 'local']) {
     const box = document.getElementById(p + 'Prog');
     if (!box) continue;
@@ -1273,7 +1396,6 @@ setInterval(async () => {
   const box = document.getElementById(slot + 'Prog');
   if (!box) return;
   box.style.display = 'block';
-  setDot(slot, 'busy');
   const s = Math.floor((Date.now() - op.startedAt) / 1000);
   document.getElementById(slot + 'Time').textContent = s + 's';
   const pctv = Math.min(95, 2 + (Date.now() - op.startedAt) / 90000 * 93);
