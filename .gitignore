@@ -3,6 +3,7 @@ apps/*/
 !.gitkeep
 backend/data.json
 backend/.env
+panel-auth.json
 panel-key*
 upgrade.log
 .upgrade-lock

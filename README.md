@@ -2,9 +2,10 @@
 
 > **Release status: localhost testing only (v0.1).**
 > This build is for running on your own machine or LAN while development
-> continues. It has **no login/auth** — anyone who can reach port `3001` can
-> run containers and open terminals via the panel. Do not expose it to the
-> public internet yet. See [Security](#security).
+> continues. It now has an admin-password gate, but treat it as one layer:
+> keep port `3001` on localhost or your private LAN (the installer firewalls
+> it to private ranges by default). Do not expose it to the public internet
+> yet. See [Security](#security).
 
 ## About
 
@@ -58,7 +59,6 @@ Stop-Process -Id $p.Id -Force
 ```
 
 ## Quickstart — Linux host (Ubuntu, `/opt/minipass`)
-
 ```bash
 git clone <this-repo> /opt/minipass && cd /opt/minipass
 sudo bash install-linux.sh
@@ -117,17 +117,55 @@ running vs repo SHAs must match before trusting the UI version label.
 
 ## Security
 
-- **No auth (known blocker).** Bind to `localhost` or firewall `3001` to trusted
-  IPs only until an admin gate lands.
+- **Admin gate.** First visit shows a one-time setup: choose a 12+ character
+  admin password (scrypt-hashed, `panel-auth.json` next to the data file —
+  gitignored, kept on the `/srv/panel-data` volume). All `/api/*` routes and
+  the web terminal need the session cookie after that. GitHub push webhooks
+  stay open by design — each carries its own per-app token. Rotate under
+  Upgrade → Maintenance.
+- **Firewall.** `install-linux.sh` opens SSH + panel `:3001` + app ports
+  `8000–9000` to **private LAN ranges only** (`10/8`, `172.16/12`,
+  `192.168/16`). Override with `PANEL_CIDR` / `APPS_CIDR` when rerunning.
+  Never expose `:3001` to the open internet in this build. DB admin UIs live
+  inside the app range and some (mongo-express) have no login — keep that
+  range private too.
 - Change `WEBHOOK_SECRET` in `backend/.env` (see `backend/.env.example`).
-- Never commit `backend/.env`, `backend/data.json`, `apps/*/`, or `panel-key*`
-  — all are gitignored for a reason.
+- Never commit `backend/.env`, `backend/data.json`, `panel-auth.json`,
+  `apps/*/`, or `panel-key*` — all are gitignored for a reason.
+
+## Backups
+
+- **Site:** site page → Files tab → *Backups* → download `.tar.gz`
+  (code, `.env`, compose files, local git remote; `node_modules` excluded).
+- **Database:** Setup → Attach databases → **dump** on any running database
+  card (`.sql` for PostgreSQL/MySQL, `.archive` for MongoDB, `.rdb` for Redis).
+- Restore is manual (extract / import, then rescan) and copies must live
+  **off this box**. Until automated backups exist: you operate it, you back it up.
+
+## Operator terms
+
+Creating the admin password records acceptance of the in-app operator terms
+(read them anytime via Terms in the sidebar): you operate the panel, you are
+responsible for the content and behavior of everything you deploy, database
+engines run under their own upstream licenses, and this testing build carries
+no warranty.
+
+## Third-party licenses
+
+Panel code is MIT. Shipped alongside it: Node.js/Alpine + nginx + PHP base
+images, `express/cors/multer/ws` (MIT), xterm.js (MIT, CDN-pinned), pgAdmin,
+phpMyAdmin (GPL-2.0), mongo-express/redis-commander (MIT), and database images
+PostgreSQL (permissive), Redis 7 (BSD), MySQL 8 (**GPL-2.0**), MongoDB 7
+(**SSPL** — not OSI open source). Commercial users should clear MySQL/MongoDB
+for their own use case.
 
 ## Known limitations (v0.1)
 
-- `minipaas` vs `minipass` naming is still mixed in a few paths/strings.
+- `minipaas` vs `minipass` naming is still mixed in a few paths/strings —
+  rename decision still open (note: `minipass` collides with a popular npm
+  package of the same name).
 - Cloudflare Tunnel wiring is a stub.
-- No `LICENSE` — fixed: MIT, see [LICENSE](LICENSE).
+- Backups are download-only; restore is manual.
 
 ## License
 

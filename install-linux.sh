@@ -66,13 +66,34 @@ else
 fi
 
 # 5. dirs + firewall (whichever exists)
+# The panel has an admin password gate, but :3001 must still never face the
+# open internet: it can start/stop containers and open terminals. Default is
+# private LAN ranges only; override with e.g. PANEL_CIDR="203.0.113.7" or
+# APPS_CIDR="0.0.0.0/0" (public apps, still keeps the panel private).
+# NOTE: mongo-express ships with no login, and DB UI ports sit inside the app
+# range - keep APPS_CIDR private unless every exposed app is meant to be public.
 mkdir -p /srv/apps /srv/panel-data /opt/minipaas
+PANEL_CIDR="${PANEL_CIDR:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16}"
+APPS_CIDR="${APPS_CIDR:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16}"
 if command -v ufw >/dev/null; then
-  ufw allow 22/tcp || true; ufw allow 3001/tcp || true; ufw allow 8000:9000/tcp || true; yes | ufw enable || true
+  ufw allow 22/tcp || true
+  # converge reruns: drop the old blanket rules before adding scoped ones
+  ufw delete allow 3001/tcp || true
+  ufw delete allow 8000:9000/tcp || true
+  # shellcheck disable=SC2086
+  for net in $PANEL_CIDR; do ufw allow from "$net" to any port 3001 || true; done
+  # shellcheck disable=SC2086
+  for net in $APPS_CIDR; do ufw allow from "$net" to any port 8000:9000 || true; done
+  yes | ufw enable || true
 elif command -v firewall-cmd >/dev/null; then
-  firewall-cmd --permanent --add-port=3001/tcp || true; firewall-cmd --permanent --add-port=8000-9000/tcp || true; firewall-cmd --reload || true
+  firewall-cmd --permanent --remove-port=3001/tcp || true; firewall-cmd --permanent --remove-port=8000-9000/tcp || true
+  # shellcheck disable=SC2086
+  for net in $PANEL_CIDR; do firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=$net port port=3001 protocol=tcp accept" || true; done
+  # shellcheck disable=SC2086
+  for net in $APPS_CIDR; do firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=$net port port=8000-9000 protocol=tcp accept" || true; done
+  firewall-cmd --reload || true
 else
-  msg "no ufw/firewalld - open TCP 3001 manually if needed"
+  msg "no ufw/firewalld - restrict TCP 3001 to your LAN/admin IP manually if needed"
 fi
 
 # 6. self-upgrade applier: the panel only BUILDS + flags (.pending-restart).

@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { exec, execSync, execFileSync, spawn } = require('child_process');
@@ -47,6 +48,198 @@ app.post('/webhook/:id', express.raw({ type: '*/*' }), async (req, res) => {
   res.send('deployed');
 });
 app.use(express.json());
+// ---- Panel admin gate. Without this, anyone reaching :3001 owns the box
+// (docker.sock + web terminal). Static UI stays public (no secrets in it);
+// every /api/* route below (except the login/setup/terms-text/status ones)
+// and the /terminal socket require a session cookie. GitHub push webhooks
+// stay open above - they carry their own per-app token.
+const AUTH_FILE = path.join(path.dirname(DATA_FILE), 'panel-auth.json');
+const SESSION_DAYS = 30;
+const TERMS_TEXT = [
+  'MINIPASS OPERATOR TERMS (v0.1, localhost testing build)',
+  '',
+  '1. You operate this panel. Every site it builds, runs, or exposes is yours.',
+  '2. Deployed apps run arbitrary code from connected repos. You are responsible',
+  '   for the content, behavior, and legal compliance of everything you deploy.',
+  '3. Database engines run under their own upstream licenses (e.g. MySQL GPL-2.0,',
+  '   MongoDB SSPL). Commercial use is your call to clear, not ours.',
+  '4. Backups are your responsibility until automated backups exist. Download them',
+  '   from the site Files tab and store them somewhere that is not this box.',
+  '5. This is a testing build with no warranty of any kind (see LICENSE).',
+  '6. Do not expose the panel to the public internet until an auth + TLS review',
+  '   says otherwise. Localhost / trusted-LAN use only for now.'
+].join('\n');
+function loadAuth() {
+  try {
+    const a = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
+    if (a && typeof a === 'object') return { hash: a.hash || null, salt: a.salt || null,
+      sessions: Array.isArray(a.sessions) ? a.sessions : [], termsAcceptedAt: a.termsAcceptedAt || null };
+  } catch {}
+  return { hash: null, salt: null, sessions: [], termsAcceptedAt: null };
+}
+function saveAuth(a) {
+  try { fs.mkdirSync(path.dirname(AUTH_FILE), { recursive: true }); } catch {}
+  fs.writeFileSync(AUTH_FILE, JSON.stringify(a, null, 2), { mode: 0o600 });
+}
+function scryptHex(pw, salt) { return crypto.scryptSync(String(pw), String(salt), 64).toString('hex'); }
+function timingEqualHex(a, b) {
+  try {
+    const x = Buffer.from(String(a), 'hex'), y = Buffer.from(String(b), 'hex');
+    return x.length === y.length && x.length > 0 && crypto.timingSafeEqual(x, y);
+  } catch { return false; }
+}
+function pruneSessions(a) {
+  const cut = Date.now() - SESSION_DAYS * 864e5;
+  a.sessions = (a.sessions || []).filter(s => s && s.createdAt > cut);
+  return a;
+}
+function panelToken(req) {
+  const h = req.headers || {};
+  const auth = String(h.authorization || '');
+  if (/^bearer\s+/i.test(auth)) return auth.replace(/^bearer\s+/i, '').trim();
+  if (h['x-panel-token']) return String(h['x-panel-token']).trim();
+  const m = String(h.cookie || '').match(/(?:^|;\s*)mp_session=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+function panelAuthed(req) {
+  const t = panelToken(req);
+  if (!t) return false;
+  return loadAuth().sessions.some(s => s && s.token === t && Date.now() - s.createdAt < SESSION_DAYS * 864e5);
+}
+function newSession(a) {
+  pruneSessions(a);
+  const token = crypto.randomBytes(32).toString('hex');
+  a.sessions.push({ token, createdAt: Date.now() });
+  a.sessions = a.sessions.slice(-20);
+  saveAuth(a);
+  return token;
+}
+function setSessionCookie(res, token) {
+  res.set('Set-Cookie', `mp_session=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}`);
+}
+const PUBLIC_API = new Set(['/api/panel/auth-status', '/api/panel/setup', '/api/panel/login', '/api/panel/terms-text']);
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next();
+  if (PUBLIC_API.has(req.path)) return next();
+  if (panelAuthed(req)) return next();
+  return res.status(401).json({ error: 'panel login required' });
+});
+app.get('/api/panel/auth-status', (req, res) => {
+  const a = loadAuth();
+  res.json({ setupRequired: !a.hash, authenticated: panelAuthed(req), termsAccepted: !!a.termsAcceptedAt });
+});
+app.get('/api/panel/terms-text', (req, res) => res.type('text/plain').send(TERMS_TEXT));
+app.post('/api/panel/setup', (req, res) => {
+  const a = loadAuth();
+  if (a.hash) return res.status(409).json({ error: 'admin password already set - use login' });
+  const pw = String((req.body && req.body.password) || '');
+  if (pw.length < 12) return res.status(400).json({ error: 'use at least 12 characters' });
+  if (!(req.body && req.body.acceptTerms)) return res.status(400).json({ error: 'operator terms must be accepted' });
+  a.salt = crypto.randomBytes(16).toString('hex');
+  a.hash = scryptHex(pw, a.salt);
+  a.termsAcceptedAt = new Date().toISOString();
+  setSessionCookie(res, newSession(a));
+  res.json({ ok: true });
+});
+app.post('/api/panel/login', (req, res) => {
+  const a = loadAuth();
+  if (!a.hash) return res.status(409).json({ error: 'no admin password yet - finish setup first' });
+  const pw = String((req.body && req.body.password) || '');
+  if (!pw || !timingEqualHex(scryptHex(pw, a.salt), a.hash)) return res.status(401).json({ error: 'wrong password' });
+  const token = newSession(a);
+  setSessionCookie(res, token);
+  res.json({ ok: true, termsAccepted: !!a.termsAcceptedAt });
+});
+app.post('/api/panel/logout', (req, res) => {
+  const t = panelToken(req);
+  const a = loadAuth();
+  a.sessions = (a.sessions || []).filter(s => !s || s.token !== t);
+  saveAuth(a);
+  res.set('Set-Cookie', 'mp_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0');
+  res.json({ ok: true });
+});
+app.post('/api/panel/password', (req, res) => {
+  const a = loadAuth();
+  if (!a.hash) return res.status(409).json({ error: 'no admin password yet - finish setup first' });
+  if (!timingEqualHex(scryptHex(String((req.body && req.body.current) || ''), a.salt), a.hash))
+    return res.status(401).json({ error: 'current password is wrong' });
+  const next = String((req.body && req.body.next) || '');
+  if (next.length < 12) return res.status(400).json({ error: 'use at least 12 characters' });
+  a.salt = crypto.randomBytes(16).toString('hex');
+  a.hash = scryptHex(next, a.salt);
+  saveAuth(a);
+  res.json({ ok: true });
+});
+app.post('/api/panel/terms', (req, res) => {
+  if (!(req.body && req.body.accepted)) return res.status(400).json({ error: 'terms not accepted' });
+  const a = loadAuth();
+  a.termsAcceptedAt = new Date().toISOString();
+  saveAuth(a);
+  res.json({ ok: true });
+});
+// ---- Backups: site tarball + per-database dumps. Downloads only - restore is
+// manual (extract the tarball, rescan). Passwords travel as argv, never shell.
+app.get('/api/apps/:id/backup', async (req, res) => {
+  const meta = load().apps.find(a => a.id === req.params.id);
+  if (!meta) return res.status(404).json({ error: 'unknown app' });
+  const stamp = backupStamp();
+  const tmp = path.join(os.tmpdir(), `${meta.id}-backup-${stamp}.tar.gz`);
+  try {
+    await runOut('tar', ['-czf', tmp, '--exclude=node_modules', '-C', appDir(APPS_DIR, meta.id), '.']);
+  } catch (e) { return res.status(500).json({ error: 'site backup failed: ' + e.message }); }
+  res.download(tmp, `${meta.id}-backup-${stamp}.tar.gz`, () => { try { fs.unlinkSync(tmp); } catch {} });
+});
+app.get('/api/apps/:id/databases/:type/dump', async (req, res) => {
+  const meta = load().apps.find(a => a.id === req.params.id);
+  if (!meta) return res.status(404).json({ error: 'unknown app' });
+  const type = req.params.type;
+  let cfg;
+  try { cfg = dbTools.databaseConfig(meta, appDir(APPS_DIR, meta.id), type); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
+  if (!cfg.host || !cfg.pass || (type !== 'redis' && (!cfg.user || !cfg.db)))
+    return res.status(400).json({ error: 'incomplete managed credentials for ' + type });
+  const redact = s => String(s).split(cfg.pass).join('***');
+  const dir = appDir(APPS_DIR, meta.id);
+  const svc = cfg.service;
+  const stamp = backupStamp();
+  const ext = type === 'redis' ? 'rdb' : type === 'mongo' ? 'archive' : 'sql';
+  const tmp = path.join(os.tmpdir(), `${meta.id}-${type}-${stamp}.${ext}`);
+  try {
+    const ca = composeArgv();
+    const cexec = (args) => runOut(ca[0], [...ca.slice(1), 'exec', '-T', ...args], { cwd: dir });
+    if (type === 'postgres') {
+      const out = await cexec(['-e', `PGPASSWORD=${cfg.pass}`, svc, 'pg_dump', '-U', cfg.user, '-h', 'localhost', cfg.db]);
+      fs.writeFileSync(tmp, out);
+    } else if (type === 'mysql') {
+      const out = await cexec([svc, 'mysqldump', '-u', cfg.user, `-p${cfg.pass}`, cfg.db]);
+      fs.writeFileSync(tmp, out);
+    } else if (type === 'mongo') {
+      const uri = `mongodb://${encodeURIComponent(cfg.user)}:${encodeURIComponent(cfg.pass)}@localhost:${cfg.port || 27017}/${encodeURIComponent(cfg.db || '')}?authSource=admin`;
+      const out = await cexec([svc, 'mongodump', `--uri=${uri}`, '--archive']);
+      fs.writeFileSync(tmp, out);
+    } else if (type === 'redis') {
+      const cid = execSync(`${COMPOSE_BIN} ps -q ${svc}`, { cwd: dir }).toString().trim().split('\n')[0] || '';
+      if (!/^[a-f0-9]{12,64}$/i.test(cid)) throw new Error('database container not running');
+      const lastsave = async () => {
+        const o = await cexec([svc, 'redis-cli', '-a', cfg.pass, 'LASTSAVE']);
+        return parseInt(String(o).trim(), 10) || 0;
+      };
+      const before = await lastsave().catch(() => 0);
+      await cexec([svc, 'redis-cli', '-a', cfg.pass, 'BGSAVE']);
+      let fresh = false;
+      for (let i = 0; i < 15; i++) {
+        await new Promise(r => setTimeout(r, 1000));
+        try { if (await lastsave() > before) { fresh = true; break; } } catch {}
+      }
+      if (!fresh) throw new Error('redis snapshot did not finish in time');
+      await runOut(DOCKER_BIN, ['cp', `${cid}:/data/dump.rdb`, tmp]);
+    } else return res.status(400).json({ error: 'unsupported database' });
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch {}
+    return res.status(500).json({ error: ('database dump failed: ' + redact(e.message)).slice(0, 300) });
+  }
+  res.download(tmp, path.basename(tmp), () => { try { fs.unlinkSync(tmp); } catch {} });
+});
 // serve wizard UI (works locally and in docker). No-store so upgrades show instantly.
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api') && !req.path.startsWith('/webhook') && !req.path.startsWith('/terminal')) res.set('Cache-Control', 'no-store');
@@ -78,6 +271,27 @@ function sh(cmd, cwd, env) {
     });
   });
 }
+// argv-based runner (no shell) so generated passwords never touch a shell line.
+function runOut(bin, args, opts = {}) {
+  return new Promise((res, rej) => {
+    const p = spawn(bin, args, opts);
+    const chunks = [];
+    let settled = false;
+    p.stdout.on('data', d => chunks.push(d));
+    p.stderr.on('data', () => {});
+    p.on('error', e => { if (!settled) { settled = true; rej(e); } });
+    p.on('close', code => {
+      if (settled) return;
+      settled = true;
+      if (code === 0) res(Buffer.concat(chunks));
+      else rej(new Error(`${bin} exited with code ${code}`));
+    });
+  });
+}
+// ['docker','compose',...] or ['docker-compose',...] without ever shell-splitting secrets.
+function composeArgv() { return String(COMPOSE_BIN).trim().split(/\s+/); }
+const DOCKER_BIN = process.env.DOCKER_BIN || 'docker';
+function backupStamp() { return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19); }
 app.get('/api/panel/pubkey', (req, res) => {
   const k = pubKey();
   if (!k) return res.status(500).json({ error: 'no panel key (ssh-keygen unavailable?)' });
@@ -2049,6 +2263,7 @@ process.on('SIGINT', shutdown);
 // `script` supplies the TTY that docker exec -it needs while Node relays pipes.
 const wss = new WebSocketServer({ server, path: '/terminal' });
 wss.on('connection', (ws, req) => {
+  if (!panelAuthed(req)) { try { ws.send('panel login required - sign in and reconnect\r\n'); } catch {} return ws.close(1008, 'login required'); }
   const q = new URL(req.url, 'http://x').searchParams;
   const id = q.get('app');
   const meta = id && load().apps.find(a => a.id === id);

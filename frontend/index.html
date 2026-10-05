@@ -16,9 +16,26 @@
       <button class="navitem" data-view="terminal" onclick="showView('terminal')">Terminal</button>
       <button class="navitem" data-view="panel" onclick="showView('panel')">Upgrade</button>
     </nav>
-    <div class="sidefoot"><button onclick="toggleTheme()" title="dark / light mode">Theme</button></div>
+    <div class="sidefoot"><button onclick="toggleTheme()" title="dark / light mode">Theme</button><button onclick="showTerms()" title="operator terms">Terms</button><button onclick="panelLogout()" title="sign out of the panel">Logout</button></div>
   </aside>
   <main>
+    <section id="view-login" class="view">
+      <div class="pagehead"><div><h1>Panel login</h1><div class="meta">Localhost testing build — sign in to manage sites.</div></div></div>
+      <div class="card" id="setupBox" style="display:none">
+        <div class="sectionhead"><div><b>Create admin password</b><div class="meta">First run only. 12+ characters. Creating it records your acceptance of the operator terms.</div></div></div>
+        <input id="setupPass" type="password" placeholder="new admin password" autocomplete="new-password">
+        <pre id="termsPreview" class="compact-output"></pre>
+        <label class="radiorow"><input type="checkbox" id="setupTerms"> I accept the operator terms — I am responsible for the apps I deploy.</label>
+        <div class="actions"><button class="btn primary" onclick="panelSetup()">create + enter</button></div>
+        <pre id="setupOut" class="compact-output"></pre>
+      </div>
+      <div class="card" id="loginBox" style="display:none">
+        <div class="sectionhead"><div><b>Admin login</b><div class="meta">Enter the panel password.</div></div></div>
+        <input id="loginPass" type="password" placeholder="admin password" autocomplete="current-password" onkeydown="if(event.key==='Enter')panelLogin()">
+        <div class="actions"><button class="btn primary" onclick="panelLogin()">log in</button></div>
+        <pre id="loginOut" class="compact-output"></pre>
+      </div>
+    </section>
     <section id="view-websites" class="view active">
       <div class="pagehead"><div><h1>Websites</h1><div class="meta">Development build — only Static, React, Node.js and PHP sites are supported for now.</div></div><button class="btn primary" onclick="openCreate()">+ Create</button></div>
       <div id="apps"></div>
@@ -213,6 +230,10 @@
             <pre id="fileOut"></pre>
           </section>
         </div>
+        <div class="card">
+          <div class="sectionhead"><div><b>Backups</b><div class="meta">Download a full site archive or a single database dump. Restore is manual: extract, then rescan. Store copies off this box.</div></div><button class="btn primary" onclick="downloadSiteBackup()">download site (.tar.gz)</button></div>
+          <div class="meta">Per-database dumps live on each database card under Setup → Attach databases.</div>
+        </div>
       </div>
       <div id="tab-logs" class="sitetab" style="display:none">
         <div class="card"><select id="logSvc"></select> <button onclick="showLogs()">runtime logs</button> <button onclick="showBuildLog()">build log</button> <button onclick="showBuildLog(true)">full</button><pre id="logs"></pre></div>
@@ -242,8 +263,9 @@
           <button id="upgradeBtn" class="btn primary upgrade-btn" onclick="upgrade()">upgrade from git</button>
           <div class="maintenance-panel">
             <b>Maintenance</b>
-            <div class="meta">Recover site metadata or display the panel’s SSH public key.</div>
+            <div class="meta">Recover site metadata, rotate the admin password, or display the panel’s SSH public key.</div>
             <div class="actions"><button onclick="scan()">rescan /srv/apps</button><button onclick="showKey()">show panel git key</button></div>
+            <div class="controlrow"><input id="pwCurrent" type="password" placeholder="current password" autocomplete="current-password"><input id="pwNext" type="password" placeholder="new password (12+)" autocomplete="new-password"><button onclick="panelChangePassword()">change password</button></div>
             <pre id="maintOut" class="compact-output"></pre>
             <pre id="keyOut" class="compact-output"></pre>
           </div>

@@ -2,6 +2,14 @@ let currentApp = null;
 let serviceCheckTimer = null;
 let serviceCheckSeq = 0;
 let appsRefreshSeq = 0;
+// Global 401 tripwire: any data call that comes back unauthorized drops to the
+// login view. Login/setup endpoints are excluded so wrong passwords just show
+// their own error instead of looping.
+const _fetch = window.fetch.bind(window);
+window.fetch = (...a) => _fetch(...a).then(r => {
+  if (r.status === 401 && !String(a[0] || '').includes('/api/panel/')) showLogin();
+  return r;
+});
 const dbPopupSlots = new Map();
 async function refresh() {
   const seq = ++appsRefreshSeq;
@@ -471,6 +479,7 @@ async function loadDatabases() {
       const action = toolRunning
         ? `<button class="btn primary" onclick="openDbTool('${d.type}', ${toolPort})">open ${safeHtml(d.tool)}</button><button onclick="stopDbTool('${d.type}')">stop UI</button>`
         : `<button class="btn primary" onclick="launchDbTool('${d.type}')" ${running ? '' : 'disabled'}>launch ${safeHtml(d.tool)}</button>`;
+      const dumpBtn = `<button onclick="downloadDbDump('${d.type}')" ${running ? '' : 'disabled'} title="download a full dump of this database">dump</button>`;
       let toolStatus = `${safeHtml(d.tool)} is stopped`;
       if (toolRunning) {
         const mins = d.toolExpiresAt ? Math.max(1, Math.ceil((new Date(d.toolExpiresAt).getTime() - Date.now()) / 60000)) : (r.toolTtlMinutes || 30);
@@ -478,7 +487,7 @@ async function loadDatabases() {
       } else if (d.toolState && d.toolState !== 'stopped') toolStatus = `${safeHtml(d.tool)}: ${safeHtml(d.toolState)}`;
       return `<div class="db-runtime-card"><div class="db-runtime-title"><span class="opdot ${running ? 'ok' : 'fail'}"></span><b>${safeHtml(d.label)}</b><span class="badge">${safeHtml(d.service)}</span></div>` +
         `<div class="meta">${safeHtml(d.image || 'image unavailable')}</div><div class="meta"><b>${safeHtml(d.state)}</b>${d.status ? ` · ${safeHtml(d.status)}` : ''}</div>` +
-        `<div class="db-tool-status">${toolStatus}</div><div class="db-runtime-actions">${action}</div></div>`;
+        `<div class="db-tool-status">${toolStatus}</div><div class="db-runtime-actions">${action}${dumpBtn}</div></div>`;
     }).join('') || '<div class="meta">No managed databases are attached.</div>';
   } catch (e) { box.innerHTML = '<div class="meta">database status unavailable</div>'; }
 }
@@ -1603,11 +1612,82 @@ setInterval(async () => {
   document.getElementById(slot + 'Pct').textContent = pctv.toFixed(0) + '%';
   document.getElementById(slot + 'Stage').textContent = `deploying via ${op.source}…`;
 }, 3000);
-refresh();
-version();
-ghStatus();
-if (new URLSearchParams(location.search).get('github') === 'connected') {
-  toast('github connected - pick a repo at create time');
-  showView('panel');
-  history.replaceState(null, '', location.pathname);
+async function panelSetup() {
+  const out = document.getElementById('setupOut');
+  const pw = document.getElementById('setupPass').value;
+  if (!document.getElementById('setupTerms').checked) { out.textContent = 'tick the terms checkbox first'; return; }
+  out.textContent = 'creating…';
+  const r = await (await fetch('/api/panel/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw, acceptTerms: true }) })).json();
+  if (r.ok) { document.getElementById('setupPass').value = ''; authBoot(); }
+  else out.textContent = r.error || 'setup failed';
 }
+async function panelLogin() {
+  const out = document.getElementById('loginOut');
+  const input = document.getElementById('loginPass');
+  out.textContent = 'checking…';
+  const r = await (await fetch('/api/panel/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: input.value }) })).json();
+  input.value = '';
+  if (!r.ok) { out.textContent = r.error || 'login failed'; return; }
+  out.textContent = '';
+  if (!r.termsAccepted) {
+    const t = await (await fetch('/api/panel/terms-text')).text();
+    const ok = await uiConfirm({ title: 'Operator terms', body: t, confirmLabel: 'I accept' });
+    if (!ok) { panelLogout(); return; }
+    await fetch('/api/panel/terms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accepted: true }) });
+    toast('terms accepted');
+  }
+  authBoot();
+}
+async function panelLogout() {
+  try { await fetch('/api/panel/logout', { method: 'POST' }); } catch {}
+  currentApp = null;
+  showLogin();
+}
+async function panelChangePassword() {
+  const out = document.getElementById('maintOut');
+  const cur = document.getElementById('pwCurrent').value;
+  const next = document.getElementById('pwNext').value;
+  out.textContent = 'changing…';
+  const r = await (await fetch('/api/panel/password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ current: cur, next }) })).json();
+  out.textContent = r.ok ? 'password changed' : (r.error || 'failed');
+  document.getElementById('pwCurrent').value = '';
+  document.getElementById('pwNext').value = '';
+}
+async function showTerms() {
+  const t = await (await fetch('/api/panel/terms-text')).text();
+  await uiConfirm({ title: 'Operator terms', body: t, confirmLabel: 'close' });
+}
+async function showLogin() {
+  currentApp = null;
+  showView('login');
+  try {
+    const s = await (await fetch('/api/panel/auth-status')).json();
+    document.getElementById('setupBox').style.display = s.setupRequired ? 'block' : 'none';
+    document.getElementById('loginBox').style.display = s.setupRequired ? 'none' : 'block';
+    if (s.setupRequired) {
+      try { document.getElementById('termsPreview').textContent = await (await fetch('/api/panel/terms-text')).text(); } catch {}
+    }
+  } catch {}
+}
+function downloadSiteBackup() {
+  if (!currentApp) return;
+  location.href = `/api/apps/${currentApp}/backup`;
+}
+function downloadDbDump(type) {
+  if (!currentApp) return;
+  location.href = `/api/apps/${currentApp}/databases/${type}/dump`;
+}
+async function authBoot() {
+  let s = null;
+  try { s = await (await fetch('/api/panel/auth-status')).json(); } catch {}
+  if (!s || !s.authenticated) { showLogin(); return; }
+  if (new URLSearchParams(location.search).get('github') === 'connected') {
+    toast('github connected - pick a repo at create time');
+    showView('panel');
+    history.replaceState(null, '', location.pathname);
+  }
+  refresh();
+  version();
+  ghStatus();
+}
+authBoot();
