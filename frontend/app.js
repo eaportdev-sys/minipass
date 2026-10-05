@@ -589,7 +589,7 @@ async function runDeploy(id, services) {
   }, 2500);
   stage.textContent = services && services.length ? ('redeploying ' + services.join(',') + '… (others untouched)') : ('redeploying ' + id + '…');
   try {
-    const r = await (await fetch(`/api/apps/${id}/deploy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(services && services.length ? { services } : {}) })).json();
+    const r = await (await fetch(`/api/apps/${id}/deploy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(services && services.length ? { services, source: 'manual' } : { source: 'manual' }) })).json();
     outcome = r;
   } catch (e) { outcome = { ok: false, error: e.message }; }
   done = true;
@@ -926,6 +926,53 @@ function openTermGlobal() {
   if (!id) return;
   connectTerm('termGlobal', id, 'global');
 }
+// Remote-trigger watcher: webhook/poll/local-push deploys happen with no browser
+// involved, so poll /status while a site is open and mirror the progress UI into
+// the card the trigger came from (webhook card vs local-git card). Manual ops
+// stay with runDeploy to avoid double toasts.
+let remoteOp = null;
+setInterval(async () => {
+  if (!currentApp) return;
+  let st;
+  try { st = await (await fetch(`/api/apps/${currentApp}/status`)).json(); } catch { return; }
+  const op = st.deployOp && st.deployOp.source !== 'manual' ? st.deployOp : null;
+  const slot = !op ? null : (op.source === 'local-push' ? 'local' : 'hook');
+  for (const p of ['hook', 'local']) {
+    const box = document.getElementById(p + 'Prog');
+    if (!box) continue;
+    if (p !== slot && remoteOp && remoteOp.slot === p) {
+      const bar = document.getElementById(p + 'Bar');
+      const pct = document.getElementById(p + 'Pct');
+      const stage = document.getElementById(p + 'Stage');
+      const d = st.lastDeploy;
+      const secs = d && d.durationMs != null ? Math.round(d.durationMs / 1000) : null;
+      bar.style.width = '100%'; pct.textContent = '100%';
+      if (d && d.status === 'ok') {
+        bar.style.background = '#4caf50';
+        stage.textContent = `done — live via ${remoteOp.source}${secs != null ? ` in ${secs}s` : ''}`;
+        toast(`deployed via ${remoteOp.source}${secs != null ? ` in ${secs}s` : ''}`, true);
+      } else {
+        bar.style.background = 'var(--danger)';
+        stage.textContent = `failed via ${remoteOp.source}`;
+        toast(`deploy via ${remoteOp.source} failed: ` + ((d && d.error) || 'unknown'), false);
+      }
+      loadDeployStatus(); loadServices(); refresh();
+      setTimeout(() => { box.style.display = 'none'; }, 15000);
+    }
+    if (p !== slot) box.style.display = 'none';
+  }
+  if (!op) { remoteOp = null; return; }
+  remoteOp = { app: currentApp, source: op.source, startedAt: op.startedAt, slot };
+  const box = document.getElementById(slot + 'Prog');
+  if (!box) return;
+  box.style.display = 'block';
+  const s = Math.floor((Date.now() - op.startedAt) / 1000);
+  document.getElementById(slot + 'Time').textContent = s + 's';
+  const pctv = Math.min(95, 2 + (Date.now() - op.startedAt) / 90000 * 93);
+  document.getElementById(slot + 'Bar').style.width = pctv.toFixed(0) + '%';
+  document.getElementById(slot + 'Pct').textContent = pctv.toFixed(0) + '%';
+  document.getElementById(slot + 'Stage').textContent = `deploying via ${op.source}…`;
+}, 3000);
 refresh();
 version();
 ghStatus();

@@ -33,7 +33,7 @@ app.post('/webhook/:id', express.raw({ type: '*/*' }), async (req, res) => {
     const ok = sig.length === expect.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expect));
     if (!ok) return res.status(401).send('bad signature');
   }
-  try { await deploy(req.params.id); } catch (e) { return res.status(500).send(e.message); }
+  try { await deploy(req.params.id, { source: 'webhook' }); } catch (e) { return res.status(500).send(e.message); }
   // keep the poller from redeploying what the webhook just deployed
   try {
     const p = JSON.parse(req.body.toString());
@@ -107,7 +107,7 @@ async function pollGithub() {
       const c = await gh.apiFor(meta, `/repos/${parts[0]}/${parts[1]}/commits/${encodeURIComponent(g.branch || 'main')}`);
       const sha = c && c.sha;
       if (!sha || sha === g.sha) continue;
-      await deploy(meta.id);
+      await deploy(meta.id, { source: 'poll' });
       const fresh = load();
       const m2 = fresh.apps.find(a => a.id === meta.id);
       if (m2 && m2.github) { m2.github.sha = sha; save(fresh); }
@@ -210,6 +210,9 @@ app.post('/api/apps', async (req, res) => {
 
 const redactUrl = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
 const deployLocks = new Set();
+// Live ops: id -> { source, startedAt } so the UI can show per-card progress
+// for server-side triggers (webhook/poll/local-push) with no browser involved.
+const deployOps = new Map();
 // Container image IDs before a deploy, so a failed swap can retag + restart them.
 async function snapshotImages(dir) {
   const snaps = [];
@@ -266,6 +269,11 @@ async function recordDeploy(id, rec) {
     const db2 = load();
     const m = db2.apps.find(a => a.id === id);
     if (m) {
+      const op = deployOps.get(id);
+      if (op) {
+        rec.source = rec.source || op.source;
+        if (!rec.durationMs) rec.durationMs = Date.now() - op.startedAt;
+      }
       m.lastDeploy = rec;
       if (rec.status === 'ok') delete m.dirty;
       save(db2);
@@ -317,6 +325,8 @@ async function deploy(id, opts = {}) {
   // container names and lose ("is already in use")
   if (deployLocks.has(id)) throw new Error('deploy already in progress - wait for it to finish');
   deployLocks.add(id);
+  const opSource = ['webhook', 'poll', 'local-push', 'manual'].includes(opts.source) ? opts.source : 'manual';
+  deployOps.set(id, { source: opSource, startedAt: Date.now() });
   try {
   const dir = appDir(APPS_DIR, id);
   const meta = load().apps.find(a => a.id === id);
@@ -460,6 +470,7 @@ async function deploy(id, opts = {}) {
   return true;
   } finally {
     deployLocks.delete(id);
+    deployOps.delete(id);
   }
 }
 
@@ -475,7 +486,7 @@ app.get('/api/apps/:id/build-log', (req, res) => {
 app.get('/api/apps/:id/status', async (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta) return res.status(404).json({ error: 'unknown app' });
-  res.json({ app: pubApp(meta), lastDeploy: meta.lastDeploy || null, containers: await appContainers(meta.id), deploying: deployLocks.has(meta.id) });
+  res.json({ app: pubApp(meta), lastDeploy: meta.lastDeploy || null, containers: await appContainers(meta.id), deploying: deployLocks.has(meta.id), deployOp: deployOps.get(meta.id) || null });
 });
 async function appContainers(id) {
   let containers = [];
@@ -593,7 +604,8 @@ app.post('/api/apps/:id/deploy', async (req, res) => {
     const only = Array.isArray(req.body && req.body.services)
       ? [...new Set(req.body.services.filter(s => /^[A-Za-z0-9_-]{1,32}$/.test(s || '')))]
       : [];
-    await deploy(req.params.id, { only });
+    const source = ['manual', 'local-push'].includes(req.body && req.body.source) ? req.body.source : 'manual';
+    await deploy(req.params.id, { only, source });
     res.json({ ok: true, redeployed: true, services: only.length ? only : undefined });
   }
   catch (e) { res.status(500).json({ error: e.message }); }
@@ -806,7 +818,7 @@ app.post('/api/apps/:id/git-init', (req, res) => {
     const repo = path.join(dir, 'repo.git');
     const port = process.env.PORT || PORT;
     if (!fs.existsSync(repo)) execSync(`git init --bare "${repo}"`, { stdio: 'ignore' });
-    const hook = `#!/bin/sh\n# minipass push-to-deploy: checkout pushed branch into code/, rebuild\nif GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f main 2>/dev/null; then\n  :\nelse\n  GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f master\nfi\ncurl -s -X POST http://localhost:${port}/api/apps/${id}/deploy >/dev/null\n`;
+    const hook = `#!/bin/sh\n# minipass push-to-deploy: checkout pushed branch into code/, rebuild\nif GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f main 2>/dev/null; then\n  :\nelse\n  GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f master\nfi\ncurl -s -X POST -H 'Content-Type: application/json' -d '{"source":"local-push"}' http://localhost:${port}/api/apps/${id}/deploy >/dev/null\n`;
     fs.writeFileSync(path.join(repo, 'hooks', 'post-receive'), hook);
     fs.chmodSync(path.join(repo, 'hooks', 'post-receive'), 0o755);
     const db_ = load();
