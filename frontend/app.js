@@ -33,6 +33,17 @@ async function deployCurrent() {
   await deploy(currentApp);
   loadDeployStatus();
 }
+async function syncGithub() {
+  if (!currentApp) return;
+  const ok = await uiConfirm({ title: 'Sync to GitHub?', body: 'Box edits are discarded (conflicting untracked files moved aside, never deleted) and the tree resets to GitHub. Type the site name to confirm.', requireText: currentApp, confirmLabel: 'Sync', danger: true });
+  if (!ok) return;
+  toast('syncing to GitHub…');
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/sync-github`, { method: 'POST' })).json();
+    toast(r.ok ? (`synced to ${r.sha}${r.movedAside && r.movedAside.length ? ` (${r.movedAside.length} file(s) moved aside)` : ''} - redeploy to apply`) : ('sync failed: ' + (r.error || 'unknown')), !!r.ok);
+    refresh(); loadDeployStatus(); loadServices();
+  } catch (e) { toast('sync failed: ' + e.message, false); }
+}
 async function deploySvc(name) {
   if (!currentApp) return;
   return runDeploy(currentApp, [name]);

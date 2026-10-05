@@ -1248,6 +1248,44 @@ app.get('/api/apps/:id/migrate-suggest', (req, res) => {
     res.json({ suggestions: out.slice(0, 8) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+// Sync box tree to GitHub: fetch + reset --hard to the tracked branch.
+// Untracked files that would be overwritten are moved aside (*.panel-backup-*),
+// never deleted. Destructive to box edits by design - frontend gates it behind
+// a type-the-name confirm. Marks dirty so redeploy re-enables.
+app.post('/api/apps/:id/sync-github', async (req, res) => {
+  try {
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    if (!meta.repoUrl) return res.status(400).json({ error: 'no repo linked' });
+    const dir = appDir(APPS_DIR, meta.id);
+    const codeDir = path.join(dir, 'code');
+    if (!fs.existsSync(path.join(codeDir, '.git'))) return res.status(400).json({ error: 'no git checkout in code/' });
+    const isSsh = /^(git@|ssh:\/\/)/i.test(meta.repoUrl);
+    const url = isSsh ? meta.repoUrl : gh.authUrlFor(meta, meta.repoUrl);
+    const env = isSsh ? appGitEnv(dir) : process.env;
+    const branch = (meta.github && meta.github.branch) || 'main';
+    const moved = [];
+    try {
+      await sh(`git fetch "${url}" "${branch}"`, codeDir, env);
+      const out = await sh('git ls-files --others --exclude-standard', codeDir, env);
+      for (const f of out.split('\n').map(s => s.trim()).filter(Boolean)) {
+        try {
+          execSync(`git cat-file -e FETCH_HEAD:"${f}"`, { cwd: codeDir });
+          const bk = `${f}.panel-backup-${Date.now()}`;
+          fs.renameSync(path.join(codeDir, f), path.join(codeDir, bk));
+          moved.push(bk);
+        } catch {}
+      }
+      await sh(`git reset --hard FETCH_HEAD`, codeDir, env);
+      const sha = execSync('git rev-parse --short HEAD', { cwd: codeDir }).toString().trim();
+      await markDirty(meta.id, 'synced to github');
+      res.json({ ok: true, branch, sha, movedAside: moved });
+    } catch (e) {
+      return res.json({ ok: false, error: redactUrl(e.stderr ? String(e.stderr) : e.message) });
+    }
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.post('/api/apps/:id/stop', async (req, res) => {
   try { await sh(`${COMPOSE_BIN} stop`, appDir(APPS_DIR, req.params.id)); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
