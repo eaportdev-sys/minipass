@@ -69,7 +69,10 @@ function parseComposeServices(text) {
 function parseServiceBlock(b) {
   const text = b.lines.join('\n');
   let ctx = './code';
-  const m = text.match(/context: \.\/code(?:\/([^\s]+))?/);
+  // Accept both current ./code/x and legacy ././code/x contexts. Older
+  // generators emitted the extra ./; treating it as repository root makes a
+  // frontend image look as if it contains sibling backend folders.
+  const m = text.match(/context:\s+(?:\.\/)+code(?:\/([^\s]+))?/);
   if (m) ctx = './code' + (m[1] ? '/' + m[1] : '');
   let port = null;
   let host = null;

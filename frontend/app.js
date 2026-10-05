@@ -1503,6 +1503,14 @@ function fillService(sub, type) {
   if (type) document.getElementById('svcType').value = type;
   scheduleServiceCheck();
 }
+function showStandardDockerfile(out, message) {
+  out.innerHTML = '';
+  out.appendChild(document.createTextNode(message + ' '));
+  const button = document.createElement('button');
+  button.textContent = 'use standard Dockerfile';
+  button.onclick = seedStandardDockerfile;
+  out.appendChild(button);
+}
 function scheduleServiceCheck() {
   const btn = document.getElementById('svcAddBtn');
   const out = document.getElementById('svcAddCheck');
@@ -1527,8 +1535,10 @@ function scheduleServiceCheck() {
       const q = new URLSearchParams({ name, subdir, type: document.getElementById('svcType').value });
       const r = await (await fetch(`/api/apps/${appId}/services/check?${q}`)).json();
       if (seq !== serviceCheckSeq || appId !== currentApp) return;
-      btn.disabled = !r.ok;
-      out.textContent = r.ok ? `Ready: ${r.subdir} will run as ${r.type}.` : (r.error || 'folder cannot be added');
+      btn.disabled = !r.ok || !!r.needsDockerfile;
+      if (r.ok && r.needsDockerfile)
+        showStandardDockerfile(out, `${r.subdir} was detected as ${r.type}, but it needs a Dockerfile.`);
+      else out.textContent = r.ok ? `Ready: ${r.subdir} will run as ${r.type}.` : (r.error || 'folder cannot be added');
     } catch (e) {
       if (seq !== serviceCheckSeq || appId !== currentApp) return;
       out.textContent = 'could not validate folder';
@@ -1556,12 +1566,7 @@ async function addService() {
   } else {
     const msg = r.error || 'service could not be added';
     if (/no Dockerfile in build context/.test(msg)) {
-      check.innerHTML = '';
-      check.appendChild(document.createTextNode(msg + ' '));
-      const b = document.createElement('button');
-      b.textContent = 'use standard Dockerfile';
-      b.onclick = seedStandardDockerfile;
-      check.appendChild(b);
+      showStandardDockerfile(check, msg);
     } else {
       check.textContent = msg;
       scheduleServiceCheck();

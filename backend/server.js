@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const { exec, execSync, execFileSync, spawn } = require('child_process');
 const http = require('http');
 const { WebSocketServer } = require('ws');
-const { createApp, appDir, normDbs, dbService, nginxConf, ensureDockerfile } = require('./lib/generator');
+const { createApp, appDir, normDbs, dbService, nginxConf, ensureDockerfile, needsDockerfileOptIn } = require('./lib/generator');
 const { gitEnv, pubKey, appPubKey, appGitEnv } = require('./lib/ssh');
 const svc = require('./lib/services');
 const dbTools = require('./lib/db-tools');
@@ -1280,7 +1280,15 @@ app.get('/api/apps/:id/services/check', (req, res) => {
   if (!meta) return res.status(404).json({ error: 'unknown app' });
   const check = serviceCandidate(meta, appDir(APPS_DIR, meta.id), req.query, true);
   if (check.error) return res.status(400).json({ ok: false, error: check.error });
-  res.json({ ok: true, name: check.name, subdir: check.subdir, type: check.type, detected: check.detected.detected, reason: check.detected.reason });
+  res.json({
+    ok: true,
+    name: check.name,
+    subdir: check.subdir,
+    type: check.type,
+    detected: check.detected.detected,
+    reason: check.detected.reason,
+    needsDockerfile: needsDockerfileOptIn(check.ctxDir, check.type)
+  });
 });
 // One-click standard Dockerfile: the validator refuses to guess for node
 // (no safe default), so the operator explicitly opts into the type template

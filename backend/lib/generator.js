@@ -52,6 +52,28 @@ function ensureDockerfile(ctxDir, type, templatesDir) {
   throw new Error(`no Dockerfile in build context and type '${type}' has no safe default here - add a Dockerfile (with EXPOSE + CMD) to the repo`);
 }
 
+// Mirrors ensureDockerfile's safe auto-seed cases without writing anything.
+// Used by validation so an explicit-standard-template button can be shown
+// before Add is clicked, and can survive background UI refreshes.
+function needsDockerfileOptIn(ctxDir, type) {
+  let files = [];
+  try { files = fs.readdirSync(ctxDir); } catch { return false; }
+  if (files.some(f => /^dockerfile$/i.test(f))) return false;
+  const has = (...names) => names.some(n => {
+    try { return fs.existsSync(path.join(ctxDir, n)); } catch { return false; }
+  });
+  if (type === 'static' && (has('index.html') || has('index.htm'))) return false;
+  if (type === 'react') {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(ctxDir, 'package.json'), 'utf8'));
+      if (pkg && pkg.scripts && pkg.scripts.build) return false;
+    } catch {}
+  }
+  if (type === 'php' && (has('index.php') || has('composer.json'))) return false;
+  if (type === 'node' && has('index.js')) return false;
+  return true;
+}
+
 // Seed missing keys from the repo's .env.example WITH their example values - those are
 // the author's declared defaults, so a fresh deploy behaves until customized.
 // Generated keys are never overwritten; review placeholders (keys, domains) after.
@@ -293,4 +315,4 @@ function nginxConf(proxy) {
   return `# minipass-managed (rewritten on link/unlink/redeploy - keep custom confs unmarked)\nserver {\n  listen 80;\n  root /usr/share/nginx/html;\n  index index.html;\n${api}  location / {\n    try_files $uri $uri/ /index.html;\n  }\n}\n`;
 }
 
-module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbService, DB_IMAGES, inferPort, nginxConf, ensureDockerfile, serviceBlock };
+module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbService, DB_IMAGES, inferPort, nginxConf, ensureDockerfile, needsDockerfileOptIn, serviceBlock };
