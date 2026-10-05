@@ -106,6 +106,7 @@ function openSite(id) {
   fileTreeApp = null;
   fileTreeNodes = new Map();
   selectedFile = '';
+  lastOpen = null;
   document.getElementById('svcName').value = '';
   document.getElementById('svcSub').value = '';
   document.getElementById('svcType').value = 'auto';
@@ -1232,6 +1233,7 @@ async function showKey() {
 let fileTreeApp = null;
 let fileTreeNodes = new Map();
 let selectedFile = '';
+let lastOpen = null;
 function joinFilePath(dir, name) { return dir ? `${dir}/${name}` : name; }
 async function loadFileDir(dir, force) {
   if (!currentApp) return;
@@ -1283,6 +1285,7 @@ async function listFiles(dir = '') {
     fileTreeApp = currentApp;
     fileTreeNodes = new Map([['', { open: true, items: null, loading: false, error: '' }]]);
     selectedFile = '';
+    lastOpen = null;
     document.getElementById('filePath').value = '';
     document.getElementById('fileEdit').value = '';
   }
@@ -1311,6 +1314,7 @@ async function openFile(p) {
   const fp = p || document.getElementById('filePath').value.trim() || 'index.html';
   if (!id) { document.getElementById('fileEdit').value = 'no app selected'; return; }
   selectedFile = fp;
+  lastOpen = { path: fp, ok: false };
   document.getElementById('filePath').value = fp;
   document.getElementById('fileOut').textContent = 'opening ' + fp + '…';
   renderFileTree();
@@ -1319,12 +1323,19 @@ async function openFile(p) {
     if (r.error) { document.getElementById('fileEdit').value = ''; document.getElementById('fileOut').textContent = r.error; return; }
     document.getElementById('fileEdit').value = r.content || '';
     document.getElementById('fileOut').textContent = `opened ${fp}`;
+    lastOpen = { path: fp, ok: true };
   } catch (e) { document.getElementById('fileEdit').value = 'open failed: ' + e.message; }
 }
 async function saveFile() {
   const id = currentApp;
   const filePath = document.getElementById('filePath').value.trim();
   if (!id || !filePath) { toast('enter a file path first', false); return; }
+  // Never save over a file that failed to open (too large, binary, missing):
+  // the editor is empty and saving would wipe the real content.
+  if (lastOpen && lastOpen.path === filePath && !lastOpen.ok) {
+    toast('that file did not open - refusing to save over it', false);
+    return;
+  }
   const body = { path: filePath, content: document.getElementById('fileEdit').value };
   document.getElementById('fileOut').textContent = 'saving… (redeploy to apply)';
   try {
@@ -1349,6 +1360,7 @@ async function deleteFile() {
     document.getElementById('fileOut').textContent = JSON.stringify(r, null, 2);
     document.getElementById('filePath').value = ''; document.getElementById('fileEdit').value = '';
     selectedFile = '';
+    lastOpen = null;
     await refreshFileTree(); refresh(); loadServices();
   } catch (e) { document.getElementById('fileOut').textContent = 'delete failed: ' + e.message; }
 }

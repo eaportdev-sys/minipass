@@ -2207,7 +2207,8 @@ app.get('/api/apps/:id/file', (req, res) => {
   try {
     const f = safeRel(codeDir(req.params.id), req.query.path || '');
     const st = fs.statSync(f);
-    if (!st.isFile() || st.size > 200 * 1024) return res.status(400).json({ error: 'not a small text file' });
+    if (!st.isFile()) return res.status(400).json({ error: 'not a file' });
+    if (st.size > 1024 * 1024) return res.status(400).json({ error: `file too large to edit in the panel (${Math.round(st.size / 1024)}KB > 1024KB) - replace it via zip upload` });
     const buf = fs.readFileSync(f);
     if (buf.includes(0)) return res.status(400).json({ error: 'binary file - use zip upload to replace' });
     res.json({ path: req.query.path, content: buf.toString('utf8') });
