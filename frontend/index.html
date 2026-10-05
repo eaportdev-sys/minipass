@@ -37,6 +37,7 @@
       <div class="site-tabs" role="tablist" aria-label="Site sections">
         <button class="tabbtn" data-tab="overview" onclick="showSiteTab('overview')">Overview</button>
         <button class="tabbtn" data-tab="setup" onclick="showSiteTab('setup')">Setup</button>
+        <button class="tabbtn" data-tab="environment" onclick="showSiteTab('environment')">Environment</button>
         <button class="tabbtn" data-tab="deploy" onclick="showSiteTab('deploy')">Deploy</button>
         <button class="tabbtn" data-tab="files" onclick="showSiteTab('files')">Files</button>
         <button class="tabbtn" data-tab="logs" onclick="showSiteTab('logs')">Logs</button>
@@ -50,8 +51,8 @@
         </div>
         <div class="card flowintro">
           <b>Deployment workflow</b>
-          <div class="flowsteps"><span>1 · Setup source and runtime</span><span>2 · Choose a deploy method</span><span>3 · Watch build and health</span></div>
-          <div class="meta">Use Setup when the app structure or configuration changes. Use Deploy for releases, automation, history, and recovery.</div>
+          <div class="flowsteps"><span>1 · Setup source and runtime</span><span>2 · Configure environment</span><span>3 · Deploy and verify health</span></div>
+          <div class="meta">Use Setup for source, services, databases, and routing. Use Environment for configuration, then Deploy for releases and recovery.</div>
         </div>
       </div>
       <div id="tab-setup" class="sitetab" style="display:none">
@@ -95,15 +96,7 @@
           <pre id="dbOut"></pre>
         </div>
         <div class="card stepcard">
-          <div class="stephead"><span class="stepno">4</span><div><b>Set environment</b><div class="meta">Managed keys are locked; custom keys are editable.</div></div></div>
-          <div id="envList"></div>
-          <div class="meta"><input id="envKey" placeholder="KEY" style="width:140px"> <input id="envVal" placeholder="value" style="width:220px">
-          <button onclick="envAdd()">add</button> <button onclick="loadEnv()">reload</button></div>
-          <div class="actions"><button class="btn primary" onclick="saveEnv()">save all</button> <button onclick="fillEnvDefaults()">add defaults</button> <button onclick="envDownload(false)">download .env</button> <button onclick="envDownload(true)">download .env.example</button></div>
-          <pre id="envOut"></pre>
-        </div>
-        <div class="card stepcard">
-          <div class="stephead"><span class="stepno">5</span><div><b>Configure routing</b><div class="meta">Where Open lands and how services connect.</div></div></div>
+          <div class="stephead"><span class="stepno">4</span><div><b>Configure routing</b><div class="meta">Where Open lands and how services connect.</div></div></div>
           <div class="meta">Open path: <input id="homePath" placeholder="/v1/live/events" style="width:200px"> <button onclick="saveHome()">save</button></div>
           <div id="apiCard" style="display:none">
             <hr><b>API backend</b> <span class="meta" id="apiState"></span>
@@ -115,6 +108,20 @@
           <div class="meta">Allow other sites to list this site as an API target:
             <select id="allowBackend"><option value="0">off</option><option value="1">on</option></select>
             <button onclick="saveAllow()">save</button></div>
+        </div>
+      </div>
+      <div id="tab-environment" class="sitetab" style="display:none">
+        <div class="card">
+          <div class="sectionhead"><div><b>Environment variables</b><div class="meta">Custom keys and values are editable. Managed names and generated values stay locked; DOMAIN remains editable.</div></div><button onclick="loadEnv()">reload</button></div>
+          <div class="env-grid-head"><span>Key</span><span>Value</span><span>Actions</span></div>
+          <div id="envList"></div>
+          <div class="env-add-row">
+            <input id="envKey" placeholder="NEW_KEY" autocomplete="off">
+            <input id="envVal" placeholder="value" autocomplete="off">
+            <button onclick="envAdd()">add variable</button>
+          </div>
+          <div class="actions"><button class="btn primary" onclick="saveEnv()">save changes</button><button onclick="fillEnvDefaults()">add defaults</button><button onclick="envDownload(false)">download .env</button><button onclick="envDownload(true)">download .env.example</button></div>
+          <pre id="envOut"></pre>
         </div>
       </div>
       <div id="tab-deploy" class="sitetab" style="display:none">

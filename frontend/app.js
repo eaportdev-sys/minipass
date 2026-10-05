@@ -233,23 +233,27 @@ async function loadEnv() {
   box.innerHTML = '<div class="meta">loading…</div>';
   try {
     const r = await (await fetch(`/api/apps/${currentApp}/env`)).json();
-    if (r.error) { box.innerHTML = '<div class="meta">' + r.error + '</div>'; return; }
+    if (r.error) { box.innerHTML = '<div class="meta">' + safeHtml(r.error) + '</div>'; return; }
     box.innerHTML = (r.vars || []).map(v => {
+      const key = safeHtml(v.key);
+      const value = safeHtml(v.value);
+      const keyInput = `<input class="env-name" value="${key}" ${v.managed ? 'readonly' : ''} aria-label="Environment key">`;
+      const badge = v.managed ? '<span class="badge">managed</span>' : '';
+      const canEditValue = !v.managed || v.key === 'DOMAIN';
       if (v.key === 'NODE_ENV' && !v.managed) {
         const cur = String(v.value).trim();
-        return `<div class="meta"><code>${v.key}</code> ` +
-        `<select data-envkey="${v.key}"><option value="development"${cur === 'development' ? ' selected' : ''}>development</option><option value="production"${cur === 'production' ? ' selected' : ''}>production</option></select> ` +
-        `<button onclick="envDel('${v.key}')">delete</button></div>`;
+        return `<div class="env-row" data-env-original="${key}" data-env-managed="0"><div class="env-key-cell">${keyInput}${badge}</div>` +
+          `<select class="env-value" aria-label="${key} value"><option value="development"${cur === 'development' ? ' selected' : ''}>development</option><option value="production"${cur === 'production' ? ' selected' : ''}>production</option></select>` +
+          `<div class="env-row-actions"><button class="btn danger" onclick="envDel('${v.key}')">delete</button></div></div>`;
       }
-      return `<div class="meta"><code>${v.key}</code>${v.managed ? ' <span class="badge">managed</span>' : ''} ` +
-      `<input id="envi-${v.key}" data-envkey="${v.key}" type="password" value="${String(v.value).replace(/"/g, '&quot;')}" style="width:260px"> ` +
-      `<button onclick="toggleEnv('${v.key}', this)">show</button> ` +
-      `<button onclick="envDel('${v.key}')">delete</button></div>`;
+      return `<div class="env-row" data-env-original="${key}" data-env-managed="${v.managed ? '1' : '0'}"><div class="env-key-cell">${keyInput}${badge}</div>` +
+        `<input class="env-value" type="password" value="${value}" ${canEditValue ? '' : 'readonly'} aria-label="${key} value">` +
+        `<div class="env-row-actions"><button onclick="toggleEnv(this)">show</button>${v.managed ? '' : ` <button class="btn danger" onclick="envDel('${v.key}')">delete</button>`}</div></div>`;
     }).join('') || '<div class="meta">(empty env)</div>';
   } catch { box.innerHTML = '<div class="meta">load failed</div>'; }
 }
-function toggleEnv(key, btn) {
-  const input = document.getElementById('envi-' + key);
+function toggleEnv(btn) {
+  const input = btn.closest('.env-row').querySelector('input.env-value');
   if (!input) return;
   const showing = btn.textContent === 'hide';
   input.type = showing ? 'password' : 'text';
@@ -258,13 +262,34 @@ function toggleEnv(key, btn) {
 async function saveEnv() {
   if (!currentApp) return;
   const set = {};
-  document.querySelectorAll('#envList [data-envkey]').forEach(i => { set[i.dataset.envkey] = i.value; });
+  const del = [];
+  const rename = {};
+  const seen = new Set();
+  for (const row of document.querySelectorAll('#envList .env-row')) {
+    const original = row.dataset.envOriginal;
+    const managed = row.dataset.envManaged === '1';
+    const key = row.querySelector('.env-name').value.trim();
+    const value = row.querySelector('.env-value').value;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      toast(`invalid environment key: ${key || '(empty)'}`, false);
+      return;
+    }
+    if (seen.has(key)) {
+      toast(`duplicate environment key: ${key}`, false);
+      return;
+    }
+    seen.add(key);
+    if (!managed || original === 'DOMAIN') set[key] = value;
+    if (!managed && key !== original) { del.push(original); rename[original] = key; }
+  }
   document.getElementById('envOut').textContent = 'saving… (redeploy to apply)';
   try {
-    const r = await (await fetch(`/api/apps/${currentApp}/env`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ set }) })).json();
+    const r = await (await fetch(`/api/apps/${currentApp}/env`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ set, delete: del, rename }) })).json();
     document.getElementById('envOut').textContent = JSON.stringify(r, null, 2);
+    if (!r.ok) { toast(r.error || 'save failed', false); return; }
+    toast('environment saved - redeploy to apply');
     loadEnv(); refresh(); loadServices();
-  } catch (e) { document.getElementById('envOut').textContent = 'failed: ' + e.message; }
+  } catch (e) { document.getElementById('envOut').textContent = 'failed: ' + e.message; toast('environment save failed', false); }
 }
 async function fillEnvDefaults() {
   if (!currentApp) return;
@@ -293,16 +318,21 @@ async function envAdd() {
   if (!currentApp) return;
   const k = document.getElementById('envKey').value.trim();
   const v = document.getElementById('envVal').value;
-  if (!k) return;
-  const r = await (await fetch(`/api/apps/${currentApp}/env`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ set: { [k]: v } }) })).json();
-  document.getElementById('envOut').textContent = JSON.stringify(r, null, 2);
-  document.getElementById('envKey').value = '';
-  document.getElementById('envVal').value = '';
-  loadEnv(); refresh(); loadServices();
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) { toast('enter a valid environment key', false); return; }
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/env`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ set: { [k]: v } }) })).json();
+    document.getElementById('envOut').textContent = JSON.stringify(r, null, 2);
+    if (!r.ok) { toast(r.error || 'add failed', false); return; }
+    if ((r.skipped || []).includes(k)) { toast(`${k} is managed and cannot be replaced`, false); return; }
+    document.getElementById('envKey').value = '';
+    document.getElementById('envVal').value = '';
+    toast(`${k} added - redeploy to apply`);
+    loadEnv(); refresh(); loadServices();
+  } catch (e) { toast('add failed: ' + e.message, false); }
 }
 async function envDel(key) {
   if (!currentApp) return;
-  const ok = await uiConfirm({ title: 'Delete ' + key + '?', body: 'From ' + currentApp + '. Redeploys after.', confirmLabel: 'Delete', danger: true });
+  const ok = await uiConfirm({ title: 'Delete ' + key + '?', body: 'Remove it from ' + currentApp + '. Redeploy afterward to apply.', confirmLabel: 'Delete', danger: true });
   if (!ok) return;
   const r = await (await fetch(`/api/apps/${currentApp}/env`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ delete: [key] }) })).json();
   document.getElementById('envOut').textContent = JSON.stringify(r, null, 2);
@@ -356,7 +386,7 @@ async function launchDbTool(type) {
     const url = `http://${location.hostname}:${r.port}`;
     toast(`${r.tool} started on port ${r.port}`, true);
     loadDatabases();
-    if (popup) setTimeout(() => { popup.location.href = url; }, 4000);
+    if (popup) popup.location.href = url;
     else window.open(url, '_blank');
   } catch (e) {
     if (popup) popup.close();
@@ -525,6 +555,7 @@ function showSiteTab(t) {
   });
   if (!currentApp) return;
   if (t === 'setup') loadDatabases();
+  if (t === 'environment') loadEnv();
   if (t === 'files') listFiles('');
   if (t === 'logs') showLogs();
 }

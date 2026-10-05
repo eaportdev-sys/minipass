@@ -1628,17 +1628,29 @@ app.put('/api/apps/:id/env', async (req, res) => {
     // managed keys are infrastructure (ports, hosts, generated creds) - read-only,
     // except DOMAIN which is display/future-tunnel metadata. Deleting them is refused too.
     const EDITABLE = new Set(['DOMAIN']);
-    const set = (req.body && req.body.set) || {};
-    const del = (req.body && req.body.delete) || [];
+    const set = { ...((req.body && req.body.set) || {}) };
+    const del = Array.isArray(req.body && req.body.delete) ? req.body.delete : [];
+    const rename = (req.body && req.body.rename) || {};
     for (const k of Object.keys(set)) {
       if (!validKey(k)) return res.status(400).json({ error: 'bad key name: ' + k });
     }
-    for (const k of Object.keys(set)) {
+    for (const k of del) {
       if (!validKey(k)) return res.status(400).json({ error: 'bad key name: ' + k });
+    }
+    for (const [from, to] of Object.entries(rename)) {
+      if (!validKey(from) || !validKey(to)) return res.status(400).json({ error: `bad key rename: ${from} → ${to}` });
+      if (managed.has(from) || managed.has(to)) return res.status(400).json({ error: 'managed environment keys cannot be renamed' });
+      if (!del.includes(from) || !Object.prototype.hasOwnProperty.call(set, to)) return res.status(400).json({ error: 'incomplete environment key rename' });
     }
     let raw = '';
     try { raw = fs.readFileSync(path.join(dir, '.env'), 'utf8'); } catch {}
     let arr = raw.split('\n');
+    const existing = new Set(arr.map(l => { const m = l.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/); return m && m[1]; }).filter(Boolean));
+    const renamedFrom = new Set(Object.keys(rename));
+    for (const [from, to] of Object.entries(rename)) {
+      if (!existing.has(from)) return res.status(400).json({ error: `environment key no longer exists: ${from}` });
+      if (existing.has(to) && !renamedFrom.has(to)) return res.status(400).json({ error: `environment key already exists: ${to}` });
+    }
     const skipped = del.filter(k => managed.has(k));
     const delSet = new Set(del.filter(k => !managed.has(k)));
     const lockedSet = Object.keys(set).filter(k => managed.has(k) && !EDITABLE.has(k));

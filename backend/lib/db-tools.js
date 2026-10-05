@@ -29,6 +29,15 @@ function dockerAsync(args, opts = {}) {
   });
 }
 
+function dockerOutput(args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(DOCKER_BIN, [...DOCKER_ARG, ...args], opts, (error, stdout, stderr) => {
+      if (error) reject(error);
+      else resolve(String(stdout || '') + String(stderr || ''));
+    });
+  });
+}
+
 function readEnv(dir) {
   const out = {};
   try {
@@ -89,6 +98,41 @@ function containerState(name) {
   catch { return 'stopped'; }
 }
 
+function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+async function startupError(name, tool, secrets, fallback) {
+  let detail = '';
+  try { detail = String(await dockerOutput(['logs', '--tail', '20', name], { encoding: 'utf8', timeout: 10000, maxBuffer: 256 * 1024 })).trim(); } catch {}
+  detail = detail.split(/\r?\n/).slice(-8).join(' ');
+  for (const secret of secrets.filter(Boolean)) detail = detail.split(secret).join('***');
+  return new Error(detail || fallback || `${tool.label} failed to start`);
+}
+
+async function waitForReady(name, type, tool, secrets) {
+  let runningChecks = 0;
+  const attempts = type === 'postgres' ? 60 : 15;
+  for (let i = 0; i < attempts; i++) {
+    await delay(1000);
+    let state = '';
+    try { state = String(await dockerAsync(['inspect', '--format', '{{.State.Status}}', name], { encoding: 'utf8', timeout: 5000 })).trim(); }
+    catch { throw await startupError(name, tool, secrets, `${tool.label} container disappeared during startup`); }
+    if (state !== 'running') {
+      if (['exited', 'dead', 'restarting'].includes(state)) throw await startupError(name, tool, secrets, `${tool.label} container is ${state}`);
+      runningChecks = 0;
+      continue;
+    }
+    if (type === 'postgres') {
+      try {
+        await dockerAsync(['exec', name, '/venv/bin/python3', '-c', "import urllib.request; urllib.request.urlopen('http://127.0.0.1:80/misc/ping', timeout=2).read()"],
+          { encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024 });
+        return;
+      } catch { continue; }
+    }
+    if (++runningChecks >= 2) return;
+  }
+  throw await startupError(name, tool, secrets, `${tool.label} did not become ready in time`);
+}
+
 function describe(meta, dir, containers) {
   const types = normDbs(meta && meta.db);
   return types.map(type => {
@@ -147,7 +191,8 @@ async function launch(id, meta, dir, type, hostPort) {
   if (type === 'postgres') {
     const f = ensurePgAdminFiles(dir, config);
     secrets.push(f.secret);
-    args.push('-e', 'PGADMIN_DEFAULT_EMAIL=admin@minipass.local', '-e', `PGADMIN_DEFAULT_PASSWORD=${f.secret}`,
+    args.push('-e', 'PGADMIN_DEFAULT_EMAIL=admin@minipass.dev', '-e', `PGADMIN_DEFAULT_PASSWORD=${f.secret}`,
+      '-e', 'PGADMIN_LISTEN_ADDRESS=0.0.0.0',
       '-e', 'PGADMIN_CONFIG_SERVER_MODE=False', '-e', 'PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False',
       '-e', 'PGADMIN_REPLACE_SERVERS_ON_STARTUP=True', '-e', 'PGPASS_FILE=/config/pgpass',
       '-v', `${f.servers}:/pgadmin4/servers.json:ro`, '-v', `${f.pgpass}:/config/pgpass:ro`, '-v', `${f.data}:/var/lib/pgadmin`);
@@ -166,6 +211,7 @@ async function launch(id, meta, dir, type, hostPort) {
     for (const secret of secrets.filter(Boolean)) msg = msg.split(secret).join('***');
     throw new Error(msg || `${tool.label} failed to start`);
   }
+  await waitForReady(name, type, tool, secrets);
   return { type, tool: tool.label, port: hostPort, state: 'running' };
 }
 
