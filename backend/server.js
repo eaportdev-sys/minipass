@@ -353,11 +353,10 @@ async function deploy(id, opts = {}) {
         fs.rmSync(codeDir, { recursive: true, force: true });
         fs.renameSync(codeDir + '.new', codeDir);
       } else {
-        // Local-push flow: the hook checked out the pushed branch into code/ via
-        // repo.git, so code/.git still points at the old HEAD and a normal pull
-        // would fight the fresh files as "local changes" and abort. Instead fetch
-        // the pushed branch from the bare repo (local, offline) and align to it:
-        // pushed code wins. Tree already matching = move HEAD only (nothing lost);
+        // Local-push flow: the hook never touches files (a second push once
+        // rewrote the tree mid-build), so align here under the deploy lock.
+        // Fetch the pushed branch from the bare repo (local, offline): pushed
+        // code wins. Tree already matching = move HEAD only (nothing lost);
         // extra box edits = stashed (restorable), untracked blockers moved aside.
         const pushedSha = /^[0-9a-f]{40}$/.test(opts.pushedSha || '') ? opts.pushedSha : null;
         const pushedBranch = /^[A-Za-z0-9._/-]{1,64}$/.test(opts.pushedBranch || '') ? opts.pushedBranch : null;
@@ -866,12 +865,10 @@ app.post('/api/apps/:id/git-init', (req, res) => {
     if (!fs.existsSync(path.join(dir, 'docker-compose.yml'))) return res.status(404).json({ error: 'unknown app' });
     const repo = path.join(dir, 'repo.git');
     const port = process.env.PORT || PORT;
-    if (!fs.existsSync(repo)) execSync(`git init --bare "${repo}"`, { stdio: 'ignore' });
-    // Hook checks out WHATEVER branch was pushed (not main/master-only) and logs
-    // to push.log - the old silent `>/dev/null` made failures invisible.
-    // Deploy curl runs in background so `git push` returns fast; the panel
-    // keeps deploying server-side and records it under source local-push.
-    const hook = `#!/bin/sh\n# minipass push-to-deploy: checkout pushed branch into code/, rebuild\nLOG="${path.join(repo, 'push.log')}"\n{\necho "=== $(date -u +%FT%TZ) push received ==="\nBRANCH=""\nNEWREV=""\nwhile read oldrev newrev ref; do\n  case "$ref" in refs/heads/*) BRANCH="\${ref#refs/heads/}"; NEWREV="$newrev";; esac\ndone\nBRANCH="\${BRANCH:-main}"\nif GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f "$BRANCH" 2>&1; then\n  echo "checked out $BRANCH"\nelse\n  echo "checkout $BRANCH failed, trying master"\n  GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f master 2>&1 || echo "checkout failed"\nfi\necho "triggering deploy…"\ncurl -s -m 5 -X POST -H 'Content-Type: application/json' -d '{"phase":"received"}' http://localhost:${port}/api/apps/${id}/git-push-event >> "$LOG" 2>&1\nnohup curl -s -X POST -H 'Content-Type: application/json' -d "{\\"source\\":\\"local-push\\",\\"sha\\":\\"$NEWREV\\",\\"branch\\":\\"$BRANCH\\"}" http://localhost:${port}/api/apps/${id}/deploy >> "$LOG" 2>&1 &\n} >> "$LOG" 2>&1\n`;
+    // Hook only pings + triggers (never touches files): the pushed sha/branch
+    // ride the deploy POST, and deploy aligns the tree itself under its lock.
+    // Checking out here once let a second push rewrite the tree mid-build.
+    const hook = `#!/bin/sh\n# minipass push-to-deploy: notify + trigger rebuild (deploy owns the tree)\nLOG="${path.join(repo, 'push.log')}"\n{\necho "=== $(date -u +%FT%TZ) push received ==="\nBRANCH=""\nNEWREV=""\nwhile read oldrev newrev ref; do\n  case "$ref" in refs/heads/*) BRANCH="\${ref#refs/heads/}"; NEWREV="$newrev";; esac\ndone\nBRANCH="\${BRANCH:-main}"\necho "pushed $BRANCH $NEWREV"\ncurl -s -m 5 -X POST -H 'Content-Type: application/json' -d '{"phase":"received"}' http://localhost:${port}/api/apps/${id}/git-push-event >> "$LOG" 2>&1\nnohup curl -s -X POST -H 'Content-Type: application/json' -d "{\\"source\\":\\"local-push\\",\\"sha\\":\\"$NEWREV\\",\\"branch\\":\\"$BRANCH\\"}" http://localhost:${port}/api/apps/${id}/deploy >> "$LOG" 2>&1 &\n} >> "$LOG" 2>&1\n`;
     fs.writeFileSync(path.join(repo, 'hooks', 'post-receive'), hook);
     fs.chmodSync(path.join(repo, 'hooks', 'post-receive'), 0o755);
     const db_ = load();
