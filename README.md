@@ -169,4 +169,9 @@ for their own use case.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). The license covers the code (copyright) only.
+
+## Trademark
+
+**minipass™** and its logos are trademarks of eaportdev-sys — forks must
+rebrand, see [TRADEMARK.md](TRADEMARK.md).
