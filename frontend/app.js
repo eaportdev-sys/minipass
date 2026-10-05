@@ -968,11 +968,6 @@ function openTermGlobal() {
 // involved, so poll /status while a site is open and mirror the progress UI into
 // the card the trigger came from (webhook card vs local-git card). Manual ops
 // stay with runDeploy to avoid double toasts.
-let remoteOp = null;
-setInterval(async () => {
-  if (!currentApp) return;
-  let st;
-  try { st = await (await fetch(`/api/apps/${currentApp}/status`)).json(); } catch { return; }
 // Connection light: always-on state, not deploy-only. Blinking yellow while
 // receiving/deploying, solid green when app containers run steady, red otherwise.
 function siteDot(st) {
@@ -992,6 +987,11 @@ function siteDot(st) {
   }
   return cls;
 }
+let remoteOp = null;
+setInterval(async () => {
+  if (!currentApp) return;
+  let st;
+  try { st = await (await fetch(`/api/apps/${currentApp}/status`)).json(); } catch { return; }
   const op = st.deployOp && st.deployOp.source !== 'manual' ? st.deployOp : null;
   const slot = !op ? null : (op.source === 'local-push' ? 'local' : 'hook');
   const recv = !op && st.pushEvent && (Date.now() - st.pushEvent.at) < 120000;
