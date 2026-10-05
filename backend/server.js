@@ -1776,7 +1776,9 @@ app.post('/api/apps/:id/migrate-run', async (req, res) => {
     if (!migrateDirOk(dirIn)) return res.status(400).json({ error: 'bad migrate folder' });
     const dirAbs = appDir(APPS_DIR, meta.id);
     const svcName = migrateTarget(meta, dirAbs, String((req.body && req.body.service) || meta.migrateSvc || ''));
-    const dir = dirIn || meta.migrateDir || '';
+    // An explicitly sent dir (even empty = service root) wins - the boxes are
+    // the truth for one-shot runs. Only fall back to saved when absent.
+    const dir = (req.body && req.body.dir !== undefined) ? dirIn : (meta.migrateDir || '');
     const problem = migrateDirProblem(meta, dirAbs, svcName, dir);
     if (problem) return res.status(400).json({ error: problem });
     const argv = migrateRunArgv(svcName, dir, cmd);
@@ -1799,7 +1801,7 @@ app.post('/api/apps/:id/migrate-check', async (req, res) => {
     if (!migrateDirOk(dirIn)) return res.status(400).json({ error: 'bad migrate folder' });
     const dirAbs = appDir(APPS_DIR, meta.id);
     const svcName = migrateTarget(meta, dirAbs, String((req.body && req.body.service) || meta.migrateSvc || ''));
-    const dir = dirIn || meta.migrateDir || '';
+    const dir = (req.body && req.body.dir !== undefined) ? dirIn : (meta.migrateDir || '');
     const problem = migrateDirProblem(meta, dirAbs, svcName, dir);
     if (problem) return res.status(400).json({ error: problem });
     const argv = migrateRunArgv(svcName, dir, cmd);
