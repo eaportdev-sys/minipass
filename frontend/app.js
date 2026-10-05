@@ -111,6 +111,7 @@ function openSite(id) {
   document.getElementById('svcType').value = 'auto';
   document.getElementById('svcAddBtn').disabled = true;
   document.getElementById('svcAddCheck').textContent = 'Enter a unique name and an existing repository subfolder.';
+  document.getElementById('migrateOut').textContent = '';
   serviceCheckSeq++;
   if (serviceCheckTimer) clearTimeout(serviceCheckTimer);
   refresh().then(() => { showSiteTab('overview'); loadDeployStatus(); loadEnv(); loadServices(); loadDatabases(); loadMigrateSuggest(); });
@@ -160,13 +161,52 @@ async function saveHome() {
 }
 async function saveMigrate() {
   if (!currentApp) return;
-  const c = document.getElementById('migrateCmd').value;
-  const r = await (await fetch(`/api/apps/${currentApp}/migrate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: c }) })).json();
-  toast(r.ok ? 'migrate command saved' : (r.error || 'failed'), !!r.ok);
+  const body = {
+    command: document.getElementById('migrateCmd').value,
+    service: document.getElementById('migrateSvc').value,
+    dir: document.getElementById('migrateDir').value,
+    check: document.getElementById('migrateCheck').value
+  };
+  const r = await (await fetch(`/api/apps/${currentApp}/migrate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+  toast(r.ok ? 'migrate settings saved' : (r.error || 'failed'), !!r.ok);
   loadDeployStatus();
 }
-function fillMigrate(cmd) {
-  document.getElementById('migrateCmd').value = cmd;
+function fillMigrate(cmd, dir, svc, check) {
+  document.getElementById('migrateCmd').value = cmd || '';
+  if (dir !== undefined) document.getElementById('migrateDir').value = dir || '';
+  if (svc) {
+    const sel = document.getElementById('migrateSvc');
+    if ([...sel.options].some(o => o.value === svc)) sel.value = svc;
+  }
+  if (check && !document.getElementById('migrateCheck').value.trim())
+    document.getElementById('migrateCheck').value = check;
+}
+async function runMigrateNow() {
+  if (!currentApp) return;
+  const out = document.getElementById('migrateOut');
+  out.textContent = 'running migration…';
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/migrate-run`, { method: 'POST' })).json();
+    out.textContent = r.ok ? `ok in ${r.service}:\n${r.output}` : ('failed: ' + (r.error || 'unknown'));
+  } catch (e) { out.textContent = 'run failed: ' + e.message; }
+}
+async function verifyMigrate() {
+  if (!currentApp) return;
+  const out = document.getElementById('migrateOut');
+  out.textContent = 'verifying…';
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/migrate-check`, { method: 'POST' })).json();
+    out.textContent = r.ok ? `ok in ${r.service}:\n${r.output}` : ('failed: ' + (r.error || 'unknown'));
+  } catch (e) { out.textContent = 'verify failed: ' + e.message; }
+}
+function fillMigrateServiceOptions(services, saved) {
+  const sel = document.getElementById('migrateSvc');
+  if (!sel) return;
+  const prev = sel.value || saved || 'app';
+  sel.innerHTML = (services || []).map(s => `<option value="${safeHtml(s.name)}">${safeHtml(s.name)}${s.subdir ? ` (/${safeHtml(s.subdir)})` : ''}</option>`).join('')
+    || '<option value="app">app</option>';
+  sel.value = [...sel.options].some(o => o.value === prev) ? prev : (sel.options[0] ? sel.options[0].value : 'app');
+  if (saved && [...sel.options].some(o => o.value === saved)) sel.value = saved;
 }
 async function loadMigrateSuggest() {
   if (!currentApp) return;
@@ -175,7 +215,7 @@ async function loadMigrateSuggest() {
     const r = await (await fetch(`/api/apps/${currentApp}/migrate-suggest`)).json();
     const list = r.suggestions || [];
     box.innerHTML = list.length
-      ? `<div class="migrate-suggest-label">Detected scripts</div><div class="migrate-suggest-list">${list.map(s => `<button data-command="${safeHtml(s.cmd)}" onclick="fillMigrate(this.dataset.command)">${safeHtml(s.cmd)}</button>`).join('')}</div>`
+      ? `<div class="migrate-suggest-label">Detected scripts</div><div class="migrate-suggest-list">${list.map(s => `<button data-command="${safeHtml(s.cmd)}" data-dir="${safeHtml(s.dir || '')}" data-svc="${safeHtml(s.svc || '')}" data-check="${safeHtml(s.check || '')}" onclick="fillMigrate(this.dataset.command, this.dataset.dir, this.dataset.svc, this.dataset.check)" title="${safeHtml(s.why || '')}">${safeHtml(s.cmd)}${s.svc ? ` · ${safeHtml(s.svc)}` : ''}</button>`).join('')}</div>`
       : '';
   } catch { box.innerHTML = ''; }
 }
@@ -255,6 +295,11 @@ async function loadDeployStatus() {
     if (hp && s.app) hp.value = s.app.homePath || '';
     const mc = document.getElementById('migrateCmd');
     if (mc && s.app) mc.value = s.app.migrateCmd || '';
+    if (s.app) {
+      document.getElementById('migrateDir').value = s.app.migrateDir || '';
+      document.getElementById('migrateCheck').value = s.app.migrateCheck || '';
+      fillMigrateServiceOptions(s.services, s.app.migrateSvc);
+    }
     // persistent per-trigger record: visible anytime, no open page needed
     const hist = s.history || [];
     const lastSrc = (...srcs) => hist.find(h => srcs.includes(h.source));

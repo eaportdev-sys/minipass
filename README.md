@@ -107,9 +107,16 @@ them back.
 - **Databases**: add from the site page; admin UIs launch on demand
   (ports `8900–8999`) and stop when you close the popup, with a 30-minute fallback.
 - **Terminal tab**: full PTY in the browser (`docker exec` into the live container).
+- **Migrations**: Deploy tab → pre-deploy migration. Pick the backend
+  **service**, an optional **folder** (e.g. `server` for knex in a subfolder),
+  the command (e.g. `npm run migrate`), and a **verify** command
+  (e.g. `npx knex migrate:list`, auto-suggested next to knex/prisma markers).
+  The command runs after build in a one-off container with the site `.env`
+  (so `DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME` resolve); failure aborts
+  before the swap and running containers are untouched. **Run now** / **verify**
+  execute the same way without deploying anything.
 
 ### 5 · Upgrade the panel
-
 Upgrade page → **upgrade from git**: fetches `origin/main`, rebuilds the image in
 the background, then a host cron job restarts from outside the container
 (self-restart would kill its own runner mid-job). Watch the build log there;

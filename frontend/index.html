@@ -162,9 +162,16 @@
               <div><span>3</span><b>Verify</b><small>Health gate with automatic rollback</small></div>
             </div>
             <div class="migration-panel">
-              <label for="migrateCmd">Pre-deploy migration <span>optional</span></label>
-              <div class="migration-command-row"><input id="migrateCmd" placeholder="npx prisma migrate deploy"><button onclick="saveMigrate()">save command</button></div>
+              <label for="migrateCmd">Pre-deploy migration <span>optional — runs after build, before swap; failure aborts</span></label>
+              <div class="migration-command-row"><input id="migrateCmd" placeholder="npm run migrate"><button onclick="saveMigrate()">save</button></div>
+              <div class="migration-subgrid">
+                <label>Service<select id="migrateSvc"></select></label>
+                <label>Folder<input id="migrateDir" placeholder="e.g. server (empty = service root)" autocomplete="off"></label>
+              </div>
+              <div class="migration-command-row"><input id="migrateCheck" placeholder="verify command, e.g. npx knex migrate:list"><button onclick="verifyMigrate()">verify</button></div>
+              <div class="migration-actions"><button onclick="runMigrateNow()">run migration now</button><span class="meta">run / verify execute in a one-off container only — no deploy, no swap</span></div>
               <div id="migrateSuggest"></div>
+              <pre id="migrateOut" class="compact-output"></pre>
             </div>
             <div id="deployProg" class="deploy-progress" style="display:none"><div class="deploy-progress-head"><span id="deployStage">deploying…</span><span><b id="deployPct"></b> <span id="deployTime"></span></span></div><div class="progress"><div id="deployBar"></div></div><pre id="deployTail"></pre></div>
           </div>

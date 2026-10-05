@@ -272,13 +272,14 @@ function sh(cmd, cwd, env) {
   });
 }
 // argv-based runner (no shell) so generated passwords never touch a shell line.
+// captureStderr merges stderr into the resolved output (migrations print there).
 function runOut(bin, args, opts = {}) {
   return new Promise((res, rej) => {
     const p = spawn(bin, args, opts);
     const chunks = [];
     let settled = false;
     p.stdout.on('data', d => chunks.push(d));
-    p.stderr.on('data', () => {});
+    p.stderr.on('data', d => { if (opts.captureStderr) chunks.push(d); });
     p.on('error', e => { if (!settled) { settled = true; rej(e); } });
     p.on('close', code => {
       if (settled) return;
@@ -784,10 +785,15 @@ async function deployNow(id, opts = {}) {
   }
   // pre-swap migrations: one-off container from the fresh image, DBs already up.
   // Fail = abort before anything is swapped; running containers untouched.
+  // Runs in the configured migrate service (knex usually lives in the backend
+  // service, not 'app'), with an optional cd into its subfolder.
   const migrateCmd = String((meta && meta.migrateCmd) || '').trim();
   if (migrateCmd) {
+    const migrateSvc = migrateTarget(meta, dir, meta.migrateSvc);
+    const argv = migrateRunArgv(migrateSvc, meta.migrateDir || '', migrateCmd);
     try {
-      await sh(`${composeCmd} run --rm app ${migrateCmd} >> "${buildLog}" 2>&1`, dir);
+      const out = await runOut(argv[0], argv.slice(1), { cwd: dir, captureStderr: true });
+      try { fs.appendFileSync(buildLog, `\n--- migrate (${migrateSvc}) ---\n` + String(out).slice(-2000)); } catch {}
     } catch (e) {
       let tail = '';
       try { tail = fs.readFileSync(buildLog, 'utf8').split('\n').slice(-25).join('\n'); } catch {}
@@ -1668,18 +1674,77 @@ app.post('/api/apps/:id/home', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 // Pre-swap migrate command (runs in a one-off container after build, before swap).
-// Charset-validated: no shell metachars ever reach sh. Empty clears.
+// service/dir/check ride along so knex-style flows work: pick the backend
+// service, an optional subdir (cd without shell metachars), and a verify cmd.
+const MIGRATE_CMD_RE = /^[A-Za-z0-9_][A-Za-z0-9_ .:/-]{0,199}$/;
+const MIGRATE_DIR_RE = /^[A-Za-z0-9_][A-Za-z0-9_./-]{0,80}$/;
+function migrateTarget(meta, dir, svcName) {
+  const list = svc.fullServices(meta, dir).filter(s => s.enabled !== false);
+  if (svcName && list.some(s => s.name === svcName)) return svcName;
+  if (list.some(s => s.name === 'app')) return 'app';
+  return (list[0] && list[0].name) || 'app';
+}
+function migrateDirOk(d) {
+  return !d || (MIGRATE_DIR_RE.test(d) && !d.split('/').includes('..'));
+}
+// dir/cmd are charset-validated (no quotes/$/backtick/semicolon/&/|), so the
+// sh -c wrapper cannot break out - it only adds a safe `cd`.
+function migrateRunArgv(svcName, dir, cmd) {
+  const inner = dir ? `cd ${dir} && ${cmd}` : cmd;
+  return [...composeArgv(), 'run', '--rm', svcName, 'sh', '-c', inner];
+}
 app.post('/api/apps/:id/migrate', (req, res) => {
   try {
     const db_ = load();
     const meta = db_.apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
-    const c = String((req.body && req.body.command) || '').trim();
-    if (c && !/^[A-Za-z0-9_][A-Za-z0-9_ .:/-]{0,199}$/.test(c)) return res.status(400).json({ error: 'bad command (letters/numbers/space _ . : / - only)' });
+    const c = String((req.body && (req.body.command ?? req.body.cmd)) || '').trim();
+    if (c && !MIGRATE_CMD_RE.test(c)) return res.status(400).json({ error: 'bad command (letters/numbers/space _ . : / - only)' });
+    const dir = String((req.body && req.body.dir) || '').trim().replace(/^\/+|\/+$/g, '');
+    if (!migrateDirOk(dir)) return res.status(400).json({ error: 'bad migrate folder' });
+    const check = String((req.body && req.body.check) || '').trim();
+    if (check && !MIGRATE_CMD_RE.test(check)) return res.status(400).json({ error: 'bad verify command' });
+    const dirAbs = appDir(APPS_DIR, meta.id);
     meta.migrateCmd = c;
+    meta.migrateDir = dir;
+    meta.migrateCheck = check;
+    if (req.body && req.body.service !== undefined)
+      meta.migrateSvc = migrateTarget(meta, dirAbs, String(req.body.service || '').trim());
+    else if (!meta.migrateSvc) meta.migrateSvc = migrateTarget(meta, dirAbs, '');
     save(db_);
-    res.json({ ok: true, migrateCmd: meta.migrateCmd });
+    res.json({ ok: true, migrateCmd: meta.migrateCmd, migrateSvc: meta.migrateSvc, migrateDir: meta.migrateDir, migrateCheck: meta.migrateCheck });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Run the saved migrate command NOW in a one-off container (no swap, no deploy
+// record beyond the returned output). Same sandbox as the pre-deploy hook.
+app.post('/api/apps/:id/migrate-run', async (req, res) => {
+  try {
+    const meta = load().apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const cmd = String((meta && meta.migrateCmd) || '').trim();
+    if (!cmd) return res.status(400).json({ error: 'no migrate command saved' });
+    const dirAbs = appDir(APPS_DIR, meta.id);
+    const svcName = migrateTarget(meta, dirAbs, meta.migrateSvc);
+    const argv = migrateRunArgv(svcName, meta.migrateDir || '', cmd);
+    const cap = { cwd: dirAbs, captureStderr: true };
+    const out = await runOut(argv[0], argv.slice(1), cap);
+    res.json({ ok: true, service: svcName, output: String(out).slice(-4000) || '(no output)' });
+  } catch (e) { res.status(500).json({ error: ('migrate run failed: ' + e.message).slice(-500) }); }
+});
+// Verify-only: runs the saved verify command (e.g. knex migrate:list) and
+// returns its output. Never changes anything, never deploys.
+app.post('/api/apps/:id/migrate-check', async (req, res) => {
+  try {
+    const meta = load().apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const cmd = String((meta && meta.migrateCheck) || '').trim();
+    if (!cmd) return res.status(400).json({ error: 'no verify command saved' });
+    const dirAbs = appDir(APPS_DIR, meta.id);
+    const svcName = migrateTarget(meta, dirAbs, meta.migrateSvc);
+    const argv = migrateRunArgv(svcName, meta.migrateDir || '', cmd);
+    const out = await runOut(argv[0], argv.slice(1), { cwd: dirAbs, captureStderr: true });
+    res.json({ ok: true, service: svcName, output: String(out).slice(-4000) || '(no output)' });
+  } catch (e) { res.status(500).json({ error: ('verify failed: ' + e.message).slice(-500) }); }
 });
 // Suggest migrate commands by scanning the repo (package.json scripts with
 // 'migrat' in the name + known markers). Pure read, capped walk.
@@ -1690,7 +1755,19 @@ app.get('/api/apps/:id/migrate-suggest', (req, res) => {
     const codeDir = path.join(appDir(APPS_DIR, meta.id), 'code');
     const out = [];
     const seen = new Set();
-    const push = (cmd, why) => { if (!seen.has(cmd)) { seen.add(cmd); out.push({ cmd, why }); } };
+    const services = svc.fullServices(meta, appDir(APPS_DIR, meta.id));
+    const svcFor = (rel) => {
+      const sub = rel === '.' ? '' : rel;
+      const s = services.find(x => (x.subdir || '') === sub);
+      return s ? s.name : null;
+    };
+    const push = (cmd, why, rel) => {
+      if (seen.has(cmd)) return;
+      seen.add(cmd);
+      const check = cmd.startsWith('npx knex migrate') ? 'npx knex migrate:list'
+        : cmd.startsWith('npx prisma migrate deploy') ? 'npx prisma migrate status' : '';
+      out.push({ cmd, why, dir: rel === '.' ? '' : rel, svc: svcFor(rel), check });
+    };
     const pkgAt = (d) => {
       try { return JSON.parse(fs.readFileSync(path.join(d, 'package.json'), 'utf8')); } catch { return null; }
     };
@@ -1711,14 +1788,14 @@ app.get('/api/apps/:id/migrate-suggest', (req, res) => {
       const pkg = pkgAt(d);
       if (pkg && pkg.scripts) {
         for (const name of Object.keys(pkg.scripts)) {
-          if (/migrat/i.test(name)) push(`npm run ${name}`, `${name} in ${rel}/package.json`);
+          if (/migrat/i.test(name)) push(`npm run ${name}`, `${name} in ${rel}/package.json`, rel);
         }
       }
-      if (hasFile(d, 'knexfile.js', 'knexfile.ts')) push('npx knex migrate:latest', `knexfile in ${rel}/`);
-      if (hasFile(path.join(d, 'prisma'), 'schema.prisma') || hasFile(d, 'schema.prisma')) push('npx prisma migrate deploy', `prisma schema in ${rel}/`);
+      if (hasFile(d, 'knexfile.js', 'knexfile.ts', 'knexfile.cjs', 'knexfile.mjs')) push('npx knex migrate:latest', `knexfile in ${rel}/`, rel);
+      if (hasFile(path.join(d, 'prisma'), 'schema.prisma') || hasFile(d, 'schema.prisma')) push('npx prisma migrate deploy', `prisma schema in ${rel}/`, rel);
       if (hasFile(path.join(d, 'dist'), 'migration-runner.js') || hasFile(d, 'migration-runner.js')) {
         const base = hasFile(path.join(d, 'dist'), 'migration-runner.js') ? 'node dist/migration-runner.js' : 'node migration-runner.js';
-        push(`${base} all`, `migration-runner in ${rel}/ (takes a target: all)`);
+        push(`${base} all`, `migration-runner in ${rel}/ (takes a target: all)`, rel);
       }
     }
     res.json({ suggestions: out.slice(0, 8) });
