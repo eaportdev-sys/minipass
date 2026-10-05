@@ -230,20 +230,40 @@
       </div>
     </section>
     <section id="view-panel" class="view">
-      <div class="pagehead"><h1>Upgrade</h1></div>
-      <div class="card"><b>panel</b> <span id="ver">…</span><br>
-        <button onclick="upgrade()">Upgrade from git</button>
-        <button onclick="scan()">rescan /srv/apps</button>
-        <button onclick="showKey()">panel git key</button>
-        <pre id="upOut"></pre>
-        <pre id="keyOut"></pre>
+      <div class="pagehead"><div><h1>Panel settings</h1><div class="meta">Upgrade minipass and manage shared integrations.</div></div></div>
+      <div class="upgrade-grid">
+        <div class="card upgrade-card">
+          <div class="sectionhead"><div><b>Panel software</b><div class="meta">Updates build safely before the host restarts this panel.</div></div><span id="ver" class="panel-state is-checking">checking</span></div>
+          <div class="version-grid">
+            <div><span>Running build</span><code id="verRunning">…</code></div>
+            <div><span>Repository target</span><code id="verRepo">…</code></div>
+          </div>
+          <div id="upgradeState" class="upgrade-state">Checking for panel status…</div>
+          <button id="upgradeBtn" class="btn primary upgrade-btn" onclick="upgrade()">upgrade from git</button>
+          <div class="maintenance-panel">
+            <b>Maintenance</b>
+            <div class="meta">Recover site metadata or display the panel’s SSH public key.</div>
+            <div class="actions"><button onclick="scan()">rescan /srv/apps</button><button onclick="showKey()">show panel git key</button></div>
+            <pre id="maintOut" class="compact-output"></pre>
+            <pre id="keyOut" class="compact-output"></pre>
+          </div>
+        </div>
+        <div class="card upgrade-log-card">
+          <div class="sectionhead"><div><b>Build and restart activity</b><div class="meta">Live output from the current upgrade.</div></div><span id="upgradeCountdown" class="badge"></span></div>
+          <pre id="upOut" class="upgrade-log">No upgrade activity yet.</pre>
+        </div>
       </div>
-      <div class="card"><b>github</b> <span id="ghStatus">…</span><br>
-        <div class="meta">Shared account pool (optional) — each site can also keep its own token on its page. Token paste works on localhost; OAuth needs a public panel.</div>
-        <input id="ghToken" type="password" placeholder="github_pat_…" style="width:280px"><button onclick="ghSaveToken()">save token</button>
-        <div class="meta" id="oauthRow" style="display:none">Public-panel path: OAuth App (callback <code>/api/github/callback</code>, GITHUB_CLIENT_ID/SECRET + PANEL_URL in backend .env), then:
-        <button onclick="ghConnect()">connect via oauth</button></div>
-        <div id="ghAccounts"></div>
+      <div class="card github-settings-card">
+        <div class="sectionhead"><div><b>Shared GitHub accounts</b><div class="meta">Optional account pool. A site-specific token still takes priority.</div></div><span id="ghStatus" class="panel-state is-checking">checking</span></div>
+        <div class="github-settings-grid">
+          <div class="github-connect-panel">
+            <label for="ghToken">Add with a fine-grained token</label>
+            <div class="meta">Use Contents read-only and Webhooks read/write access.</div>
+            <div class="github-token-row"><input id="ghToken" type="password" placeholder="github_pat_…"><button class="btn primary" onclick="ghSaveToken()">save account</button></div>
+            <div class="oauth-panel" id="oauthRow" style="display:none"><div><b>OAuth connection</b><div class="meta">Requires an HTTPS panel URL and configured GitHub OAuth callback.</div></div><button onclick="ghConnect()">connect via OAuth</button></div>
+          </div>
+          <div><div class="settings-label">Connected accounts</div><div id="ghAccounts" class="github-account-list"></div></div>
+        </div>
       </div>
     </section>
   </main>
