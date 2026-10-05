@@ -1281,6 +1281,46 @@ app.get('/api/apps/:id/services/check', (req, res) => {
   if (check.error) return res.status(400).json({ ok: false, error: check.error });
   res.json({ ok: true, name: check.name, subdir: check.subdir, type: check.type, detected: check.detected.detected, reason: check.detected.reason });
 });
+// One-click standard Dockerfile: the validator refuses to guess for node
+// (no safe default), so the operator explicitly opts into the type template
+// here instead. Box-local untracked file - commit it to the repo so fresh
+// clones keep it. The file editor never overwrites Dockerfiles; this route
+// is the sanctioned exception.
+const STANDARD_DOCKER_TYPES = ['node', 'react', 'php', 'static'];
+app.post('/api/apps/:id/services/dockerfile', async (req, res) => {
+  try {
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const type = String((req.body && req.body.type) || '').trim();
+    if (!STANDARD_DOCKER_TYPES.includes(type)) return res.status(400).json({ error: 'choose node, react, php, or static' });
+    const rawSub = String((req.body && req.body.subdir) || '').trim().replace(/\\/g, '/');
+    const subdir = rawSub.replace(/^\/+|\/+$/g, '');
+    if (subdir && (subdir.split('/').includes('..') || !/^[A-Za-z0-9._/-]+$/.test(subdir))) return res.status(400).json({ error: 'bad subfolder' });
+    const dir = appDir(APPS_DIR, meta.id);
+    const ctxDir = path.resolve(dir, 'code', subdir);
+    const codeRoot = path.resolve(dir, 'code');
+    if (ctxDir !== codeRoot && !ctxDir.startsWith(codeRoot + path.sep)) return res.status(400).json({ error: 'subfolder must stay inside the repository' });
+    try { if (!fs.statSync(ctxDir).isDirectory()) return res.status(400).json({ error: 'subfolder is not a directory in the repository' }); }
+    catch { return res.status(400).json({ error: 'subfolder does not exist in the repository' }); }
+    try {
+      if (fs.readdirSync(ctxDir).some(f => /^dockerfile$/i.test(f)))
+        return res.status(409).json({ error: 'a Dockerfile is already there - edit it instead' });
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+    const tpl = path.join(TEMPLATES_DIR, type, 'Dockerfile');
+    try { fs.copyFileSync(tpl, path.join(ctxDir, 'Dockerfile')); }
+    catch (e) { return res.status(500).json({ error: 'standard template missing: ' + e.message }); }
+    const seeded = ['Dockerfile'];
+    if ((type === 'react' || type === 'static') && !fs.existsSync(path.join(ctxDir, 'nginx.conf'))) {
+      try {
+        fs.copyFileSync(path.join(TEMPLATES_DIR, type, 'nginx.conf'), path.join(ctxDir, 'nginx.conf'));
+        seeded.push('nginx.conf');
+      } catch {}
+    }
+    await markDirty(meta.id, 'standard Dockerfile added to ' + (subdir || 'root'));
+    res.json({ ok: true, seeded, note: 'box-local file - commit it to the repo so fresh clones and rebuilds keep it' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.post('/api/apps/:id/services', async (req, res) => {
   try {
     const db_ = load();

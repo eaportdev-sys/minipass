@@ -107,6 +107,10 @@ them back.
 - **Databases**: add from the site page; admin UIs launch on demand
   (ports `8900–8999`) and stop when you close the popup, with a 30-minute fallback.
 - **Terminal tab**: full PTY in the browser (`docker exec` into the live container).
+- **Services**: each runnable folder becomes a service. If a folder lacks a
+  Dockerfile and the type has no safe default, the panel says so instead of
+  guessing — click **use standard Dockerfile** to drop in the type template
+  (box-local; commit it to the repo so fresh clones keep it).
 - **Migrations**: Deploy tab → pre-deploy migration. Pick the backend
   **service**, an optional **folder** (e.g. `server` for knex in a subfolder),
   the command (e.g. `npm run migrate`), and a **verify** command

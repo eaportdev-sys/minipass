@@ -1543,11 +1543,41 @@ async function addService() {
     document.getElementById('svcType').value = 'auto';
     check.textContent = 'Enter a unique name and an existing repository subfolder.';
   } else {
-    check.textContent = r.error || 'service could not be added';
-    scheduleServiceCheck();
+    const msg = r.error || 'service could not be added';
+    if (/no Dockerfile in build context/.test(msg)) {
+      check.innerHTML = '';
+      check.appendChild(document.createTextNode(msg + ' '));
+      const b = document.createElement('button');
+      b.textContent = `use standard ${document.getElementById('svcType').value} Dockerfile`;
+      b.onclick = seedStandardDockerfile;
+      check.appendChild(b);
+    } else {
+      check.textContent = msg;
+      scheduleServiceCheck();
+    }
   }
   refresh();
   loadServices();
+}
+async function seedStandardDockerfile() {
+  if (!currentApp) return;
+  const check = document.getElementById('svcAddCheck');
+  const subdir = document.getElementById('svcSub').value.trim();
+  let type = document.getElementById('svcType').value;
+  check.textContent = 'writing standard Dockerfile…';
+  try {
+    if (type === 'auto') {
+      const q = new URLSearchParams({ name: document.getElementById('svcName').value.trim().toLowerCase(), subdir, type: 'auto' });
+      const c = await (await fetch(`/api/apps/${currentApp}/services/check?${q}`)).json();
+      if (!c.type) throw new Error(c.error || 'could not detect type');
+      type = c.type;
+    }
+    const r = await (await fetch(`/api/apps/${currentApp}/services/dockerfile`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subdir, type }) })).json();
+    if (!r.ok) throw new Error(r.error || 'failed');
+    toast(`standard ${type} Dockerfile added (${r.seeded.join(', ')}) - commit it to the repo so clones keep it`, true);
+    check.textContent = 'Dockerfile added - rechecking…';
+  } catch (e) { check.textContent = e.message; return; }
+  scheduleServiceCheck();
 }
 async function toggleService(name, enable) {
   toast((enable ? 'starting ' : 'stopping ') + name + '… (applies on redeploy)');
