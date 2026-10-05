@@ -87,6 +87,8 @@
         </div>
         <div class="card stepcard">
           <div class="stephead"><span class="stepno">3</span><div><b>Attach databases</b><div class="meta" id="dbList"></div></div></div>
+          <div id="dbRuntimeList"></div>
+          <div class="meta">Launch a database UI only when needed. It opens with this site's connection already configured. These are full administration tools—changes happen immediately, so stop the UI afterward.</div>
           <div class="meta">Optional. Adding another database keeps existing data and passwords untouched:</div>
           <select id="dbAdd"><option value="postgres">postgres</option><option value="mysql">mysql</option><option value="mongo">mongo</option><option value="redis">redis</option></select>
           <button onclick="addDb()">add database</button>

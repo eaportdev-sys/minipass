@@ -96,6 +96,11 @@ main { flex: 1; padding: 24px; max-width: 1100px; }
 .credential-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .credential-option { background: var(--input); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
 .service-add { background: var(--input); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+.db-runtime-row {
+  display: grid; grid-template-columns: minmax(180px, .8fr) minmax(260px, 1.4fr) auto;
+  gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border);
+}
+.db-runtime-row:last-child { border-bottom: 0; }
 .controlrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .controlrow input, .controlrow select { flex: 1 1 150px; min-width: 0; margin-left: 0; }
 .keyrow { margin-top: 12px; }
@@ -114,6 +119,7 @@ button, .btn {
   border: 1px solid var(--border); background: var(--bg2); color: var(--text);
 }
 button:hover { filter: brightness(1.15); }
+button:disabled { cursor: not-allowed; opacity: .55; filter: none; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn.primary:hover { background: var(--accent-d); }
 .btn.danger { color: var(--danger); border-color: var(--danger); background: none; }
@@ -173,6 +179,7 @@ a { color: var(--accent); }
   main { padding: 14px; }
   .flowsteps { grid-template-columns: 1fr; }
   .credential-grid { grid-template-columns: 1fr; }
+  .db-runtime-row { grid-template-columns: 1fr; gap: 5px; }
   .runtime-row { grid-template-columns: 1fr; gap: 5px; }
   .runtime-state { text-align: left; }
   .site-tabs .tabbtn { padding: 9px 11px; }

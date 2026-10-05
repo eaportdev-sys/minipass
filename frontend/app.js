@@ -31,7 +31,7 @@ function openSite(id) {
   document.getElementById('svcAddCheck').textContent = 'Enter a unique name and an existing repository subfolder.';
   serviceCheckSeq++;
   if (serviceCheckTimer) clearTimeout(serviceCheckTimer);
-  refresh().then(() => { showSiteTab('overview'); loadDeployStatus(); loadEnv(); loadServices(); loadMigrateSuggest(); });
+  refresh().then(() => { showSiteTab('overview'); loadDeployStatus(); loadEnv(); loadServices(); loadDatabases(); loadMigrateSuggest(); });
 }
 function appUrl(a) {
   if (!a.hostPort) return null;
@@ -315,8 +315,61 @@ async function addDb() {
   try {
     const r = await (await fetch(`/api/apps/${currentApp}/db`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type }) })).json();
     document.getElementById('dbOut').textContent = JSON.stringify(r, null, 2);
-    refresh(); loadServices();
+    refresh(); loadServices(); loadDatabases();
   } catch (e) { document.getElementById('dbOut').textContent = 'failed: ' + e.message; }
+}
+function safeHtml(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+async function loadDatabases() {
+  if (!currentApp) return;
+  const box = document.getElementById('dbRuntimeList');
+  if (!box) return;
+  box.innerHTML = '<div class="meta">checking database services…</div>';
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/databases`)).json();
+    if (r.error) { box.innerHTML = `<div class="meta">${safeHtml(r.error)}</div>`; return; }
+    box.innerHTML = (r.databases || []).map(d => {
+      const running = /^running/i.test(d.state || '');
+      const toolRunning = d.toolState === 'running' && d.toolPort;
+      const url = toolRunning ? `http://${location.hostname}:${d.toolPort}` : '';
+      const action = toolRunning
+        ? `<a class="btn" href="${url}" target="_blank" rel="noopener noreferrer">open ${safeHtml(d.tool)}</a> <button onclick="stopDbTool('${d.type}')">stop UI</button>`
+        : `<button onclick="launchDbTool('${d.type}')" ${running ? '' : 'disabled'}>launch ${safeHtml(d.tool)}</button>`;
+      return `<div class="db-runtime-row"><div><span class="opdot ${running ? 'ok' : 'fail'}"></span> <b>${safeHtml(d.label)}</b> <span class="badge">${safeHtml(d.service)}</span></div>` +
+        `<div class="meta">${safeHtml(d.image || 'image unavailable')} · <b>${safeHtml(d.state)}</b>${d.status ? ` · ${safeHtml(d.status)}` : ''}</div><div>${action}</div></div>`;
+    }).join('') || '<div class="meta">No managed databases are attached.</div>';
+  } catch (e) { box.innerHTML = '<div class="meta">database status unavailable</div>'; }
+}
+async function launchDbTool(type) {
+  if (!currentApp) return;
+  const popup = window.open('', '_blank');
+  if (popup) popup.document.body.innerHTML = '<p style="font-family:system-ui">Starting database UI… the first image download can take a minute.</p>';
+  toast('starting database UI…');
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/databases/${type}/tool`, { method: 'POST' })).json();
+    if (!r.ok) {
+      if (popup) popup.close();
+      toast(r.error || 'database UI failed to start', false);
+      return;
+    }
+    const url = `http://${location.hostname}:${r.port}`;
+    toast(`${r.tool} started on port ${r.port}`, true);
+    loadDatabases();
+    if (popup) setTimeout(() => { popup.location.href = url; }, 4000);
+    else window.open(url, '_blank');
+  } catch (e) {
+    if (popup) popup.close();
+    toast('database UI failed: ' + e.message, false);
+  }
+}
+async function stopDbTool(type) {
+  if (!currentApp) return;
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/databases/${type}/tool`, { method: 'DELETE' })).json();
+    toast(r.ok ? 'database UI stopped' : (r.error || 'failed'), !!r.ok);
+    loadDatabases();
+  } catch (e) { toast('database UI stop failed: ' + e.message, false); }
 }
 async function fillApiLink(a) {
   const card = document.getElementById('apiCard');
@@ -471,6 +524,7 @@ function showSiteTab(t) {
     b.setAttribute('aria-selected', active ? 'true' : 'false');
   });
   if (!currentApp) return;
+  if (t === 'setup') loadDatabases();
   if (t === 'files') listFiles('');
   if (t === 'logs') showLogs();
 }

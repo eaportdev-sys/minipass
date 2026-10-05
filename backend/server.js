@@ -9,6 +9,7 @@ const { WebSocketServer } = require('ws');
 const { createApp, appDir, normDbs, dbService, nginxConf, ensureDockerfile } = require('./lib/generator');
 const { gitEnv, pubKey, appPubKey, appGitEnv } = require('./lib/ssh');
 const svc = require('./lib/services');
+const dbTools = require('./lib/db-tools');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -990,6 +991,7 @@ function hostPortsInUse() {
     for (const a of load().apps) {
       if (a.hostPort) used.add(a.hostPort);
       for (const s of (a.services || [])) if (s.hostPort) used.add(s.hostPort);
+      for (const t of Object.values(a.dbTools || {})) if (t && t.port) used.add(t.port);
     }
   } catch {}
   return used;
@@ -1196,6 +1198,69 @@ app.post('/api/apps/:id/db', async (req, res) => {
     if (!(req.body && req.body.apply === true)) return res.json({ ok: true, added: type, pending: true });
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, added: type, redeployError: e.message }); }
     res.json({ ok: true, added: type, redeployed: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/apps/:id/databases', async (req, res) => {
+  try {
+    const meta = load().apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const dir = appDir(APPS_DIR, meta.id);
+    res.json({ databases: dbTools.describe(meta, dir, await appContainers(meta.id)) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+const dbToolLocks = new Set();
+const dbToolPorts = new Set();
+app.post('/api/apps/:id/databases/:type/tool', async (req, res) => {
+  const lock = `${req.params.id}:${req.params.type}`;
+  if (dbToolLocks.has(lock)) return res.status(409).json({ error: 'database tool is already starting' });
+  dbToolLocks.add(lock);
+  let reservedPort = null;
+  try {
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const type = req.params.type;
+    if (!dbTools.TOOLS[type] || !normDbs(meta.db).includes(type)) return res.status(400).json({ error: 'database is not attached to this site' });
+    const dir = appDir(APPS_DIR, meta.id);
+    const live = dbTools.describe(meta, dir, await appContainers(meta.id)).find(d => d.type === type);
+    if (!live || !/^running/i.test(live.state || '')) return res.status(409).json({ error: `${live ? live.label : type} is not running - deploy the site first` });
+    const saved = meta.dbTools && meta.dbTools[type];
+    let port = saved && parseInt(saved.port, 10);
+    if (port < 8900 || port > 8999) port = null;
+    if (!port) {
+      const used = hostPortsInUse();
+      port = 8900;
+      while ((used.has(port) || dbToolPorts.has(port)) && port <= 8999) port++;
+      if (port > 8999) return res.status(409).json({ error: 'no database UI port available in 8900-8999' });
+    }
+    if (dbToolPorts.has(port)) return res.status(409).json({ error: `database UI port ${port} is already starting` });
+    dbToolPorts.add(port);
+    reservedPort = port;
+    const out = await dbTools.launch(meta.id, meta, dir, type, port);
+    // Reload after the image starts: launches for different database types can
+    // finish together, and each must merge rather than overwrite the others.
+    const freshDb = load();
+    const freshMeta = freshDb.apps.find(a => a.id === meta.id);
+    if (!freshMeta) {
+      dbTools.stop(meta.id, type);
+      throw new Error('site was deleted while the database UI was starting');
+    }
+    freshMeta.dbTools = { ...(freshMeta.dbTools || {}), [type]: { port, tool: out.tool } };
+    save(freshDb);
+    res.json({ ok: true, ...out });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+  finally {
+    dbToolLocks.delete(lock);
+    if (reservedPort) dbToolPorts.delete(reservedPort);
+  }
+});
+app.delete('/api/apps/:id/databases/:type/tool', (req, res) => {
+  try {
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    dbTools.stop(meta.id, req.params.type);
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 // Frontend -> backend wiring: a static/react site proxies same-origin /api/ to another
@@ -1418,7 +1483,7 @@ app.post('/api/apps/:id/sync-github', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/stop', async (req, res) => {
-  try { await sh(`${COMPOSE_BIN} stop`, appDir(APPS_DIR, req.params.id)); res.json({ ok: true }); }
+  try { dbTools.stopAll(req.params.id); await sh(`${COMPOSE_BIN} stop`, appDir(APPS_DIR, req.params.id)); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/start', async (req, res) => {
@@ -1628,6 +1693,7 @@ app.post('/api/apps/:id/env/defaults', async (req, res) => {
 app.delete('/api/apps/:id', async (req, res) => {
   try {
     const dir = appDir(APPS_DIR, req.params.id);
+    dbTools.stopAll(req.params.id);
     await sh(`${COMPOSE_BIN} down -v`, dir).catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true });
     const db_ = load();
