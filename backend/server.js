@@ -353,18 +353,44 @@ async function deploy(id, opts = {}) {
         fs.rmSync(codeDir, { recursive: true, force: true });
         fs.renameSync(codeDir + '.new', codeDir);
       } else {
-        // local-push already checked out exactly what was pushed - pulling again
-        // would fight those files as "local changes" and abort. Skip when the
-        // working tree is already at the pushed sha.
+        // Local-push flow: the hook checked out the pushed branch into code/ via
+        // repo.git, so code/.git still points at the old HEAD and a normal pull
+        // would fight the fresh files as "local changes" and abort. Instead fetch
+        // the pushed branch from the bare repo (local, offline) and align to it:
+        // pushed code wins. Tree already matching = move HEAD only (nothing lost);
+        // extra box edits = stashed (restorable), untracked blockers moved aside.
         const pushedSha = /^[0-9a-f]{40}$/.test(opts.pushedSha || '') ? opts.pushedSha : null;
-        let skipPull = false;
-        if (pushedSha) {
+        const pushedBranch = /^[A-Za-z0-9._/-]{1,64}$/.test(opts.pushedBranch || '') ? opts.pushedBranch : null;
+        const bareRepo = path.join(dir, 'repo.git');
+        let syncedPush = false;
+        if (pushedSha && pushedBranch && fs.existsSync(bareRepo)) {
           try {
-            const head = execSync('git rev-parse HEAD', { cwd: codeDir }).toString().trim();
-            if (head === pushedSha) skipPull = true;
+            await sh(`git fetch "${bareRepo}" "${pushedBranch}"`, codeDir, env);
+            const fetched = execSync('git rev-parse FETCH_HEAD', { cwd: codeDir }).toString().trim();
+            if (fetched === pushedSha) {
+              const head = execSync('git rev-parse HEAD', { cwd: codeDir }).toString().trim();
+              if (head !== fetched) {
+                let treeClean = false;
+                try { execSync('git diff --quiet FETCH_HEAD --', { cwd: codeDir }); treeClean = true; } catch {}
+                if (treeClean) {
+                  execSync(`git reset "${fetched}"`, { cwd: codeDir });
+                } else {
+                  try { await sh('git stash push -u -m "minipass pre-push backup"', codeDir, env); } catch {}
+                  const out = await sh('git ls-files --others --exclude-standard', codeDir, env);
+                  for (const f of out.split('\n').map(s => s.trim()).filter(Boolean)) {
+                    try {
+                      execSync(`git cat-file -e FETCH_HEAD:"${f}"`, { cwd: codeDir });
+                      fs.renameSync(path.join(codeDir, f), path.join(codeDir, `${f}.panel-backup-${Date.now()}`));
+                    } catch {}
+                  }
+                  await sh(`git reset --hard "${fetched}"`, codeDir, env);
+                }
+              }
+              syncedPush = true;
+            }
           } catch {}
         }
-        if (!skipPull) {
+        if (!syncedPush) {
           let branch = (meta.github && meta.github.branch) || 'main';
           try { branch = execSync('git branch --show-current', { cwd: codeDir }).toString().trim() || branch; } catch {}
           await sh(`git pull --ff-only "${url}" "${branch}"`, codeDir, env);
@@ -627,7 +653,8 @@ app.post('/api/apps/:id/deploy', async (req, res) => {
       : [];
     const source = ['manual', 'local-push'].includes(req.body && req.body.source) ? req.body.source : 'manual';
     const pushedSha = /^[0-9a-f]{40}$/.test((req.body && req.body.sha) || '') ? req.body.sha : null;
-    await deploy(req.params.id, { only, source, pushedSha });
+    const pushedBranch = /^[A-Za-z0-9._/-]{1,64}$/.test((req.body && req.body.branch) || '') ? req.body.branch : null;
+    await deploy(req.params.id, { only, source, pushedSha, pushedBranch });
     res.json({ ok: true, redeployed: true, services: only.length ? only : undefined });
   }
   catch (e) { res.status(500).json({ error: e.message }); }
@@ -844,7 +871,7 @@ app.post('/api/apps/:id/git-init', (req, res) => {
     // to push.log - the old silent `>/dev/null` made failures invisible.
     // Deploy curl runs in background so `git push` returns fast; the panel
     // keeps deploying server-side and records it under source local-push.
-    const hook = `#!/bin/sh\n# minipass push-to-deploy: checkout pushed branch into code/, rebuild\nLOG="${path.join(repo, 'push.log')}"\n{\necho "=== $(date -u +%FT%TZ) push received ==="\nBRANCH=""\nNEWREV=""\nwhile read oldrev newrev ref; do\n  case "$ref" in refs/heads/*) BRANCH="\${ref#refs/heads/}"; NEWREV="$newrev";; esac\ndone\nBRANCH="\${BRANCH:-main}"\nif GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f "$BRANCH" 2>&1; then\n  echo "checked out $BRANCH"\nelse\n  echo "checkout $BRANCH failed, trying master"\n  GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f master 2>&1 || echo "checkout failed"\nfi\necho "triggering deploy…"\ncurl -s -m 5 -X POST -H 'Content-Type: application/json' -d '{"phase":"received"}' http://localhost:${port}/api/apps/${id}/git-push-event >> "$LOG" 2>&1\nnohup curl -s -X POST -H 'Content-Type: application/json' -d "{\\"source\\":\\"local-push\\",\\"sha\\":\\"$NEWREV\\"}" http://localhost:${port}/api/apps/${id}/deploy >> "$LOG" 2>&1 &\n} >> "$LOG" 2>&1\n`;
+    const hook = `#!/bin/sh\n# minipass push-to-deploy: checkout pushed branch into code/, rebuild\nLOG="${path.join(repo, 'push.log')}"\n{\necho "=== $(date -u +%FT%TZ) push received ==="\nBRANCH=""\nNEWREV=""\nwhile read oldrev newrev ref; do\n  case "$ref" in refs/heads/*) BRANCH="\${ref#refs/heads/}"; NEWREV="$newrev";; esac\ndone\nBRANCH="\${BRANCH:-main}"\nif GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f "$BRANCH" 2>&1; then\n  echo "checked out $BRANCH"\nelse\n  echo "checkout $BRANCH failed, trying master"\n  GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f master 2>&1 || echo "checkout failed"\nfi\necho "triggering deploy…"\ncurl -s -m 5 -X POST -H 'Content-Type: application/json' -d '{"phase":"received"}' http://localhost:${port}/api/apps/${id}/git-push-event >> "$LOG" 2>&1\nnohup curl -s -X POST -H 'Content-Type: application/json' -d "{\\"source\\":\\"local-push\\",\\"sha\\":\\"$NEWREV\\",\\"branch\\":\\"$BRANCH\\"}" http://localhost:${port}/api/apps/${id}/deploy >> "$LOG" 2>&1 &\n} >> "$LOG" 2>&1\n`;
     fs.writeFileSync(path.join(repo, 'hooks', 'post-receive'), hook);
     fs.chmodSync(path.join(repo, 'hooks', 'post-receive'), 0o755);
     const db_ = load();
