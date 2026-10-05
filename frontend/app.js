@@ -234,9 +234,9 @@ function fillSiteHeader(a) {
     const remote = `root@${location.hostname}:/srv/apps/${a.id}/repo.git`;
     const remoteCommand = `git remote add minipass ${remote}`;
     box.innerHTML = `<div class="local-git-status"><div><b>Direct push is enabled</b><div class="meta">Run these commands in your local repository.</div></div><span class="badge service-state on">enabled</span></div>` +
+      `<div class="local-git-toggle"><button class="btn danger" onclick="disableLocalGit()">disable direct push</button></div>` +
       `<div class="local-command"><span>1 · Add the remote once</span><div class="deploy-copy-row"><code id="localRemote">${safeHtml(remoteCommand)}</code><button onclick="copyLocal()">copy</button></div></div>` +
-      `<div class="local-command"><span>2 · Push your branch</span><code>git push minipass main</code><small>Use <b>master</b> instead when that is your branch.</small></div>` +
-      `<div class="deploy-source-actions"><button class="btn danger" onclick="disableLocalGit()">disable direct push</button></div>`;
+      `<div class="local-command"><span>2 · Push your branch</span><code>git push minipass main</code><small>Use <b>master</b> instead when that is your branch.</small></div>`;
   } else {
     box.innerHTML = `<div class="local-git-disabled"><b>Direct push is not configured</b><div class="meta">Create a private bare Git remote and its deploy hook on this server.</div><button class="btn primary" onclick="initLocalGit()">enable local git push</button></div>`;
   }
