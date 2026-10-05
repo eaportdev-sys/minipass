@@ -11,6 +11,7 @@ const { createApp, appDir, normDbs, dbService, nginxConf, ensureDockerfile } = r
 const { gitEnv, pubKey, appPubKey, appGitEnv } = require('./lib/ssh');
 const svc = require('./lib/services');
 const dbTools = require('./lib/db-tools');
+const migrations = require('./lib/migrations');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -1746,8 +1747,8 @@ app.post('/api/apps/:id/home', (req, res) => {
 // = is allowed (single words only, no quoting/$/backtick/;/&/|) so flag-style
 // args like `--db=newdbname` and VAR=x prefix overrides work. VAR=x at the
 // start of the command sets a per-run env override for that run only.
-const MIGRATE_CMD_RE = /^[A-Za-z0-9_][A-Za-z0-9_ .:/=-]{0,199}$/;
-const MIGRATE_DIR_RE = /^[A-Za-z0-9_][A-Za-z0-9_./-]{0,80}$/;
+const MIGRATE_CMD_RE = migrations.COMMAND_RE;
+const MIGRATE_DIR_RE = migrations.DIR_RE;
 function migrateTarget(meta, dir, svcName) {
   const list = svc.fullServices(meta, dir).filter(s => s.enabled !== false);
   if (svcName && list.some(s => s.name === svcName)) return svcName;
@@ -1849,63 +1850,19 @@ app.post('/api/apps/:id/migrate-check', async (req, res) => {
     res.json({ ok: true, service: svcName, output: String(out).slice(-4000) || '(no output)' });
   } catch (e) { res.status(500).json({ error: ('verify failed: ' + e.message).slice(-500) }); }
 });
-// Suggest migrate commands by scanning the repo (package.json scripts with
-// 'migrat' in the name + known markers). Pure read, capped walk.
+// Detect migration frameworks and map each project folder to the most-specific
+// enabled service build context. Returned dirs are container-relative, never
+// repository-relative (server service + code/server project => empty dir).
 app.get('/api/apps/:id/migrate-suggest', (req, res) => {
   try {
     const meta = load().apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
-    const codeDir = path.join(appDir(APPS_DIR, meta.id), 'code');
-    const out = [];
-    const seen = new Set();
-    const services = svc.fullServices(meta, appDir(APPS_DIR, meta.id));
-    const svcFor = (rel) => {
-      const sub = rel === '.' ? '' : rel;
-      const s = services.find(x => (x.subdir || '') === sub);
-      return s ? s.name : null;
-    };
-    const push = (cmd, why, rel) => {
-      if (seen.has(cmd)) return;
-      seen.add(cmd);
-      const check = cmd.startsWith('npx knex migrate') ? 'npx knex migrate:list'
-        : cmd.startsWith('npx prisma migrate deploy') ? 'npx prisma migrate status' : '';
-      out.push({ cmd, why, dir: rel === '.' ? '' : rel, svc: svcFor(rel), check });
-    };
-    const pkgAt = (d) => {
-      try { return JSON.parse(fs.readFileSync(path.join(d, 'package.json'), 'utf8')); } catch { return null; }
-    };
-    const hasFile = (d, ...names) => names.some(n => { try { return fs.existsSync(path.join(d, n)); } catch { return false; } });
-    const dirs = [codeDir];
-    try {
-      for (const e of fs.readdirSync(codeDir, { withFileTypes: true })) {
-        if (dirs.length > 12) break;
-        if (e.isDirectory() && !['node_modules', '.git', 'dist', 'build'].includes(e.name)) {
-          try {
-            if (fs.existsSync(path.join(codeDir, e.name, 'package.json'))) dirs.push(path.join(codeDir, e.name));
-          } catch {}
-        }
-      }
-    } catch {}
-    for (const d of dirs) {
-      const rel = path.relative(codeDir, d) || '.';
-      const pkg = pkgAt(d);
-      if (pkg && pkg.scripts) {
-        for (const [name, val] of Object.entries(pkg.scripts)) {
-          // migration scripts by name (migrate, baseline, db:init, db:setup)
-          // or by value when they invoke a baseline runner. db:seed is left
-          // out on purpose - seeds are rarely idempotent, wrong for pre-deploy.
-          if (/migrat|baseline|^db:(init|setup)/i.test(name) || /baseline/i.test(String(val || '')))
-            push(`npm run ${name}`, `${name} in ${rel}/package.json`, rel);
-        }
-      }
-      if (hasFile(d, 'knexfile.js', 'knexfile.ts', 'knexfile.cjs', 'knexfile.mjs')) push('npx knex migrate:latest', `knexfile in ${rel}/`, rel);
-      if (hasFile(path.join(d, 'prisma'), 'schema.prisma') || hasFile(d, 'schema.prisma')) push('npx prisma migrate deploy', `prisma schema in ${rel}/`, rel);
-      if (hasFile(path.join(d, 'dist'), 'migration-runner.js') || hasFile(d, 'migration-runner.js')) {
-        const base = hasFile(path.join(d, 'dist'), 'migration-runner.js') ? 'node dist/migration-runner.js' : 'node migration-runner.js';
-        push(`${base} all`, `migration-runner in ${rel}/ (takes a target: all)`, rel);
-      }
-    }
-    res.json({ suggestions: out.slice(0, 8) });
+    const dir = appDir(APPS_DIR, meta.id);
+    const services = svc.fullServices(meta, dir);
+    const detected = migrations.detectMigrations(path.join(dir, 'code'), services);
+    // cmd/svc aliases keep older frontends useful during a rolling panel update.
+    const suggestions = detected.slice(0, 30).map(x => ({ ...x, cmd: x.command, svc: x.service }));
+    res.json({ suggestions });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 // Sync box tree to GitHub. All tracked + untracked box edits are first saved in

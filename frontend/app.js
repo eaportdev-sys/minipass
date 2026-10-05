@@ -179,8 +179,14 @@ function fillMigrate(cmd, dir, svc, check) {
     const sel = document.getElementById('migrateSvc');
     if ([...sel.options].some(o => o.value === svc)) sel.value = svc;
   }
-  if (check && !document.getElementById('migrateCheck').value.trim())
-    document.getElementById('migrateCheck').value = check;
+  if (check !== undefined) document.getElementById('migrateCheck').value = check || '';
+}
+function useMigrateDetection(button) {
+  fillMigrate(button.dataset.command, button.dataset.dir, button.dataset.service, button.dataset.check);
+  const where = button.dataset.dir ? `/${button.dataset.dir}` : 'service root';
+  document.getElementById('migrateOut').textContent = button.dataset.phase === 'initial'
+    ? `Initial-setup command selected in ${button.dataset.service} · ${where}. Run it manually; do not save it as a recurring pre-deploy migration unless the project guarantees that is safe.`
+    : `Detected runner selected in ${button.dataset.service} · ${where}. Review the command, then save or run it.`;
 }
 async function runMigrateNow() {
   if (!currentApp) return;
@@ -225,9 +231,14 @@ async function loadMigrateSuggest() {
   try {
     const r = await (await fetch(`/api/apps/${currentApp}/migrate-suggest`)).json();
     const list = r.suggestions || [];
-    box.innerHTML = list.length
-      ? `<div class="migrate-suggest-label">Detected scripts</div><div class="migrate-suggest-list">${list.map(s => `<button data-command="${safeHtml(s.cmd)}" data-dir="${safeHtml(s.dir || '')}" data-svc="${safeHtml(s.svc || '')}" data-check="${safeHtml(s.check || '')}" onclick="fillMigrate(this.dataset.command, this.dataset.dir, this.dataset.svc, this.dataset.check)" title="${safeHtml(s.why || '')}">${safeHtml(s.cmd)}${s.svc ? ` · ${safeHtml(s.svc)}` : ''}</button>`).join('')}</div>`
-      : '';
+    box.innerHTML = list.length ? `<div class="migrate-suggest-label">Detected migration runners</div><div class="migrate-suggest-list">${list.map(s => {
+      const location = s.runnable
+        ? `${s.service} · ${s.dir ? `/${s.dir}` : 'service root'}`
+        : `${s.repoDir || 'repository'} · not runnable yet`;
+      const phase = s.phase === 'initial' ? 'initial setup' : 'deployment';
+      if (!s.runnable) return `<div class="migrate-detect unavailable"><div><b>${safeHtml(s.framework || 'Migration')}</b><span>${safeHtml(phase)}</span></div><small>${safeHtml(s.problem || s.why || 'Needs configuration')}</small><em>${safeHtml(location)}</em></div>`;
+      return `<button class="migrate-detect" data-command="${safeHtml(s.command || s.cmd)}" data-dir="${safeHtml(s.dir || '')}" data-service="${safeHtml(s.service || s.svc || '')}" data-check="${safeHtml(s.check || '')}" data-phase="${safeHtml(s.phase || 'deploy')}" onclick="useMigrateDetection(this)" title="${safeHtml(s.why || '')}"><div><b>${safeHtml(s.framework || 'Migration')}</b><span>${safeHtml(phase)}</span></div><code>${safeHtml(s.command || s.cmd)}</code><em>${safeHtml(location)}</em></button>`;
+    }).join('')}</div>` : '<div class="migrate-suggest-label">No migration runner detected — enter the service, folder, and project command manually.</div>';
   } catch { box.innerHTML = ''; }
 }
 function deploySourceName(source) {

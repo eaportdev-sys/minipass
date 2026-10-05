@@ -111,10 +111,16 @@ them back.
   Dockerfile and the type has no safe default, the panel says so instead of
   guessing — click **use standard Dockerfile** to drop in the type template
   (box-local; commit it to the repo so fresh clones keep it).
-- **Migrations**: Deploy tab → pre-deploy migration. Pick the backend
-  **service**, an optional **folder** (e.g. `server` for knex in a subfolder),
-  the command (e.g. `npm run migrate`), and a **verify** command
-  (e.g. `npx knex migrate:list`, auto-suggested next to knex/prisma/baseline markers).
+- **Migrations**: Deploy tab → pre-deploy migration. Detection recognizes
+  project scripts, Knex, Prisma, Sequelize, TypeORM, Drizzle, MikroORM, Django,
+  Alembic, Laravel, Doctrine, Rails, Flyway, Liquibase, dbmate, EF Core, and raw
+  SQL folders. It maps each project to the enabled service whose build context
+  contains it, then calculates **Folder relative to that container**. For
+  example, a `server` service built from `code/server` uses an empty Folder;
+  an `app` service built from `code/` uses Folder `server`. Select a detected
+  runner to fill the service, folder, command, and verification command.
+  Ambiguous systems such as TypeORM without a declared script and raw SQL
+  without a database client are reported but never guessed.
   The command runs after build in a one-off container with the site `.env`
   (so `DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME` resolve); failure aborts
   before the swap and running containers are untouched. **Run now** / **verify**
