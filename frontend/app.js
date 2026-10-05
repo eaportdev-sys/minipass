@@ -97,9 +97,35 @@ async function loadMigrateSuggest() {
     const r = await (await fetch(`/api/apps/${currentApp}/migrate-suggest`)).json();
     const list = r.suggestions || [];
     box.innerHTML = list.length
-      ? ('detected: ' + list.map(s => `<button onclick="fillMigrate('${s.cmd.replace(/'/g, '')}')">${s.cmd}</button>`).join(' '))
+      ? `<div class="migrate-suggest-label">Detected scripts</div><div class="migrate-suggest-list">${list.map(s => `<button data-command="${safeHtml(s.cmd)}" onclick="fillMigrate(this.dataset.command)">${safeHtml(s.cmd)}</button>`).join('')}</div>`
       : '';
   } catch { box.innerHTML = ''; }
+}
+function deploySourceName(source) {
+  return ({ manual: 'Manual', webhook: 'GitHub webhook', poll: 'GitHub poll', 'local-push': 'Local push' })[source] || source || 'Unknown';
+}
+function deployRecordParts(h) {
+  const when = (h.at || '').replace('T', ' ').slice(0, 19) || 'time unavailable';
+  const duration = h.durationMs != null ? `${Math.round(h.durationMs / 1000)}s` : '';
+  const sha = h.sha ? String(h.sha).slice(0, 7) : '';
+  const error = h.error ? String(h.error).split('\n').filter(Boolean).slice(-1)[0] : '';
+  return { when, duration, sha, error, ok: h.status === 'ok' };
+}
+function deployHistoryMarkup(hist) {
+  if (!hist.length) return '<div class="deploy-empty">No deployments recorded yet.</div>';
+  return hist.map(h => {
+    const p = deployRecordParts(h);
+    return `<div class="deploy-history-item ${p.ok ? 'is-ok' : 'is-failed'}">` +
+      `<div class="deploy-history-title"><b>${safeHtml(deploySourceName(h.source))}</b><span class="deploy-result">${p.ok ? 'success' : 'failed'}</span></div>` +
+      `<div class="deploy-history-details"><span>${safeHtml(p.when)}</span>${p.sha ? `<code>${safeHtml(p.sha)}</code>` : ''}${p.duration ? `<span>${safeHtml(p.duration)}</span>` : ''}</div>` +
+      (p.error ? `<div class="deploy-history-error" title="${safeHtml(p.error)}">${safeHtml(p.error)}</div>` : '') + `</div>`;
+  }).join('');
+}
+function deployLastMarkup(label, h) {
+  if (!h) return `<div class="source-last-empty">${safeHtml(label)}: no deployment recorded</div>`;
+  const p = deployRecordParts(h);
+  return `<div class="source-last-head"><span>${safeHtml(label)}</span><span class="deploy-result ${p.ok ? 'is-ok' : 'is-failed'}">${p.ok ? 'success' : 'failed'}</span></div>` +
+    `<div class="source-last-detail"><span>${safeHtml(p.when)}</span>${p.sha ? `<code>${safeHtml(p.sha)}</code>` : ''}${p.duration ? `<span>${safeHtml(p.duration)}</span>` : ''}</div>`;
 }
 function runtimeKind(container, service) {
   if (service) return ({ node: 'Node.js service', react: 'React web app', static: 'Static website', php: 'PHP web app' })[service.type] || `${service.type || 'app'} service`;
@@ -153,21 +179,12 @@ async function loadDeployStatus() {
     if (mc && s.app) mc.value = s.app.migrateCmd || '';
     // persistent per-trigger record: visible anytime, no open page needed
     const hist = s.history || [];
-    const fmtH = h => {
-      const when = (h.at || '').replace('T', ' ').slice(0, 19);
-      const dur = h.durationMs != null ? ` ${Math.round(h.durationMs / 1000)}s` : '';
-      const sha = h.sha ? ` @${String(h.sha).slice(0, 7)}` : '';
-      const res = h.status === 'ok' ? 'ok' : ('FAILED' + (h.error ? ' — ' + String(h.error).split('\n').slice(-1)[0].slice(0, 120) : ''));
-      return `${when}${sha} ${res}${dur}`;
-    };
     const lastSrc = (...srcs) => hist.find(h => srcs.includes(h.source));
     const hookLast = lastSrc('webhook', 'poll');
-    document.getElementById('hookHist').textContent = hookLast ? `last auto-deploy (${hookLast.source}): ${fmtH(hookLast)}` : '';
+    document.getElementById('hookHist').innerHTML = deployLastMarkup('Last GitHub deploy', hookLast);
     const localLast = lastSrc('local-push');
-    document.getElementById('localHist').textContent = localLast ? `last push: ${fmtH(localLast)}` : '';
-    document.getElementById('deployHist').innerHTML = hist.length
-      ? 'recent:<br>' + hist.map(h => `<div class="meta">${h.source || '?'} — ${fmtH(h)}</div>`).join('')
-      : '';
+    document.getElementById('localHist').innerHTML = deployLastMarkup('Last local push', localLast);
+    document.getElementById('deployHist').innerHTML = deployHistoryMarkup(hist);
     updatePowerStates(s);
   } catch {
     if (!info.dataset.live) info.textContent = 'unreachable';
@@ -215,14 +232,17 @@ function fillSiteHeader(a) {
   const box = document.getElementById('localGitBox');
   if (a.localGit) {
     const remote = `root@${location.hostname}:/srv/apps/${a.id}/repo.git`;
-    box.innerHTML = `<div class="meta">Push from GitHub<br>Get update from Git Repo over SSH</div>` +
-      `<div class="meta"><code>git push minipass main</code> (or master)<br>on your machine:<br><code>git remote add minipass <span id="localRemote">${remote}</span></code> <button onclick="copyLocal()">copy</button> <button onclick="disableLocalGit()">disable</button></div>`;
+    const remoteCommand = `git remote add minipass ${remote}`;
+    box.innerHTML = `<div class="local-git-status"><div><b>Direct push is enabled</b><div class="meta">Run these commands in your local repository.</div></div><span class="badge service-state on">enabled</span></div>` +
+      `<div class="local-command"><span>1 · Add the remote once</span><div class="deploy-copy-row"><code id="localRemote">${safeHtml(remoteCommand)}</code><button onclick="copyLocal()">copy</button></div></div>` +
+      `<div class="local-command"><span>2 · Push your branch</span><code>git push minipass main</code><small>Use <b>master</b> instead when that is your branch.</small></div>` +
+      `<div class="deploy-source-actions"><button class="btn danger" onclick="disableLocalGit()">disable direct push</button></div>`;
   } else {
-    box.innerHTML = `<button onclick="initLocalGit()">enable local git push</button>`;
+    box.innerHTML = `<div class="local-git-disabled"><b>Direct push is not configured</b><div class="meta">Create a private bare Git remote and its deploy hook on this server.</div><button class="btn primary" onclick="initLocalGit()">enable local git push</button></div>`;
   }
 }
 async function copyLocal() {
-  try { await navigator.clipboard.writeText(document.getElementById('localRemote').textContent); } catch {}
+  try { await navigator.clipboard.writeText(document.getElementById('localRemote').textContent); toast('remote command copied'); } catch {}
 }
 async function initLocalGit() {
   if (!currentApp) return;

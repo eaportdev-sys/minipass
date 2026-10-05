@@ -136,31 +136,49 @@
         </div>
       </div>
       <div id="tab-deploy" class="sitetab" style="display:none">
-        <div class="card">
-          <div class="sectionhead"><div><b>Deploy now</b><div class="meta">Build first, swap only on success, then verify container health.</div></div><button class="btn primary" onclick="deployCurrent()">redeploy</button></div>
-          <div class="meta">Pre-deploy migration command (optional):
-            <input id="migrateCmd" placeholder="npx prisma migrate deploy" style="width:220px">
-            <button onclick="saveMigrate()">save</button></div>
-          <div class="meta" id="migrateSuggest"></div>
-          <div id="deployProg" style="display:none"><div class="meta"><span id="deployStage">deploying…</span> <span id="deployPct"></span> <span id="deployTime"></span></div><div class="progress"><div id="deployBar"></div></div><pre id="deployTail"></pre></div>
-          <div class="meta" id="deployHist"></div>
+        <div class="deploy-top-grid">
+          <div class="card deploy-manual-card">
+            <div class="sectionhead"><div><b>Deploy now</b><div class="meta">Rebuild and release the current source safely.</div></div><button class="btn primary deploy-now-btn" onclick="deployCurrent()">redeploy</button></div>
+            <div class="deploy-safety-flow" aria-label="Deployment stages">
+              <div><span>1</span><b>Build</b><small>Running containers stay online</small></div>
+              <div><span>2</span><b>Swap</b><small>Only after a successful image build</small></div>
+              <div><span>3</span><b>Verify</b><small>Health gate with automatic rollback</small></div>
+            </div>
+            <div class="migration-panel">
+              <label for="migrateCmd">Pre-deploy migration <span>optional</span></label>
+              <div class="migration-command-row"><input id="migrateCmd" placeholder="npx prisma migrate deploy"><button onclick="saveMigrate()">save command</button></div>
+              <div id="migrateSuggest"></div>
+            </div>
+            <div id="deployProg" class="deploy-progress" style="display:none"><div class="deploy-progress-head"><span id="deployStage">deploying…</span><span><b id="deployPct"></b> <span id="deployTime"></span></span></div><div class="progress"><div id="deployBar"></div></div><pre id="deployTail"></pre></div>
+          </div>
+          <div class="card deploy-history-card">
+            <div class="sectionhead"><div><b>Recent deployments</b><div class="meta">Latest five attempts from every source.</div></div></div>
+            <div id="deployHist" class="deploy-history"></div>
+          </div>
         </div>
-        <div class="card deploy-source-card">
-          <div class="deploy-source-head"><b>Deploy from GitHub</b><div id="hookPower" class="source-power is-checking"><span class="power-symbol">⏻</span><span class="power-label">Checking</span></div></div>
-          <div class="meta">Choose webhook when GitHub can reach this panel, or polling when it cannot. Both pull GitHub and deploy.</div>
-          <div class="meta"><code id="hookUrl"></code></div>
-          <div class="actions"><button onclick="copyHook()">copy webhook</button><button onclick="regenHook()">regenerate</button></div>
-          <div class="meta">poll GitHub: <select id="pollSel" onchange="setPoll()"><option value="0">off — webhook only</option><option value="1">every minute</option><option value="5">every 5 min</option><option value="15">every 15 min</option></select></div>
-          <div class="meta" id="pollState"></div>
-          <div class="meta" id="hookHist"></div>
-          <div id="hookProg" style="display:none"><div class="meta"><span id="hookStage">deploying…</span> <span id="hookPct"></span> <span id="hookTime"></span></div><div class="progress"><div id="hookBar"></div></div></div>
-        </div>
-        <div class="card deploy-source-card">
-          <div class="deploy-source-head"><b>Deploy from your machine</b><div id="localPower" class="source-power is-checking"><span class="power-symbol">⏻</span><span class="power-label">Checking</span></div></div>
-          <div class="meta">Push directly to this box without GitHub. The panel builds an isolated checkout and leaves the GitHub working tree untouched.</div>
-          <div class="meta" id="localGitBox"><button onclick="initLocalGit()">enable local git push</button></div>
-          <div id="localProg" style="display:none"><div class="meta"><span id="localStage">deploying…</span> <span id="localPct"></span> <span id="localTime"></span></div><div class="progress"><div id="localBar"></div></div></div>
-          <div class="meta" id="localHist"></div>
+        <div class="deploy-source-grid">
+          <div class="card deploy-source-card">
+            <div class="deploy-source-head"><div><b>GitHub automation</b><div class="meta">Webhook or scheduled polling</div></div><div id="hookPower" class="source-power is-checking"><span class="power-symbol">⏻</span><span class="power-label">Checking</span></div></div>
+            <div class="deploy-setting">
+              <span class="deploy-field-label">Webhook endpoint</span>
+              <div class="deploy-copy-row"><code id="hookUrl"></code><button onclick="copyHook()">copy</button></div>
+            </div>
+            <div class="deploy-setting deploy-poll-row">
+              <label for="pollSel">Check GitHub</label>
+              <select id="pollSel" onchange="setPoll()"><option value="0">webhook only</option><option value="1">every minute</option><option value="5">every 5 min</option><option value="15">every 15 min</option></select>
+              <div class="meta" id="pollState"></div>
+            </div>
+            <div id="hookHist" class="source-last"></div>
+            <div class="deploy-source-actions"><button onclick="regenHook()">regenerate webhook</button></div>
+            <div id="hookProg" class="deploy-progress" style="display:none"><div class="deploy-progress-head"><span id="hookStage">deploying…</span><span><b id="hookPct"></b> <span id="hookTime"></span></span></div><div class="progress"><div id="hookBar"></div></div></div>
+          </div>
+          <div class="card deploy-source-card">
+            <div class="deploy-source-head"><div><b>Push from your machine</b><div class="meta">Direct SSH remote</div></div><div id="localPower" class="source-power is-checking"><span class="power-symbol">⏻</span><span class="power-label">Checking</span></div></div>
+            <div class="meta deploy-source-description">Push straight to this server. Deploys use an isolated checkout and leave the GitHub working tree untouched.</div>
+            <div id="localGitBox" class="local-git-box"><button class="btn primary" onclick="initLocalGit()">enable local git push</button></div>
+            <div id="localHist" class="source-last"></div>
+            <div id="localProg" class="deploy-progress" style="display:none"><div class="deploy-progress-head"><span id="localStage">deploying…</span><span><b id="localPct"></b> <span id="localTime"></span></span></div><div class="progress"><div id="localBar"></div></div></div>
+          </div>
         </div>
         <div class="card recovery">
           <b>Recovery tools</b>
