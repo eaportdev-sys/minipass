@@ -92,10 +92,11 @@ async function loadDeployStatus() {
   if (!currentApp) return;
   const info = document.getElementById('deployInfo');
   const list = document.getElementById('containerList');
-  info.textContent = 'loading…';
+  if (!info.dataset.live) info.textContent = 'loading…';
   try {
     const s = await (await fetch(`/api/apps/${currentApp}/status`)).json();
     if (s.error) { info.textContent = s.error; list.innerHTML = ''; return; }
+    info.dataset.live = '1';
     const d = s.lastDeploy;
     info.textContent = d
       ? `${d.status === 'ok' ? 'live' : 'FAILED'} @ ${d.sha || '?'} · ${d.at || ''}${d.error ? ' — ' + d.error.split('\n').slice(-2).join(' ') : ''}`
@@ -124,7 +125,7 @@ async function loadDeployStatus() {
       ? 'recent:<br>' + hist.map(h => `<div class="meta">${h.source || '?'} — ${fmtH(h)}</div>`).join('')
       : '';
     siteDot(s);
-  } catch { info.textContent = 'unreachable'; }
+  } catch { if (!info.dataset.live) info.textContent = 'unreachable'; }
 }
 function backToSites() { currentApp = null; showView('websites'); refresh(); }
 function fillSiteHeader(a) {
