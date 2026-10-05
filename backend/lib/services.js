@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { serviceBlock, ensureDockerfile, nginxConf, inferPort, TYPE_PORT } = require('./generator');
+const { decideType } = require('./detect');
 
 const isDbSvc = n => /^db(-|$)/.test(n || '');
 
@@ -12,6 +13,32 @@ function validSvcName(n) {
 
 function portEnvName(svcName) {
   return 'PORT_' + svcName.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+// Detect the runnable stack from the selected service folder itself. This is
+// intentionally folder-scoped: a React workspace inside a Node monorepo must
+// not inherit the root API's type (or vice versa).
+function detectServiceType(ctxDir) {
+  const paths = [];
+  const skip = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'vendor']);
+  const walk = (dir, rel = '', depth = 0) => {
+    if (depth > 2) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (skip.has(e.name)) continue;
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(path.join(dir, e.name), r, depth + 1);
+      else if (e.isFile()) paths.push(r.replace(/\\/g, '/'));
+    }
+  };
+  walk(ctxDir);
+  // Only the package manifest at this context root defines this service. A
+  // nested package belongs to another possible service, not its parent.
+  let pkg = null;
+  try { pkg = JSON.parse(fs.readFileSync(path.join(ctxDir, 'package.json'), 'utf8')); } catch {}
+  const ownPaths = pkg ? paths : paths.filter(p => !/(^|\/)package\.json$/.test(p));
+  return decideType(ownPaths, pkg);
 }
 
 // Split generated compose services into [{name, lines}] (db + app alike).
@@ -140,4 +167,4 @@ function renderProject({ dir, templatesDir, meta }) {
   return { services: enabled.length, normalized: all };
 }
 
-module.exports = { isDbSvc, validSvcName, portEnvName, parseComposeServices, fullServices, renderProject };
+module.exports = { isDbSvc, validSvcName, portEnvName, detectServiceType, parseComposeServices, fullServices, renderProject };

@@ -457,6 +457,14 @@ async function deployNow(id, opts = {}) {
   try {
     for (const s of svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false)) {
       const ctxDir = path.join(buildCodeDir, s.subdir || '');
+      let hasDockerfile = false;
+      try { hasDockerfile = fs.readdirSync(ctxDir).some(f => /^dockerfile$/i.test(f)); } catch {}
+      if (!hasDockerfile) {
+        const detected = svc.detectServiceType(ctxDir);
+        if (detected.type && detected.type !== s.type) {
+          throw new Error(`service '${s.name}' is configured as '${s.type}' but '${s.subdir || '.'}' is detected as '${detected.type}' - change the service type`);
+        }
+      }
       ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR);
       if (s.type === 'static' || s.type === 'react') {
         try {
@@ -992,11 +1000,14 @@ app.post('/api/apps/:id/services', async (req, res) => {
     if (!meta) return res.status(404).json({ error: 'unknown app' });
     const dir = appDir(APPS_DIR, meta.id);
     const name = String((req.body && req.body.name) || '').trim().toLowerCase();
-    const type = String((req.body && req.body.type) || '').trim();
+    const requestedType = String((req.body && req.body.type) || 'auto').trim();
     const subdir = String((req.body && req.body.subdir) || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '');
     if (!svc.validSvcName(name) || name === 'app') return res.status(400).json({ error: 'bad service name (lowercase letters/numbers/dashes, not "app")' });
-    if (!['static', 'react', 'node', 'php'].includes(type)) return res.status(400).json({ error: 'bad type' });
+    if (!['auto', 'static', 'react', 'node', 'php'].includes(requestedType)) return res.status(400).json({ error: 'bad type' });
     if (!fs.existsSync(path.join(dir, 'code', subdir))) return res.status(400).json({ error: `subfolder '${subdir}' not in repo - push it first? (empty means repo root, already taken here)` });
+    const detected = svc.detectServiceType(path.join(dir, 'code', subdir));
+    const type = detected.type || (requestedType === 'auto' ? null : requestedType);
+    if (!type) return res.status(400).json({ error: `could not detect service type: ${detected.reason}` });
     const services = svc.fullServices(meta, dir);
     if (services.some(s => s.name === name)) return res.status(400).json({ error: 'service name taken' });
     if (services.some(s => (s.subdir || '') === subdir)) return res.status(400).json({ error: 'that folder already runs as ' + services.find(s => (s.subdir || '') === subdir).name });
@@ -1011,9 +1022,10 @@ app.post('/api/apps/:id/services', async (req, res) => {
     meta.services = out.normalized;
     save(db_);
     await markDirty(meta.id, 'service ' + name + ' added');
-    if (!(req.body && req.body.apply === true)) return res.json({ ok: true, added: name, pending: true });
+    const correctedFrom = requestedType !== 'auto' && requestedType !== type ? requestedType : null;
+    if (!(req.body && req.body.apply === true)) return res.json({ ok: true, added: name, type, correctedFrom, detected: detected.detected, pending: true });
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, added: name, redeployError: e.message }); }
-    res.json({ ok: true, added: name, redeployed: true });
+    res.json({ ok: true, added: name, type, correctedFrom, detected: detected.detected, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/apps/:id/services/:name', async (req, res) => {

@@ -930,9 +930,10 @@ async function addService() {
     type: document.getElementById('svcType').value
   };
   const r = await (await fetch(`/api/apps/${currentApp}/services`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
-  toast(r.ok ? ('service ' + body.name + ' added - redeploy to start it') : (r.error || 'failed'), !!r.ok);
+  toast(r.ok ? (`service ${body.name} added as ${r.type || body.type}${r.correctedFrom ? ` (corrected from ${r.correctedFrom})` : ''} - redeploy to start it`) : (r.error || 'failed'), !!r.ok);
   document.getElementById('svcName').value = '';
   document.getElementById('svcSub').value = '';
+  document.getElementById('svcType').value = 'auto';
   refresh();
   loadServices();
 }
