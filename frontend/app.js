@@ -1,6 +1,7 @@
 let currentApp = null;
 let serviceCheckTimer = null;
 let serviceCheckSeq = 0;
+const dbPopupSlots = new Map();
 async function refresh() {
   const apps = await (await fetch('/api/apps')).json();
   document.getElementById('apps').innerHTML = apps.map(a =>
@@ -237,14 +238,15 @@ async function loadEnv() {
     box.innerHTML = (r.vars || []).map(v => {
       const key = safeHtml(v.key);
       const value = safeHtml(v.value);
-      const keyInput = `<input class="env-name" value="${key}" ${v.managed ? 'readonly' : ''} aria-label="Environment key">`;
+      const protectedKey = v.key === 'NODE_ENV';
+      const keyInput = `<input class="env-name" value="${key}" ${v.managed || protectedKey ? 'readonly' : ''} aria-label="Environment key">`;
       const badge = v.managed ? '<span class="badge">managed</span>' : '';
       const canEditValue = !v.managed || v.key === 'DOMAIN';
       if (v.key === 'NODE_ENV' && !v.managed) {
         const cur = String(v.value).trim();
         return `<div class="env-row" data-env-original="${key}" data-env-managed="0"><div class="env-key-cell">${keyInput}${badge}</div>` +
           `<select class="env-value" aria-label="${key} value"><option value="development"${cur === 'development' ? ' selected' : ''}>development</option><option value="production"${cur === 'production' ? ' selected' : ''}>production</option></select>` +
-          `<div class="env-row-actions"><button class="btn danger" onclick="envDel('${v.key}')">delete</button></div></div>`;
+          `<div class="env-row-actions"><span class="meta">required</span></div></div>`;
       }
       return `<div class="env-row" data-env-original="${key}" data-env-managed="${v.managed ? '1' : '0'}"><div class="env-key-cell">${keyInput}${badge}</div>` +
         `<input class="env-value" type="password" value="${value}" ${canEditValue ? '' : 'readonly'} aria-label="${key} value">` +
@@ -361,23 +363,53 @@ async function loadDatabases() {
     if (r.error) { box.innerHTML = `<div class="meta">${safeHtml(r.error)}</div>`; return; }
     box.innerHTML = (r.databases || []).map(d => {
       const running = /^running/i.test(d.state || '');
-      const toolRunning = d.toolState === 'running' && d.toolPort;
-      const url = toolRunning ? `http://${location.hostname}:${d.toolPort}` : '';
+      const toolPort = parseInt(d.toolPort, 10);
+      const toolRunning = d.toolState === 'running' && toolPort >= 8900 && toolPort <= 8999;
       const action = toolRunning
-        ? `<a class="btn" href="${url}" target="_blank" rel="noopener noreferrer">open ${safeHtml(d.tool)}</a> <button onclick="stopDbTool('${d.type}')">stop UI</button>`
-        : `<button onclick="launchDbTool('${d.type}')" ${running ? '' : 'disabled'}>launch ${safeHtml(d.tool)}</button>`;
-      return `<div class="db-runtime-row"><div><span class="opdot ${running ? 'ok' : 'fail'}"></span> <b>${safeHtml(d.label)}</b> <span class="badge">${safeHtml(d.service)}</span></div>` +
-        `<div class="meta">${safeHtml(d.image || 'image unavailable')} · <b>${safeHtml(d.state)}</b>${d.status ? ` · ${safeHtml(d.status)}` : ''}</div><div>${action}</div></div>`;
+        ? `<button class="btn primary" onclick="openDbTool('${d.type}', ${toolPort})">open ${safeHtml(d.tool)}</button><button onclick="stopDbTool('${d.type}')">stop UI</button>`
+        : `<button class="btn primary" onclick="launchDbTool('${d.type}')" ${running ? '' : 'disabled'}>launch ${safeHtml(d.tool)}</button>`;
+      let toolStatus = `${safeHtml(d.tool)} is stopped`;
+      if (toolRunning) {
+        const mins = d.toolExpiresAt ? Math.max(1, Math.ceil((new Date(d.toolExpiresAt).getTime() - Date.now()) / 60000)) : (r.toolTtlMinutes || 30);
+        toolStatus = `${safeHtml(d.tool)} running on port ${toolPort} · stops in about ${Number.isFinite(mins) ? mins : (r.toolTtlMinutes || 30)} min`;
+      } else if (d.toolState && d.toolState !== 'stopped') toolStatus = `${safeHtml(d.tool)}: ${safeHtml(d.toolState)}`;
+      return `<div class="db-runtime-card"><div class="db-runtime-title"><span class="opdot ${running ? 'ok' : 'fail'}"></span><b>${safeHtml(d.label)}</b><span class="badge">${safeHtml(d.service)}</span></div>` +
+        `<div class="meta">${safeHtml(d.image || 'image unavailable')}</div><div class="meta"><b>${safeHtml(d.state)}</b>${d.status ? ` · ${safeHtml(d.status)}` : ''}</div>` +
+        `<div class="db-tool-status">${toolStatus}</div><div class="db-runtime-actions">${action}</div></div>`;
     }).join('') || '<div class="meta">No managed databases are attached.</div>';
   } catch (e) { box.innerHTML = '<div class="meta">database status unavailable</div>'; }
 }
+function dbPopupKey(appId, type) { return `${appId}:${type}`; }
+function watchDbPopup(appId, type, popup) {
+  const key = dbPopupKey(appId, type);
+  const old = dbPopupSlots.get(key);
+  if (old) clearInterval(old.timer);
+  const timer = setInterval(() => {
+    if (!popup.closed) return;
+    clearInterval(timer);
+    dbPopupSlots.delete(key);
+    stopDbTool(type, appId, true);
+  }, 1000);
+  dbPopupSlots.set(key, { popup, timer });
+}
+function openDbTool(type, port) {
+  if (!currentApp) return;
+  const appId = currentApp;
+  const key = dbPopupKey(appId, type);
+  const old = dbPopupSlots.get(key);
+  if (old && !old.popup.closed) { old.popup.focus(); return; }
+  const popup = window.open(`http://${location.hostname}:${port}`, `dbui-${appId}-${type}`);
+  if (!popup) { toast('allow popups to open the database UI', false); return; }
+  watchDbPopup(appId, type, popup);
+}
 async function launchDbTool(type) {
   if (!currentApp) return;
-  const popup = window.open('', '_blank');
+  const appId = currentApp;
+  const popup = window.open('', `dbui-${appId}-${type}`);
   if (popup) popup.document.body.innerHTML = '<p style="font-family:system-ui">Starting database UI… the first image download can take a minute.</p>';
   toast('starting database UI…');
   try {
-    const r = await (await fetch(`/api/apps/${currentApp}/databases/${type}/tool`, { method: 'POST' })).json();
+    const r = await (await fetch(`/api/apps/${appId}/databases/${type}/tool`, { method: 'POST' })).json();
     if (!r.ok) {
       if (popup) popup.close();
       toast(r.error || 'database UI failed to start', false);
@@ -385,20 +417,28 @@ async function launchDbTool(type) {
     }
     const url = `http://${location.hostname}:${r.port}`;
     toast(`${r.tool} started on port ${r.port}`, true);
-    loadDatabases();
-    if (popup) popup.location.href = url;
-    else window.open(url, '_blank');
+    if (currentApp === appId) loadDatabases();
+    if (popup && popup.closed) await stopDbTool(type, appId, true);
+    else if (popup) { popup.location.href = url; watchDbPopup(appId, type, popup); }
+    else toast('database UI started - allow popups, then use the open button', false);
   } catch (e) {
     if (popup) popup.close();
     toast('database UI failed: ' + e.message, false);
   }
 }
-async function stopDbTool(type) {
-  if (!currentApp) return;
+async function stopDbTool(type, appId = currentApp, popupClosed = false) {
+  if (!appId) return;
+  const key = dbPopupKey(appId, type);
+  const slot = dbPopupSlots.get(key);
+  if (slot) {
+    clearInterval(slot.timer);
+    dbPopupSlots.delete(key);
+    if (!popupClosed && !slot.popup.closed) slot.popup.close();
+  }
   try {
-    const r = await (await fetch(`/api/apps/${currentApp}/databases/${type}/tool`, { method: 'DELETE' })).json();
-    toast(r.ok ? 'database UI stopped' : (r.error || 'failed'), !!r.ok);
-    loadDatabases();
+    const r = await (await fetch(`/api/apps/${appId}/databases/${type}/tool`, { method: 'DELETE', keepalive: true })).json();
+    toast(r.ok ? (popupClosed ? 'database UI stopped after its tab closed' : 'database UI stopped') : (r.error || 'failed'), !!r.ok);
+    if (currentApp === appId) loadDatabases();
   } catch (e) { toast('database UI stop failed: ' + e.message, false); }
 }
 async function fillApiLink(a) {

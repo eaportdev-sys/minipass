@@ -96,11 +96,22 @@ main { flex: 1; padding: 24px; max-width: 1100px; }
 .credential-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .credential-option { background: var(--input); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
 .service-add { background: var(--input); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
-.db-runtime-row {
-  display: grid; grid-template-columns: minmax(180px, .8fr) minmax(260px, 1.4fr) auto;
-  gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border);
+.db-add-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 13px 14px; margin-bottom: 14px; background: var(--input);
+  border: 1px solid var(--border); border-radius: 10px;
 }
-.db-runtime-row:last-child { border-bottom: 0; }
+.db-add-row .controlrow { flex-wrap: nowrap; }
+.db-add-row select { min-width: 155px; }
+#dbOut:empty { display: none; }
+#dbRuntimeList { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.db-runtime-card {
+  display: flex; flex-direction: column; min-height: 180px; padding: 15px;
+  background: var(--input); border: 1px solid var(--border); border-radius: 10px;
+}
+.db-runtime-title { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.db-tool-status { color: var(--muted); font-size: 12px; margin: 12px 0; padding-top: 10px; border-top: 1px solid var(--border); }
+.db-runtime-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: auto; }
 .env-grid-head, .env-row, .env-add-row {
   display: grid; grid-template-columns: minmax(220px, .9fr) minmax(280px, 1.25fr) minmax(150px, auto);
   gap: 12px; align-items: center;
@@ -194,7 +205,9 @@ a { color: var(--accent); }
   main { padding: 14px; }
   .flowsteps { grid-template-columns: 1fr; }
   .credential-grid { grid-template-columns: 1fr; }
-  .db-runtime-row { grid-template-columns: 1fr; gap: 5px; }
+  .db-add-row { align-items: stretch; flex-direction: column; }
+  .db-add-row .controlrow { flex-wrap: wrap; }
+  #dbRuntimeList { grid-template-columns: 1fr; }
   .env-grid-head { display: none; }
   .env-row, .env-add-row { grid-template-columns: 1fr; gap: 7px; padding: 12px 0; }
   .runtime-row { grid-template-columns: 1fr; gap: 5px; }

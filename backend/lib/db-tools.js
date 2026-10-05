@@ -144,7 +144,8 @@ function describe(meta, dir, containers) {
     return {
       type, service, label: ({ postgres: 'PostgreSQL', mysql: 'MySQL', mongo: 'MongoDB', redis: 'Redis' })[type],
       state: c ? c.state : 'not running', status: c ? c.status : '', image: c ? c.image : null,
-      tool: TOOLS[type].label, toolPort: saved && saved.port, toolState: containerState(name)
+      tool: TOOLS[type].label, toolPort: saved && saved.port, toolState: containerState(name),
+      toolExpiresAt: saved && saved.expiresAt
     };
   });
 }

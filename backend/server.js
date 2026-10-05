@@ -1200,12 +1200,67 @@ app.post('/api/apps/:id/db', async (req, res) => {
     res.json({ ok: true, added: type, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+const DB_TOOL_TTL_MS = 30 * 60 * 1000;
+function clearDbToolLease(meta, type) {
+  const saved = meta.dbTools && meta.dbTools[type];
+  if (!saved) return false;
+  delete saved.startedAt;
+  delete saved.expiresAt;
+  return true;
+}
+function stopExpiredDbTools() {
+  try {
+    const db_ = load();
+    const now = Date.now();
+    let changed = false;
+    for (const meta of db_.apps) {
+      for (const [type, saved] of Object.entries(meta.dbTools || {})) {
+        const expires = saved && Date.parse(saved.expiresAt || '');
+        if (expires && expires <= now) {
+          dbTools.stop(meta.id, type);
+          clearDbToolLease(meta, type);
+          changed = true;
+        }
+      }
+    }
+    if (changed) save(db_);
+  } catch (e) { console.error('database UI expiry:', e.message); }
+}
+setInterval(stopExpiredDbTools, 30000).unref();
+
 app.get('/api/apps/:id/databases', async (req, res) => {
   try {
-    const meta = load().apps.find(a => a.id === req.params.id);
+    let db_ = load();
+    let meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const containers = await appContainers(meta.id);
+    db_ = load();
+    meta = db_.apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
     const dir = appDir(APPS_DIR, meta.id);
-    res.json({ databases: dbTools.describe(meta, dir, await appContainers(meta.id)) });
+    const databases = dbTools.describe(meta, dir, containers);
+    let changed = false;
+    const now = Date.now();
+    for (const database of databases) {
+      if (database.toolState !== 'running') continue;
+      const saved = meta.dbTools && meta.dbTools[database.type];
+      if (!saved) continue;
+      const expires = Date.parse(saved.expiresAt || '');
+      if (expires && expires <= now) {
+        dbTools.stop(meta.id, database.type);
+        clearDbToolLease(meta, database.type);
+        database.toolState = 'stopped';
+        delete database.toolExpiresAt;
+        changed = true;
+      } else if (!expires) {
+        saved.startedAt = new Date(now).toISOString();
+        saved.expiresAt = new Date(now + DB_TOOL_TTL_MS).toISOString();
+        database.toolExpiresAt = saved.expiresAt;
+        changed = true;
+      }
+    }
+    if (changed) save(db_);
+    res.json({ databases, toolTtlMinutes: DB_TOOL_TTL_MS / 60000 });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 const dbToolLocks = new Set();
@@ -1245,9 +1300,12 @@ app.post('/api/apps/:id/databases/:type/tool', async (req, res) => {
       dbTools.stop(meta.id, type);
       throw new Error('site was deleted while the database UI was starting');
     }
-    freshMeta.dbTools = { ...(freshMeta.dbTools || {}), [type]: { port, tool: out.tool } };
+    const startedAt = new Date();
+    freshMeta.dbTools = { ...(freshMeta.dbTools || {}), [type]: {
+      port, tool: out.tool, startedAt: startedAt.toISOString(), expiresAt: new Date(startedAt.getTime() + DB_TOOL_TTL_MS).toISOString()
+    } };
     save(freshDb);
-    res.json({ ok: true, ...out });
+    res.json({ ok: true, ...out, expiresAt: freshMeta.dbTools[type].expiresAt });
   } catch (e) { res.status(500).json({ error: e.message }); }
   finally {
     dbToolLocks.delete(lock);
@@ -1260,6 +1318,8 @@ app.delete('/api/apps/:id/databases/:type/tool', (req, res) => {
     const meta = db_.apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
     dbTools.stop(meta.id, req.params.type);
+    clearDbToolLease(meta, req.params.type);
+    save(db_);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1628,6 +1688,7 @@ app.put('/api/apps/:id/env', async (req, res) => {
     // managed keys are infrastructure (ports, hosts, generated creds) - read-only,
     // except DOMAIN which is display/future-tunnel metadata. Deleting them is refused too.
     const EDITABLE = new Set(['DOMAIN']);
+    const PROTECTED = new Set(['NODE_ENV']);
     const set = { ...((req.body && req.body.set) || {}) };
     const del = Array.isArray(req.body && req.body.delete) ? req.body.delete : [];
     const rename = (req.body && req.body.rename) || {};
@@ -1636,9 +1697,11 @@ app.put('/api/apps/:id/env', async (req, res) => {
     }
     for (const k of del) {
       if (!validKey(k)) return res.status(400).json({ error: 'bad key name: ' + k });
+      if (PROTECTED.has(k)) return res.status(400).json({ error: `${k} is required and cannot be deleted` });
     }
     for (const [from, to] of Object.entries(rename)) {
       if (!validKey(from) || !validKey(to)) return res.status(400).json({ error: `bad key rename: ${from} → ${to}` });
+      if (PROTECTED.has(from)) return res.status(400).json({ error: `${from} is required and cannot be renamed` });
       if (managed.has(from) || managed.has(to)) return res.status(400).json({ error: 'managed environment keys cannot be renamed' });
       if (!del.includes(from) || !Object.prototype.hasOwnProperty.call(set, to)) return res.status(400).json({ error: 'incomplete environment key rename' });
     }
