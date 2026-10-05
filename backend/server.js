@@ -369,11 +369,13 @@ async function deploy(id, opts = {}) {
             if (fetched === pushedSha) {
               const head = execSync('git rev-parse HEAD', { cwd: codeDir }).toString().trim();
               if (head !== fetched) {
+                // Move HEAD/index onto the pushed commit FIRST (tree untouched) so
+                // the untracked scan below is accurate - against a stale HEAD,
+                // pushed-tracked files look untracked and would be swept away.
+                execSync(`git reset "${fetched}"`, { cwd: codeDir });
                 let treeClean = false;
                 try { execSync('git diff --quiet FETCH_HEAD --', { cwd: codeDir }); treeClean = true; } catch {}
-                if (treeClean) {
-                  execSync(`git reset "${fetched}"`, { cwd: codeDir });
-                } else {
+                if (!treeClean) {
                   try { await sh('git stash push -u -m "minipass pre-push backup"', codeDir, env); } catch {}
                   const out = await sh('git ls-files --others --exclude-standard', codeDir, env);
                   for (const f of out.split('\n').map(s => s.trim()).filter(Boolean)) {
