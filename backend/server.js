@@ -1147,6 +1147,49 @@ app.post('/api/apps/:id/migrate', (req, res) => {
     res.json({ ok: true, migrateCmd: meta.migrateCmd });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+// Suggest migrate commands by scanning the repo (package.json scripts with
+// 'migrat' in the name + known markers). Pure read, capped walk.
+app.get('/api/apps/:id/migrate-suggest', (req, res) => {
+  try {
+    const meta = load().apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const codeDir = path.join(appDir(APPS_DIR, meta.id), 'code');
+    const out = [];
+    const seen = new Set();
+    const push = (cmd, why) => { if (!seen.has(cmd)) { seen.add(cmd); out.push({ cmd, why }); } };
+    const pkgAt = (d) => {
+      try { return JSON.parse(fs.readFileSync(path.join(d, 'package.json'), 'utf8')); } catch { return null; }
+    };
+    const hasFile = (d, ...names) => names.some(n => { try { return fs.existsSync(path.join(d, n)); } catch { return false; } });
+    const dirs = [codeDir];
+    try {
+      for (const e of fs.readdirSync(codeDir, { withFileTypes: true })) {
+        if (dirs.length > 12) break;
+        if (e.isDirectory() && !['node_modules', '.git', 'dist', 'build'].includes(e.name)) {
+          try {
+            if (fs.existsSync(path.join(codeDir, e.name, 'package.json'))) dirs.push(path.join(codeDir, e.name));
+          } catch {}
+        }
+      }
+    } catch {}
+    for (const d of dirs) {
+      const rel = path.relative(codeDir, d) || '.';
+      const pkg = pkgAt(d);
+      if (pkg && pkg.scripts) {
+        for (const name of Object.keys(pkg.scripts)) {
+          if (/migrat/i.test(name)) push(`npm run ${name}`, `${name} in ${rel}/package.json`);
+        }
+      }
+      if (hasFile(d, 'knexfile.js', 'knexfile.ts')) push('npx knex migrate:latest', `knexfile in ${rel}/`);
+      if (hasFile(path.join(d, 'prisma'), 'schema.prisma') || hasFile(d, 'schema.prisma')) push('npx prisma migrate deploy', `prisma schema in ${rel}/`);
+      if (hasFile(path.join(d, 'dist'), 'migration-runner.js') || hasFile(d, 'migration-runner.js')) {
+        const base = hasFile(path.join(d, 'dist'), 'migration-runner.js') ? 'node dist/migration-runner.js' : 'node migration-runner.js';
+        push(`${base} all`, `migration-runner in ${rel}/ (takes a target: all)`);
+      }
+    }
+    res.json({ suggestions: out.slice(0, 8) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.post('/api/apps/:id/stop', async (req, res) => {
   try { await sh(`${COMPOSE_BIN} stop`, appDir(APPS_DIR, req.params.id)); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }

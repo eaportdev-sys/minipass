@@ -22,7 +22,7 @@ function openSite(id) {
   document.getElementById('filePath').value = '';
   document.getElementById('fileEdit').value = '';
   document.getElementById('fileOut').textContent = '';
-  refresh().then(() => { showSiteTab('files'); loadDeployStatus(); loadEnv(); loadServices(); });
+  refresh().then(() => { showSiteTab('files'); loadDeployStatus(); loadEnv(); loadServices(); loadMigrateSuggest(); });
 }
 function appUrl(a) {
   if (!a.hostPort) return null;
@@ -62,6 +62,20 @@ async function saveMigrate() {
   const r = await (await fetch(`/api/apps/${currentApp}/migrate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: c }) })).json();
   toast(r.ok ? 'migrate command saved' : (r.error || 'failed'), !!r.ok);
   loadDeployStatus();
+}
+function fillMigrate(cmd) {
+  document.getElementById('migrateCmd').value = cmd;
+}
+async function loadMigrateSuggest() {
+  if (!currentApp) return;
+  const box = document.getElementById('migrateSuggest');
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/migrate-suggest`)).json();
+    const list = r.suggestions || [];
+    box.innerHTML = list.length
+      ? ('detected: ' + list.map(s => `<button onclick="fillMigrate('${s.cmd.replace(/'/g, '')}')">${s.cmd}</button>`).join(' '))
+      : '';
+  } catch { box.innerHTML = ''; }
 }
 async function loadDeployStatus() {
   if (!currentApp) return;
