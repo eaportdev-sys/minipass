@@ -818,7 +818,11 @@ app.post('/api/apps/:id/git-init', (req, res) => {
     const repo = path.join(dir, 'repo.git');
     const port = process.env.PORT || PORT;
     if (!fs.existsSync(repo)) execSync(`git init --bare "${repo}"`, { stdio: 'ignore' });
-    const hook = `#!/bin/sh\n# minipass push-to-deploy: checkout pushed branch into code/, rebuild\nif GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f main 2>/dev/null; then\n  :\nelse\n  GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f master\nfi\ncurl -s -X POST -H 'Content-Type: application/json' -d '{"source":"local-push"}' http://localhost:${port}/api/apps/${id}/deploy >/dev/null\n`;
+    // Hook checks out WHATEVER branch was pushed (not main/master-only) and logs
+    // to push.log - the old silent `>/dev/null` made failures invisible.
+    // Deploy curl runs in background so `git push` returns fast; the panel
+    // keeps deploying server-side and records it under source local-push.
+    const hook = `#!/bin/sh\n# minipass push-to-deploy: checkout pushed branch into code/, rebuild\nLOG="${path.join(repo, 'push.log')}"\n{\necho "=== $(date -u +%FT%TZ) push received ==="\nBRANCH=""\nwhile read oldrev newrev ref; do\n  case "$ref" in refs/heads/*) BRANCH="\${ref#refs/heads/}";; esac\ndone\nBRANCH="\${BRANCH:-main}"\nif GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f "$BRANCH" 2>&1; then\n  echo "checked out $BRANCH"\nelse\n  echo "checkout $BRANCH failed, trying master"\n  GIT_WORK_TREE="${path.join(dir, 'code')}" git --git-dir="${repo}" checkout -f master 2>&1 || echo "checkout failed"\nfi\necho "triggering deploy…"\nnohup curl -s -X POST -H 'Content-Type: application/json' -d '{"source":"local-push"}' http://localhost:${port}/api/apps/${id}/deploy >> "$LOG" 2>&1 &\n} >> "$LOG" 2>&1\n`;
     fs.writeFileSync(path.join(repo, 'hooks', 'post-receive'), hook);
     fs.chmodSync(path.join(repo, 'hooks', 'post-receive'), 0o755);
     const db_ = load();
