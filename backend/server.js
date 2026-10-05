@@ -3,7 +3,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { exec, execSync, spawn } = require('child_process');
+const { exec, execSync, execFileSync, spawn } = require('child_process');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const { createApp, appDir, normDbs, dbService, nginxConf, ensureDockerfile } = require('./lib/generator');
@@ -210,11 +210,14 @@ app.post('/api/apps', async (req, res) => {
 
 const redactUrl = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
 const deployLocks = new Set();
+// Every trigger for one site goes through the same promise chain. A push that
+// arrives during a build waits its turn instead of failing with "already in progress".
+const deployQueues = new Map();
 // Live ops: id -> { source, startedAt } so the UI can show per-card progress
 // for server-side triggers (webhook/poll/local-push) with no browser involved.
 const deployOps = new Map();
-// Push receipts: id -> { phase, at }. The hook pings `received` before checkout
-// so the UI shows a receiving state prior to the deploy op appearing.
+// Push receipts: id -> { phase, at }. The hook pings `received` before the
+// queued deploy starts so the UI immediately shows incoming work.
 const pushEvents = new Map();
 // Container image IDs before a deploy, so a failed swap can retag + restart them.
 async function snapshotImages(dir) {
@@ -266,6 +269,61 @@ async function currentSha(dir) {
     if (!fs.existsSync(path.join(code, '.git'))) return null;
     return execSync('git rev-parse --short HEAD', { cwd: code }).toString().trim();
   } catch { return null; }
+}
+
+// Local pushes are checked out from repo.git into an isolated, disposable
+// worktree. Docker Compose keeps the site's normal project, env, database
+// services and volumes; only app-service build contexts are overridden.
+function createLocalPushStage(dir, meta, pushedSha, pushedBranch) {
+  if (!/^[0-9a-f]{40}$/.test(pushedSha || '') || !/^[A-Za-z0-9._/-]{1,64}$/.test(pushedBranch || '')) {
+    throw new Error('local push is missing a valid commit sha or branch');
+  }
+  const bareRepo = path.join(dir, 'repo.git');
+  if (!fs.existsSync(path.join(bareRepo, 'HEAD'))) throw new Error('local push repository is not initialized');
+  try {
+    execFileSync('git', ['check-ref-format', '--branch', pushedBranch], { stdio: 'ignore' });
+    execFileSync('git', ['--git-dir', bareRepo, 'show-ref', '--verify', `refs/heads/${pushedBranch}`], { stdio: 'ignore' });
+    execFileSync('git', ['--git-dir', bareRepo, 'cat-file', '-e', `${pushedSha}^{commit}`], { stdio: 'ignore' });
+  } catch {
+    throw new Error(`commit ${pushedSha.slice(0, 7)} or pushed branch '${pushedBranch}' is not available in the local repository`);
+  }
+
+  const stageRoot = path.join(dir, '.local-deploy');
+  const stageCode = path.join(stageRoot, 'code');
+  const cleanup = () => {
+    try { execFileSync('git', ['--git-dir', bareRepo, 'worktree', 'remove', '--force', stageCode], { stdio: 'ignore' }); } catch {}
+    try { fs.rmSync(stageRoot, { recursive: true, force: true }); } catch {}
+    try { execFileSync('git', ['--git-dir', bareRepo, 'worktree', 'prune'], { stdio: 'ignore' }); } catch {}
+  };
+  cleanup();
+  try {
+    fs.mkdirSync(stageRoot, { recursive: true });
+    execFileSync('git', ['--git-dir', bareRepo, 'worktree', 'add', '--force', '--detach', stageCode, pushedSha], { stdio: 'pipe' });
+
+    const enabled = svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false);
+    const lines = ['services:'];
+    for (const s of enabled) {
+      const ctxDir = path.join(stageCode, s.subdir || '');
+      if (!fs.existsSync(ctxDir)) throw new Error(`service '${s.name}' build folder '${s.subdir || '.'}' is absent from pushed commit`);
+      ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+      if (s.type === 'static' || s.type === 'react') {
+        const nc = path.join(ctxDir, 'nginx.conf');
+        if (!fs.existsSync(nc)) fs.writeFileSync(nc, nginxConf(null));
+      }
+      lines.push(`  ${s.name}:`, '    build:', `      context: ${JSON.stringify(ctxDir.replace(/\\/g, '/'))}`, '      dockerfile: Dockerfile');
+    }
+    const override = path.join(stageRoot, 'compose.override.yml');
+    fs.writeFileSync(override, lines.join('\n') + '\n');
+    return {
+      codeDir: stageCode,
+      compose: `${COMPOSE_BIN} -f "${path.join(dir, 'docker-compose.yml')}" -f "${override}"`,
+      sha: pushedSha.slice(0, 7),
+      cleanup
+    };
+  } catch (e) {
+    cleanup();
+    throw e;
+  }
 }
 async function recordDeploy(id, rec) {
   try {
@@ -324,19 +382,48 @@ async function autodetectHome(id) {
     }
   } catch (e) { console.error(id, 'autodetect:', e.message); }
 }
-async function deploy(id, opts = {}) {
-  // one build per app at a time: overlapping `up --build` runs fight over
-  // container names and lose ("is already in use")
-  if (deployLocks.has(id)) throw new Error('deploy already in progress - wait for it to finish');
+function deploy(id, opts = {}) {
+  const previous = deployQueues.get(id) || Promise.resolve();
+  const run = previous.catch(() => {}).then(() => deployNow(id, opts));
+  deployQueues.set(id, run);
+  const clear = () => { if (deployQueues.get(id) === run) deployQueues.delete(id); };
+  run.then(clear, clear);
+  return run;
+}
+
+async function deployNow(id, opts = {}) {
+  // The queue above serializes builds. Keep the lock as live UI state and as a
+  // defensive invariant against any future call that bypasses the queue.
+  if (deployLocks.has(id)) throw new Error('internal deploy queue violation');
   deployLocks.add(id);
   const opSource = ['webhook', 'poll', 'local-push', 'manual'].includes(opts.source) ? opts.source : 'manual';
   deployOps.set(id, { source: opSource, startedAt: Date.now() });
   pushEvents.delete(id);
+  let localStage = null;
   try {
   const dir = appDir(APPS_DIR, id);
   const meta = load().apps.find(a => a.id === id);
   const codeDir = path.join(dir, 'code');
-  if (meta && meta.repoUrl) {
+  if (!meta) throw new Error('unknown app');
+  let buildCodeDir = codeDir;
+  let composeCmd = COMPOSE_BIN;
+  let sourceSha = null;
+
+  if (opSource === 'local-push') {
+    try {
+      localStage = createLocalPushStage(dir, meta, opts.pushedSha, opts.pushedBranch);
+      buildCodeDir = localStage.codeDir;
+      composeCmd = localStage.compose;
+      sourceSha = localStage.sha;
+    } catch (e) {
+      await recordDeploy(id, {
+        sha: /^[0-9a-f]{40}$/.test(opts.pushedSha || '') ? opts.pushedSha.slice(0, 7) : null,
+        at: new Date().toISOString(), status: 'error',
+        error: ('local checkout failed - running containers untouched: ' + e.message).slice(-500)
+      });
+      throw e;
+    }
+  } else if (meta.repoUrl) {
     const isSsh = /^(git@|ssh:\/\/)/i.test(meta.repoUrl);
     const url = isSsh ? meta.repoUrl : gh.authUrlFor(meta, meta.repoUrl);
     const env = isSsh ? appGitEnv(dir) : process.env;
@@ -353,49 +440,9 @@ async function deploy(id, opts = {}) {
         fs.rmSync(codeDir, { recursive: true, force: true });
         fs.renameSync(codeDir + '.new', codeDir);
       } else {
-        // Local-push flow: the hook never touches files (a second push once
-        // rewrote the tree mid-build), so align here under the deploy lock.
-        // Fetch the pushed branch from the bare repo (local, offline): pushed
-        // code wins. Tree already matching = move HEAD only (nothing lost);
-        // extra box edits = stashed (restorable), untracked blockers moved aside.
-        const pushedSha = /^[0-9a-f]{40}$/.test(opts.pushedSha || '') ? opts.pushedSha : null;
-        const pushedBranch = /^[A-Za-z0-9._/-]{1,64}$/.test(opts.pushedBranch || '') ? opts.pushedBranch : null;
-        const bareRepo = path.join(dir, 'repo.git');
-        let syncedPush = false;
-        if (pushedSha && pushedBranch && fs.existsSync(bareRepo)) {
-          try {
-            await sh(`git fetch "${bareRepo}" "${pushedBranch}"`, codeDir, env);
-            const fetched = execSync('git rev-parse FETCH_HEAD', { cwd: codeDir }).toString().trim();
-            if (fetched === pushedSha) {
-              const head = execSync('git rev-parse HEAD', { cwd: codeDir }).toString().trim();
-              if (head !== fetched) {
-                // Move HEAD/index onto the pushed commit FIRST (tree untouched) so
-                // the untracked scan below is accurate - against a stale HEAD,
-                // pushed-tracked files look untracked and would be swept away.
-                execSync(`git reset "${fetched}"`, { cwd: codeDir });
-                let treeClean = false;
-                try { execSync('git diff --quiet FETCH_HEAD --', { cwd: codeDir }); treeClean = true; } catch {}
-                if (!treeClean) {
-                  try { await sh('git stash push -u -m "minipass pre-push backup"', codeDir, env); } catch {}
-                  const out = await sh('git ls-files --others --exclude-standard', codeDir, env);
-                  for (const f of out.split('\n').map(s => s.trim()).filter(Boolean)) {
-                    try {
-                      execSync(`git cat-file -e FETCH_HEAD:"${f}"`, { cwd: codeDir });
-                      fs.renameSync(path.join(codeDir, f), path.join(codeDir, `${f}.panel-backup-${Date.now()}`));
-                    } catch {}
-                  }
-                  await sh(`git reset --hard "${fetched}"`, codeDir, env);
-                }
-              }
-              syncedPush = true;
-            }
-          } catch {}
-        }
-        if (!syncedPush) {
-          let branch = (meta.github && meta.github.branch) || 'main';
-          try { branch = execSync('git branch --show-current', { cwd: codeDir }).toString().trim() || branch; } catch {}
-          await sh(`git pull --ff-only "${url}" "${branch}"`, codeDir, env);
-        }
+        let branch = (meta.github && meta.github.branch) || 'main';
+        try { branch = execSync('git branch --show-current', { cwd: codeDir }).toString().trim() || branch; } catch {}
+        await sh(`git pull --ff-only "${url}" "${branch}"`, codeDir, env);
       }
     } catch (e) {
       const msg = redactUrl(e.stderr ? String(e.stderr) : e.message);
@@ -409,7 +456,7 @@ async function deploy(id, opts = {}) {
   // Re-seed when the repo shape is unambiguous, fail loud otherwise.
   try {
     for (const s of svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false)) {
-      const ctxDir = path.join(dir, 'code', s.subdir || '');
+      const ctxDir = path.join(buildCodeDir, s.subdir || '');
       ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR);
       if (s.type === 'static' || s.type === 'react') {
         try {
@@ -418,7 +465,7 @@ async function deploy(id, opts = {}) {
       }
     }
   } catch (e) {
-    const shaSe = await currentSha(dir);
+    const shaSe = sourceSha || await currentSha(dir);
     await recordDeploy(id, { sha: shaSe, at: new Date().toISOString(), status: 'error', error: ('missing build file - running containers untouched: ' + e.message).slice(-500) });
     throw e;
   }
@@ -458,7 +505,7 @@ async function deploy(id, opts = {}) {
     if (!proxy && envNow.API_HOST && envNow.API_PORT) proxy = { host: envNow.API_HOST, port: envNow.API_PORT };
     const linkedSvc = (ab && ab.service) || (fronts[0] && fronts[0].name);
     for (const f of fronts) {
-      const ctx = path.join(codeDir, f.subdir || '');
+      const ctx = path.join(buildCodeDir, f.subdir || '');
       const df = path.join(ctx, 'Dockerfile');
       if (fs.existsSync(df)) {
         const first = (fs.readFileSync(df, 'utf8').split('\n')[0] || '');
@@ -492,14 +539,14 @@ async function deploy(id, opts = {}) {
       if (mAuto) { mAuto.apiBackend = meta.apiBackend; save(dbAuto); }
     }
   } catch {}
-  const sha = await currentSha(dir);
+  const sha = sourceSha || await currentSha(dir);
   const stamp = () => new Date().toISOString();
   // atomic deploy: snapshot running images, build WITHOUT touching containers,
   // swap only on success, health-gate the new containers, roll back on failure.
   const snaps = await snapshotImages(dir);
   const scopeSuffix = scope ? ` ${scope}` : '';
   try {
-    await sh(`${COMPOSE_BIN} build${scopeSuffix} > "${buildLog}" 2>&1`, dir);
+    await sh(`${composeCmd} build${scopeSuffix} > "${buildLog}" 2>&1`, dir);
   } catch (e) {
     let tail = '';
     try { tail = fs.readFileSync(buildLog, 'utf8').split('\n').slice(-25).join('\n'); } catch {}
@@ -511,7 +558,7 @@ async function deploy(id, opts = {}) {
   const migrateCmd = String((meta && meta.migrateCmd) || '').trim();
   if (migrateCmd) {
     try {
-      await sh(`${COMPOSE_BIN} run --rm app ${migrateCmd} >> "${buildLog}" 2>&1`, dir);
+      await sh(`${composeCmd} run --rm app ${migrateCmd} >> "${buildLog}" 2>&1`, dir);
     } catch (e) {
       let tail = '';
       try { tail = fs.readFileSync(buildLog, 'utf8').split('\n').slice(-25).join('\n'); } catch {}
@@ -520,7 +567,7 @@ async function deploy(id, opts = {}) {
     }
   }
   try {
-    await sh(`${COMPOSE_BIN} up -d --remove-orphans${scopeSuffix} >> "${buildLog}" 2>&1`, dir);
+    await sh(`${composeCmd} up -d --remove-orphans${scopeSuffix} >> "${buildLog}" 2>&1`, dir);
   } catch (e) {
     await recordDeploy(id, { sha, at: stamp(), status: 'error', error: String(e.message).slice(-500) });
     throw e;
@@ -535,6 +582,7 @@ async function deploy(id, opts = {}) {
   autodetectHome(id).catch(e => console.error(id, e.message));
   return true;
   } finally {
+    if (localStage) localStage.cleanup();
     deployLocks.delete(id);
     deployOps.delete(id);
   }
@@ -876,18 +924,18 @@ app.post('/api/github/link', async (req, res) => {
     res.json({ ok: true, repoUrl: meta.repoUrl, webhook: 'manual - paste the webhook URL into repo Settings → Webhooks' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-// Push-to-deploy: bare repo per app on the host. `git push` to it checks out
-// into code/ and triggers a rebuild - no GitHub needed on localhost/LAN.
+// Push-to-deploy: bare repo per app on the host. The hook only notifies the
+// panel; deploy checks out an isolated worktree and never mutates code/.
 app.post('/api/apps/:id/git-init', (req, res) => {
   try {
     const id = req.params.id;
     const dir = appDir(APPS_DIR, id);
     if (!fs.existsSync(path.join(dir, 'docker-compose.yml'))) return res.status(404).json({ error: 'unknown app' });
     const repo = path.join(dir, 'repo.git');
+    if (!fs.existsSync(path.join(repo, 'HEAD'))) execFileSync('git', ['init', '--bare', repo], { stdio: 'ignore' });
     const port = process.env.PORT || PORT;
     // Hook only pings + triggers (never touches files): the pushed sha/branch
-    // ride the deploy POST, and deploy aligns the tree itself under its lock.
-    // Checking out here once let a second push rewrite the tree mid-build.
+    // ride the deploy POST, and deploy builds an isolated checkout from repo.git.
     const hook = `#!/bin/sh\n# minipass push-to-deploy: notify + trigger rebuild (deploy owns the tree)\nLOG="${path.join(repo, 'push.log')}"\n{\necho "=== $(date -u +%FT%TZ) push received ==="\nBRANCH=""\nNEWREV=""\nwhile read oldrev newrev ref; do\n  case "$ref" in refs/heads/*) BRANCH="\${ref#refs/heads/}"; NEWREV="$newrev";; esac\ndone\nBRANCH="\${BRANCH:-main}"\necho "pushed $BRANCH $NEWREV"\ncurl -s -m 5 -X POST -H 'Content-Type: application/json' -d '{"phase":"received"}' http://localhost:${port}/api/apps/${id}/git-push-event >> "$LOG" 2>&1\nnohup curl -s -X POST -H 'Content-Type: application/json' -d "{\\"source\\":\\"local-push\\",\\"sha\\":\\"$NEWREV\\",\\"branch\\":\\"$BRANCH\\"}" http://localhost:${port}/api/apps/${id}/deploy >> "$LOG" 2>&1 &\n} >> "$LOG" 2>&1\n`;
     fs.writeFileSync(path.join(repo, 'hooks', 'post-receive'), hook);
     fs.chmodSync(path.join(repo, 'hooks', 'post-receive'), 0o755);
@@ -899,8 +947,8 @@ app.post('/api/apps/:id/git-init', (req, res) => {
 });
 // Disable local push-to-deploy: drop the hook, keep the repo (pushes land but
 // don't rebuild). Re-enable rewrites the hook.
-// Push receipt from the local-git hook (fires before checkout finishes, so the
-// UI can show receiving). Fixed phase string only - nothing reaches a shell.
+// Push receipt from the local-git hook (fires before the queued deploy starts).
+// Fixed phase string only - nothing reaches a shell.
 app.post('/api/apps/:id/git-push-event', (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta) return res.status(404).json({ error: 'unknown app' });
@@ -1295,15 +1343,15 @@ app.get('/api/apps/:id/migrate-suggest', (req, res) => {
     res.json({ suggestions: out.slice(0, 8) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-// Sync box tree to GitHub: fetch + reset --hard to the tracked branch.
-// Untracked files that would be overwritten are moved aside (*.panel-backup-*),
-// never deleted. Destructive to box edits by design - frontend gates it behind
-// a type-the-name confirm. Marks dirty so redeploy re-enables.
+// Sync box tree to GitHub. All tracked + untracked box edits are first saved in
+// a named stash, then the checkout is reset to the authoritative branch. Existing
+// stashes and app data/volumes are untouched.
 app.post('/api/apps/:id/sync-github', async (req, res) => {
   try {
     const db_ = load();
     const meta = db_.apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
+    if (deployQueues.has(meta.id) || deployLocks.has(meta.id)) return res.status(409).json({ error: 'deploy in progress - sync after it finishes' });
     if (!meta.repoUrl) return res.status(400).json({ error: 'no repo linked' });
     const dir = appDir(APPS_DIR, meta.id);
     const codeDir = path.join(dir, 'code');
@@ -1312,22 +1360,19 @@ app.post('/api/apps/:id/sync-github', async (req, res) => {
     const url = isSsh ? meta.repoUrl : gh.authUrlFor(meta, meta.repoUrl);
     const env = isSsh ? appGitEnv(dir) : process.env;
     const branch = (meta.github && meta.github.branch) || 'main';
-    const moved = [];
+    let backup = null;
     try {
-      await sh(`git fetch "${url}" "${branch}"`, codeDir, env);
-      const out = await sh('git ls-files --others --exclude-standard', codeDir, env);
-      for (const f of out.split('\n').map(s => s.trim()).filter(Boolean)) {
-        try {
-          execSync(`git cat-file -e FETCH_HEAD:"${f}"`, { cwd: codeDir });
-          const bk = `${f}.panel-backup-${Date.now()}`;
-          fs.renameSync(path.join(codeDir, f), path.join(codeDir, bk));
-          moved.push(bk);
-        } catch {}
+      const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: codeDir, encoding: 'utf8' }).trim();
+      if (dirty) {
+        const label = `minipass pre-github-sync ${new Date().toISOString()}`;
+        execFileSync('git', ['stash', 'push', '-u', '-m', label], { cwd: codeDir, env, stdio: 'pipe' });
+        backup = execFileSync('git', ['rev-parse', '--short', 'stash@{0}'], { cwd: codeDir, env, encoding: 'utf8' }).trim();
       }
+      await sh(`git fetch "${url}" "${branch}"`, codeDir, env);
       await sh(`git reset --hard FETCH_HEAD`, codeDir, env);
       const sha = execSync('git rev-parse --short HEAD', { cwd: codeDir }).toString().trim();
       await markDirty(meta.id, 'synced to github');
-      res.json({ ok: true, branch, sha, movedAside: moved });
+      res.json({ ok: true, branch, sha, backup });
     } catch (e) {
       return res.json({ ok: false, error: redactUrl(e.stderr ? String(e.stderr) : e.message) });
     }

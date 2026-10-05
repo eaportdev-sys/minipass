@@ -40,7 +40,7 @@ async function syncGithub() {
   toast('syncing to GitHub…');
   try {
     const r = await (await fetch(`/api/apps/${currentApp}/sync-github`, { method: 'POST' })).json();
-    toast(r.ok ? (`synced to ${r.sha}${r.movedAside && r.movedAside.length ? ` (${r.movedAside.length} file(s) moved aside)` : ''} - redeploy to apply`) : ('sync failed: ' + (r.error || 'unknown')), !!r.ok);
+    toast(r.ok ? (`synced to ${r.sha}${r.backup ? ` (box edits saved in stash ${r.backup})` : ''} - redeploy to apply`) : ('sync failed: ' + (r.error || 'unknown')), !!r.ok);
     refresh(); loadDeployStatus(); loadServices();
   } catch (e) { toast('sync failed: ' + e.message, false); }
 }
