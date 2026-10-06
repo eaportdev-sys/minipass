@@ -2,6 +2,7 @@ let currentApp = null;
 let serviceCheckTimer = null;
 let serviceCheckSeq = 0;
 let appsRefreshSeq = 0;
+let deployStatusSeq = 0;
 // Global 401 tripwire: any data call that comes back unauthorized drops to the
 // login view. Login/setup endpoints are excluded so wrong passwords just show
 // their own error instead of looping.
@@ -110,7 +111,7 @@ function rememberSiteRoute(id, tab) {
   const hash = `site=${encodeURIComponent(id)}&tab=${encodeURIComponent(tab)}`;
   history.replaceState(null, '', `${location.pathname}${location.search}#${hash}`);
 }
-function openSite(id, tab = 'overview', remember = true, appsLoaded = false) {
+function openSite(id, tab = 'overview', remember = true) {
   currentApp = id;
   showView('site');
   tab = SITE_TABS.has(tab) ? tab : 'overview';
@@ -130,8 +131,7 @@ function openSite(id, tab = 'overview', remember = true, appsLoaded = false) {
   document.getElementById('migrateOut').textContent = '';
   serviceCheckSeq++;
   if (serviceCheckTimer) clearTimeout(serviceCheckTimer);
-  const ready = appsLoaded ? Promise.resolve() : refresh();
-  ready.then(() => { showSiteTab(tab, false); loadDeployStatus(); loadEnv(); loadServices(); loadDatabases(); loadMigrateSuggest(); });
+  refresh().then(() => { showSiteTab(tab, false); loadDeployStatus(); loadEnv(); loadServices(); loadDatabases(); loadMigrateSuggest(); });
 }
 function appUrl(a) {
   if (!a.hostPort) return null;
@@ -316,11 +316,14 @@ function runtimeVersion(container, service, liveDeploy) {
 }
 async function loadDeployStatus() {
   if (!currentApp) return;
+  const appId = currentApp;
+  const seq = ++deployStatusSeq;
   const info = document.getElementById('deployInfo');
   const list = document.getElementById('containerList');
   if (!info.dataset.live) info.textContent = 'loading…';
   try {
-    const s = await (await fetch(`/api/apps/${currentApp}/status`)).json();
+    const s = await (await fetch(`/api/apps/${appId}/status`)).json();
+    if (seq !== deployStatusSeq || currentApp !== appId) return;
     if (s.error) { info.textContent = s.error; list.innerHTML = ''; return; }
     info.dataset.live = '1';
     const d = s.lastDeploy;
@@ -363,6 +366,7 @@ async function loadDeployStatus() {
     document.getElementById('deployHist').innerHTML = deployHistoryMarkup(hist);
     updatePowerStates(s);
   } catch {
+    if (seq !== deployStatusSeq || currentApp !== appId) return;
     if (!info.dataset.live) info.textContent = 'unreachable';
     setPowerState('sitePower', 'failed', 'Unreachable');
     setPowerState('hookPower', 'failed', 'Unknown');
@@ -2009,7 +2013,7 @@ async function authBoot() {
   }
   const apps = await refresh();
   const route = siteRoute();
-  if (route && apps.some(a => a.id === route.id)) openSite(route.id, route.tab, false, true);
+  if (route && apps.some(a => a.id === route.id)) openSite(route.id, route.tab, false);
   version();
   ghStatus();
 }

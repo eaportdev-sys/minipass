@@ -1012,11 +1012,17 @@ app.get('/api/apps/:id/build-log', (req, res) => {
   } catch { res.type('text/plain').send('(no builds recorded yet)'); }
 });
 app.get('/api/apps/:id/status', async (req, res) => {
-  const meta = load().apps.find(a => a.id === req.params.id);
+  let meta = load().apps.find(a => a.id === req.params.id);
+  if (!meta) return res.status(404).json({ error: 'unknown app' });
+  const containers = await appContainers(meta.id);
+  // appContainers shells out to Docker and can overlap the end of a deploy.
+  // Reload metadata afterwards so a slow request never returns pre-deploy
+  // history after a newer request has already rendered the successful record.
+  meta = load().apps.find(a => a.id === req.params.id);
   if (!meta) return res.status(404).json({ error: 'unknown app' });
   const history = meta.deployHistory || [];
   const liveDeploy = meta.lastGoodDeploy || history.find(h => h.status === 'ok') || (meta.lastDeploy && meta.lastDeploy.status === 'ok' ? meta.lastDeploy : null);
-  res.json({ app: pubApp(meta), services: publicServices(meta, appDir(APPS_DIR, meta.id)), lastDeploy: meta.lastDeploy || null, liveDeploy, history: history.slice(0, 5), containers: await appContainers(meta.id), deploying: deployLocks.has(meta.id), deployOp: deployOps.get(meta.id) || null, pushEvent: pushEvents.get(meta.id) || null });
+  res.json({ app: pubApp(meta), services: publicServices(meta, appDir(APPS_DIR, meta.id)), lastDeploy: meta.lastDeploy || null, liveDeploy, history: history.slice(0, 5), containers, deploying: deployLocks.has(meta.id), deployOp: deployOps.get(meta.id) || null, pushEvent: pushEvents.get(meta.id) || null });
 });
 async function appContainers(id) {
   let containers = [];
