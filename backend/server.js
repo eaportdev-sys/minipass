@@ -508,6 +508,12 @@ app.delete('/api/apps/pending/:id', (req, res) => {
 });
 
 const redactUrl = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
+const LEGACY_PANEL_PHP_DOCKERFILE = [
+  'FROM php:8.2-apache',
+  'WORKDIR /var/www/html',
+  'COPY . /var/www/html/',
+  'EXPOSE 80'
+].join('\n');
 const deployLocks = new Set();
 // Every trigger for one site goes through the same promise chain. A push that
 // arrives during a build waits its turn instead of failing with "already in progress".
@@ -843,6 +849,19 @@ async function deployNow(id, opts = {}) {
         }
       }
       ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+      // Refresh panel-owned PHP images so existing sites gain standard Apache
+      // rewrite support. The pre-marker legacy file is recognized only by an
+      // exact byte-normalized match; repository/custom Dockerfiles stay sacred.
+      if (s.type === 'php') {
+        const df = path.join(ctxDir, 'Dockerfile');
+        const tpl = path.join(TEMPLATES_DIR, 'php', 'Dockerfile');
+        try {
+          const current = fs.readFileSync(df, 'utf8').replace(/\r\n/g, '\n').trim();
+          if ((current.startsWith('# minipass template') || current === LEGACY_PANEL_PHP_DOCKERFILE) && fs.existsSync(tpl)) {
+            fs.copyFileSync(tpl, df);
+          }
+        } catch {}
+      }
       if (s.type === 'static' || s.type === 'react') {
         try {
           if (!fs.existsSync(path.join(ctxDir, 'nginx.conf'))) fs.writeFileSync(path.join(ctxDir, 'nginx.conf'), nginxConf(null));

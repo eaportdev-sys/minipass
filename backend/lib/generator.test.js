@@ -51,6 +51,10 @@ try {
   assert.deepEqual(sqlDatabaseHints('-- MariaDB dump 10.19'), ['mariadb']);
   assert.deepEqual(sqlDatabaseHints('COLLATE=utf8mb4_0900_ai_ci;'), []);
 
+  const phpDockerfile = fs.readFileSync(path.resolve(__dirname, '../../templates/php/Dockerfile'), 'utf8');
+  assert(phpDockerfile.startsWith('# minipass template'), 'PHP Dockerfile is marked as panel-owned');
+  assert(phpDockerfile.includes('RUN a2enmod rewrite'), 'PHP image supports repository .htaccess rewrites');
+
   const appsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-create-docker-'));
   try {
     const pending = path.join(appsDir, 'sample');

@@ -12,7 +12,7 @@
   <aside class="sidebar">
     <div class="brand">mini<span>pass</span></div>
     <nav>
-      <button class="navitem active" data-view="websites" onclick="showView('websites')">Websites</button>
+      <button class="navitem active" data-view="websites" onclick="backToSites()">Websites</button>
       <button class="navitem" data-view="terminal" onclick="showView('terminal')">Terminal</button>
       <button class="navitem" data-view="panel" onclick="showView('panel')">Upgrade</button>
     </nav>
@@ -211,7 +211,6 @@
           </div>
           <div class="card deploy-source-card">
             <div class="deploy-source-head"><div><b>Push from your machine</b><div class="meta">Direct SSH remote</div></div><div id="localPower" class="source-power is-checking"><span class="power-symbol">⏻</span><span class="power-label">Checking</span></div></div>
-            <div class="meta deploy-source-description">Push straight to this server. Deploys use an isolated checkout and leave the GitHub working tree untouched.</div>
             <div id="localGitBox" class="local-git-box"><button class="btn primary" onclick="initLocalGit()">enable local git push</button></div>
             <div id="localHist" class="source-last"></div>
             <div id="localProg" class="deploy-progress" style="display:none"><div class="deploy-progress-head"><span id="localStage">deploying…</span><span><b id="localPct"></b> <span id="localTime"></span></span></div><div class="progress"><div id="localBar"></div></div></div>

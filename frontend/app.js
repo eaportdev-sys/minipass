@@ -25,6 +25,7 @@ async function refresh() {
     tsel.innerHTML = apps.map(a => `<option value="${a.id}">${a.id}</option>`).join('');
     if (apps.some(a => a.id === prev)) tsel.value = prev;
   }
+  return apps;
 }
 function appCardMarkup(a) {
   const services = appPublishedServices(a);
@@ -97,9 +98,23 @@ async function hydrateAppCards(apps, seq) {
     }
   }));
 }
-function openSite(id) {
+const SITE_TABS = new Set(['overview', 'setup', 'environment', 'deploy', 'files', 'logs', 'terminal']);
+function siteRoute() {
+  const p = new URLSearchParams(String(location.hash || '').replace(/^#/, ''));
+  const id = p.get('site');
+  if (!/^[a-z0-9-]+$/.test(id || '')) return null;
+  const tab = SITE_TABS.has(p.get('tab')) ? p.get('tab') : 'overview';
+  return { id, tab };
+}
+function rememberSiteRoute(id, tab) {
+  const hash = `site=${encodeURIComponent(id)}&tab=${encodeURIComponent(tab)}`;
+  history.replaceState(null, '', `${location.pathname}${location.search}#${hash}`);
+}
+function openSite(id, tab = 'overview', remember = true, appsLoaded = false) {
   currentApp = id;
   showView('site');
+  tab = SITE_TABS.has(tab) ? tab : 'overview';
+  if (remember) rememberSiteRoute(id, tab);
   document.getElementById('filePath').value = '';
   document.getElementById('fileEdit').value = '';
   document.getElementById('fileOut').textContent = '';
@@ -115,7 +130,8 @@ function openSite(id) {
   document.getElementById('migrateOut').textContent = '';
   serviceCheckSeq++;
   if (serviceCheckTimer) clearTimeout(serviceCheckTimer);
-  refresh().then(() => { showSiteTab('overview'); loadDeployStatus(); loadEnv(); loadServices(); loadDatabases(); loadMigrateSuggest(); });
+  const ready = appsLoaded ? Promise.resolve() : refresh();
+  ready.then(() => { showSiteTab(tab, false); loadDeployStatus(); loadEnv(); loadServices(); loadDatabases(); loadMigrateSuggest(); });
 }
 function appUrl(a) {
   if (!a.hostPort) return null;
@@ -165,11 +181,14 @@ async function saveHome() {
   toast(r.ok ? 'open path saved' : (r.error || 'failed'), !!r.ok);
   refresh(); loadDeployStatus(); loadServices();
 }
-async function refreshSiteData() {
-  if (!currentApp) return;
-  await Promise.allSettled([
-    refresh(), loadDeployStatus(), loadServices(), loadDatabases(), loadMigrateSuggest()
-  ]);
+async function refreshSiteData(expectedApp = currentApp) {
+  if (!expectedApp || currentApp !== expectedApp) return;
+  // Header/list refreshes can rebuild parts of the active site. Finish that
+  // first, then render status/history from the completed deployment record.
+  await refresh();
+  if (currentApp !== expectedApp) return;
+  await loadDeployStatus();
+  await Promise.allSettled([loadServices(), loadDatabases(), loadMigrateSuggest()]);
 }
 async function saveMigrate() {
   if (!currentApp) return;
@@ -350,12 +369,17 @@ async function loadDeployStatus() {
     setPowerState('localPower', 'failed', 'Unknown');
   }
 }
-function backToSites() { currentApp = null; showView('websites'); refresh(); }
+function backToSites() {
+  currentApp = null;
+  history.replaceState(null, '', `${location.pathname}${location.search}`);
+  showView('websites');
+  refresh();
+}
 function fillSiteHeader(a) {
   if (!a) return;
   document.getElementById('siteName').textContent = a.id;
   document.getElementById('siteBadges').innerHTML =
-    `<span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}${a.hostPort ? `<span class="badge">:${a.hostPort}</span>` : ''}${a.subdir ? `<span class="badge">/${a.subdir}</span>` : ''}${a.github ? `<span class="badge">git: ${a.github.login ? a.github.login + '/' : ''}${a.github.repo}</span>` : ''}`;
+    `<span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}${a.hostPort ? `<span class="badge">:${a.hostPort}</span>` : ''}${a.subdir ? `<span class="badge">/${a.subdir}</span>` : ''}${a.github ? `<span class="badge">git: ${a.github.login ? a.github.login + '/' : ''}${a.github.repo}${a.github.branch ? '@' + a.github.branch : ''}</span>` : ''}`;
   const url = appUrl(a);
   document.getElementById('siteMeta').innerHTML = url ? `live URL: <a href="${url}" target="_blank">${url.replace(/^http:\/\//, '')}</a>` : 'no published port';
   document.getElementById('siteRedeploy').onclick = () => { showSiteTab('deploy'); deploy(a.id); };
@@ -408,14 +432,14 @@ function fillGithubAutomation(a) {
   if (a.github.enabled !== true) {
     off.style.display = 'block'; on.style.display = 'none'; enable.style.display = '';
     title.textContent = 'GitHub automation is disabled';
-    meta.textContent = `${a.github.repo} stays linked for manual repository redeploys. No webhook or polling deploys will run.`;
+    meta.textContent = `${a.github.repo}${a.github.branch ? '@' + a.github.branch : ''} stays linked for manual repository redeploys. No webhook or polling deploys will run.`;
     return;
   }
   off.style.display = 'none'; on.style.display = 'block';
   const minutes = parseInt(a.github.pollMinutes, 10) || 0;
   document.getElementById('hookUrl').textContent = `${location.origin}/webhook/${a.id}?token=${a.token}`;
   document.getElementById('pollSel').value = String(minutes);
-  document.getElementById('pollState').textContent = `tracking ${a.github.repo}@${String(a.github.sha || '?').slice(0, 7)}${minutes > 0 ? ` — checked every ${minutes}m` : ' — polling off'}`;
+  document.getElementById('pollState').textContent = `tracking ${a.github.repo}${a.github.branch ? '@' + a.github.branch : ''} · ${String(a.github.sha || '?').slice(0, 7)}${minutes > 0 ? ` — checked every ${minutes}m` : ' — polling off'}`;
 }
 async function copyText(text) {
   // navigator.clipboard needs a secure context (https/localhost) - plain LAN
@@ -790,8 +814,10 @@ async function saveAllow() {
 async function fillGitConn(a) {
   const g = a.github || {};
   const state = document.getElementById('gitConnState');
-  if (g.hasToken) state.textContent = 'site token stored •••• (used first)';
-  else if (g.login) state.textContent = 'panel account: ' + g.login + (g.repo ? ' → ' + g.repo : '');
+  const source = g.repo ? `${g.repo}${g.branch ? '@' + g.branch : ''}` : '';
+  if (g.hasToken) state.textContent = 'site token stored •••• (used first)' + (source ? ' → ' + source : '');
+  else if (g.login) state.textContent = 'panel account: ' + g.login + (source ? ' → ' + source : '');
+  else if (source) state.textContent = 'public GitHub repository: ' + source;
   else if (a.repoUrl && /^(git@|ssh:\/\/)/i.test(a.repoUrl)) state.textContent = 'ssh deploy key (see repo key in webhook section)';
   else state.textContent = 'not connected';
   try {
@@ -882,7 +908,8 @@ async function setGithubAutomation(enabled) {
   await refresh();
   loadDeployStatus();
 }
-function showSiteTab(t) {
+function showSiteTab(t, remember = true) {
+  if (!SITE_TABS.has(t)) t = 'overview';
   document.querySelectorAll('.sitetab').forEach(s => s.style.display = 'none');
   document.getElementById('tab-' + t).style.display = 'block';
   document.querySelectorAll('.tabbtn').forEach(b => {
@@ -891,6 +918,7 @@ function showSiteTab(t) {
     b.setAttribute('aria-selected', active ? 'true' : 'false');
   });
   if (!currentApp) return;
+  if (remember) rememberSiteRoute(currentApp, t);
   if (t === 'setup') loadDatabases();
   if (t === 'environment') loadEnv();
   if (t === 'files') listFiles('');
@@ -1212,7 +1240,7 @@ async function runDeploy(id, services, local = false) {
     tail.textContent = (outcome && (outcome.error || '')) || 'failed';
     toast('redeploy failed: ' + ((outcome && outcome.error) || 'unknown'), false);
   }
-  await refreshSiteData();
+  await refreshSiteData(id);
   setTimeout(() => { prog.style.display = 'none'; }, 15000);
 }
 function toast(msg, ok = true) {
@@ -1979,7 +2007,9 @@ async function authBoot() {
     showView('panel');
     history.replaceState(null, '', location.pathname);
   }
-  refresh();
+  const apps = await refresh();
+  const route = siteRoute();
+  if (route && apps.some(a => a.id === route.id)) openSite(route.id, route.tab, false, true);
   version();
   ghStatus();
 }
