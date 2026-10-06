@@ -7,6 +7,7 @@ const { normDbs } = require('./generator');
 const TOOLS = {
   postgres: { label: 'pgAdmin', image: 'dpage/pgadmin4:9.18.0', port: 80 },
   mysql: { label: 'phpMyAdmin', image: 'phpmyadmin:5.2.3-apache', port: 80 },
+  mariadb: { label: 'phpMyAdmin', image: 'phpmyadmin:5.2.3-apache', port: 80 },
   mongo: { label: 'mongo-express', image: 'mongo-express:1.0.2-20-alpine3.19', port: 8081 },
   redis: { label: 'Redis Commander', image: 'rediscommander/redis-commander:latest', port: 8081 }
 };
@@ -79,6 +80,12 @@ function databaseConfig(meta, dir, type) {
     return { service: host, host, port: parseInt(env.MYSQL_PORT || (!prefixed && env.DB_PORT), 10) || 3306,
       user: env.MYSQL_USER || env.DB_USER, pass: env.MYSQL_PASSWORD || env.DB_PASSWORD, db: env.MYSQL_DB || env.DB_NAME };
   }
+  if (type === 'mariadb') {
+    const prefixed = !!env.MARIADB_USER;
+    const host = env.MARIADB_HOST || (!prefixed && env.DB_HOST) || fallback;
+    return { service: host, host, port: parseInt(env.MARIADB_PORT || (!prefixed && env.DB_PORT), 10) || 3306,
+      user: env.MARIADB_USER || env.DB_USER, pass: env.MARIADB_PASSWORD || env.DB_PASSWORD, db: env.MARIADB_DB || env.DB_NAME };
+  }
   if (type === 'mongo') {
     const u = parsedUrl(env.MONGO_URL);
     const host = env.MONGO_HOST || u.host || fallback;
@@ -142,7 +149,7 @@ function describe(meta, dir, containers) {
     const saved = meta.dbTools && meta.dbTools[type];
     const name = safeName(meta.id, type);
     return {
-      type, service, label: ({ postgres: 'PostgreSQL', mysql: 'MySQL', mongo: 'MongoDB', redis: 'Redis' })[type],
+      type, service, label: ({ postgres: 'PostgreSQL', mysql: 'MySQL', mariadb: 'MariaDB', mongo: 'MongoDB', redis: 'Redis' })[type],
       state: c ? c.state : 'not running', status: c ? c.status : '', image: c ? c.image : null,
       tool: TOOLS[type].label, toolPort: saved && saved.port, toolState: containerState(name),
       toolExpiresAt: saved && saved.expiresAt
@@ -197,8 +204,8 @@ async function launch(id, meta, dir, type, hostPort) {
       '-e', 'PGADMIN_CONFIG_SERVER_MODE=False', '-e', 'PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False',
       '-e', 'PGADMIN_REPLACE_SERVERS_ON_STARTUP=True', '-e', 'PGPASS_FILE=/config/pgpass',
       '-v', `${f.servers}:/pgadmin4/servers.json:ro`, '-v', `${f.pgpass}:/config/pgpass:ro`, '-v', `${f.data}:/var/lib/pgadmin`);
-  } else if (type === 'mysql') {
-    args.push('-e', `PMA_HOST=${config.host}`, '-e', `PMA_PORT=${config.port}`, '-e', `PMA_USER=${config.user}`, '-e', `PMA_PASSWORD=${config.pass}`, '-e', `PMA_VERBOSE=${id} MySQL`);
+  } else if (type === 'mysql' || type === 'mariadb') {
+    args.push('-e', `PMA_HOST=${config.host}`, '-e', `PMA_PORT=${config.port}`, '-e', `PMA_USER=${config.user}`, '-e', `PMA_PASSWORD=${config.pass}`, '-e', `PMA_VERBOSE=${id} ${type === 'mariadb' ? 'MariaDB' : 'MySQL'}`);
   } else if (type === 'mongo') {
     const auth = `${encodeURIComponent(config.user)}:${encodeURIComponent(config.pass)}`;
     args.push('-e', `ME_CONFIG_MONGODB_URL=mongodb://${auth}@${config.host}:${config.port}/${encodeURIComponent(config.db || '')}?authSource=admin`, '-e', 'ME_CONFIG_BASICAUTH_ENABLED=false');

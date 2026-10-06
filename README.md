@@ -12,12 +12,13 @@
 minipass turns a folder or git repo into a running site with one flow:
 
 - Pick a type: **static, react, node, php** (+ multi-service sites, one folder → N services)
-- Gets a container, local port (`8000+`), generated `.env`, optional database
+- Gets a container, local port (`8000+`), generated `.env`, optional PostgreSQL,
+  MySQL, MariaDB 11.8 LTS, MongoDB, or Redis database
 - Deploy by pushing git **directly to the box over SSH** (works with no GitHub),
   or connect GitHub (webhook or polling) when available
 - Atomic deploys: build first, swap only on success, health-check, auto-rollback
 - Extras: per-site terminal, file manager, environment editor, on-demand
-  database UIs (pgAdmin, phpMyAdmin, mongo-express, Redis Commander)
+  database UIs (pgAdmin, phpMyAdmin for MySQL/MariaDB, mongo-express, Redis Commander)
 
 No build step for the panel UI — plain HTML/JS/CSS. One Express API (`:3001`)
 serves the frontend and shells Docker for app containers.
@@ -157,7 +158,7 @@ running vs repo SHAs must match before trusting the UI version label.
 - **Site:** site page → Files tab → *Backups* → download `.tar.gz`
   (code, `.env`, compose files, local git remote; `node_modules` excluded).
 - **Database:** Setup → Attach databases → **dump** on any running database
-  card (`.sql` for PostgreSQL/MySQL, `.archive` for MongoDB, `.rdb` for Redis).
+  card (`.sql` for PostgreSQL/MySQL/MariaDB, `.archive` for MongoDB, `.rdb` for Redis).
 - Restore is manual (extract / import, then rescan) and copies must live
   **off this box**. Until automated backups exist: you operate it, you back it up.
 
@@ -174,7 +175,8 @@ no warranty.
 Panel code is MIT. Shipped alongside it: Node.js/Alpine + nginx + PHP base
 images, `express/cors/multer/ws` (MIT), xterm.js (MIT, CDN-pinned), pgAdmin,
 phpMyAdmin (GPL-2.0), mongo-express/redis-commander (MIT), and database images
-PostgreSQL (permissive), Redis 7 (BSD), MySQL 8 (**GPL-2.0**), MongoDB 7
+PostgreSQL (permissive), Redis 7 (BSD), MySQL 8 and MariaDB 11.8
+(**GPL-2.0**), MongoDB 7
 (**SSPL** — not OSI open source). Commercial users should clear MySQL/MongoDB
 for their own use case.
 

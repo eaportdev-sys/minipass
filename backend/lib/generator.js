@@ -7,13 +7,14 @@ const { appGitEnv } = require('./ssh');
 const DB_IMAGES = {
   postgres: 'postgres:16-alpine',
   mysql: 'mysql:8',
+  mariadb: 'mariadb:11.8',
   mongo: 'mongo:7',
   redis: 'redis:7-alpine'
 };
 
 // Default in-container port per type
 const TYPE_PORT = { node: 3000, react: 80, php: 80, static: 80 };
-const VALID_DBS = ['postgres', 'mysql', 'mongo', 'redis'];
+const VALID_DBS = ['postgres', 'mysql', 'mariadb', 'mongo', 'redis'];
 
 function normDbs(db) {
   const arr = Array.isArray(db) ? db : String(db == null ? 'none' : db).split(/[+,]/);
@@ -123,6 +124,10 @@ function dbEnv(db, name) {
     lines: [`DB_HOST=db`, `DB_PORT=3306`, `DB_NAME=${name}`, `DB_USER=${name}`, `DB_PASSWORD=${appPw}`, `MYSQL_ROOT_PASSWORD=${rootPw}`],
     compose: `  db:\n    image: ${DB_IMAGES.mysql}\n    restart: unless-stopped\n    environment:\n      MYSQL_DATABASE: ${name}\n      MYSQL_USER: ${name}\n      MYSQL_PASSWORD: ${appPw}\n      MYSQL_ROOT_PASSWORD: ${rootPw}\n    volumes:\n      - dbdata:/var/lib/mysql`
   };
+  if (db === 'mariadb') return {
+    lines: [`DB_HOST=db`, `DB_PORT=3306`, `DB_NAME=${name}`, `DB_USER=${name}`, `DB_PASSWORD=${appPw}`, `MARIADB_ROOT_PASSWORD=${rootPw}`],
+    compose: `  db:\n    image: ${DB_IMAGES.mariadb}\n    restart: unless-stopped\n    environment:\n      MARIADB_DATABASE: ${name}\n      MARIADB_USER: ${name}\n      MARIADB_PASSWORD: ${appPw}\n      MARIADB_ROOT_PASSWORD: ${rootPw}\n    volumes:\n      - dbdata:/var/lib/mysql`
+  };
   if (db === 'mongo') return {
     lines: [`MONGO_URL=mongodb://${name}:${appPw}@db:27017/${name}`],
     compose: `  db:\n    image: ${DB_IMAGES.mongo}\n    restart: unless-stopped\n    environment:\n      MONGO_INITDB_ROOT_USERNAME: ${name}\n      MONGO_INITDB_ROOT_PASSWORD: ${appPw}\n      MONGO_INITDB_DATABASE: ${name}\n    volumes:\n      - dbdata:/data/db`
@@ -148,6 +153,12 @@ function dbService(db, name, svc, vol) {
   if (db === 'mysql') return {
     lines: [`MYSQL_HOST=${svc}`, `MYSQL_PORT=3306`, `MYSQL_DB=${safe}`, `MYSQL_USER=${safe}`, `MYSQL_PASSWORD=${appPw}`],
     compose: `  ${svc}:\n    image: ${DB_IMAGES.mysql}\n    restart: unless-stopped\n    environment:\n      MYSQL_DATABASE: ${safe}\n      MYSQL_USER: ${safe}\n      MYSQL_PASSWORD: ${appPw}\n      MYSQL_ROOT_PASSWORD: ${rootPw}\n    volumes:\n      - ${vol}:/var/lib/mysql`,
+    vol, url: `mysql://${safe}:${appPw}@${svc}:3306/${safe}`,
+    info: { host: svc, port: 3306, name: safe, user: safe, pass: appPw }
+  };
+  if (db === 'mariadb') return {
+    lines: [`MARIADB_HOST=${svc}`, `MARIADB_PORT=3306`, `MARIADB_DB=${safe}`, `MARIADB_USER=${safe}`, `MARIADB_PASSWORD=${appPw}`],
+    compose: `  ${svc}:\n    image: ${DB_IMAGES.mariadb}\n    restart: unless-stopped\n    environment:\n      MARIADB_DATABASE: ${safe}\n      MARIADB_USER: ${safe}\n      MARIADB_PASSWORD: ${appPw}\n      MARIADB_ROOT_PASSWORD: ${rootPw}\n    volumes:\n      - ${vol}:/var/lib/mysql`,
     vol, url: `mysql://${safe}:${appPw}@${svc}:3306/${safe}`,
     info: { host: svc, port: 3306, name: safe, user: safe, pass: appPw }
   };
@@ -315,4 +326,4 @@ function nginxConf(proxy) {
   return `# minipass-managed (rewritten on link/unlink/redeploy - keep custom confs unmarked)\nserver {\n  listen 80;\n  root /usr/share/nginx/html;\n  index index.html;\n${api}  location / {\n    try_files $uri $uri/ /index.html;\n  }\n}\n`;
 }
 
-module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbService, DB_IMAGES, inferPort, nginxConf, ensureDockerfile, needsDockerfileOptIn, serviceBlock };
+module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbEnv, dbService, DB_IMAGES, inferPort, nginxConf, ensureDockerfile, needsDockerfileOptIn, serviceBlock };

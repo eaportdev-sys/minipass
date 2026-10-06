@@ -117,7 +117,7 @@
           <div class="stephead"><span class="stepno">3</span><div><b>Attach databases</b><div class="meta" id="dbList"></div></div></div>
           <div class="db-add-row">
             <div><b>Add database</b><div class="meta">Existing data and passwords stay untouched.</div></div>
-            <div class="controlrow"><select id="dbAdd"><option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option><option value="mongo">MongoDB</option><option value="redis">Redis</option></select><button onclick="addDb()">add database</button></div>
+            <div class="controlrow"><select id="dbAdd"><option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option><option value="mariadb">MariaDB</option><option value="mongo">MongoDB</option><option value="redis">Redis</option></select><button onclick="addDb()">add database</button></div>
           </div>
           <pre id="dbOut"></pre>
           <div id="dbRuntimeList"></div>
@@ -339,6 +339,7 @@
   <div class="typerow">
     <label class="typepill"><input type="checkbox" name="appdb" value="postgres"><b>Postgres</b>sql db</label>
     <label class="typepill"><input type="checkbox" name="appdb" value="mysql"><b>MySQL</b>sql db</label>
+    <label class="typepill"><input type="checkbox" name="appdb" value="mariadb"><b>MariaDB</b>mysql-compatible</label>
     <label class="typepill"><input type="checkbox" name="appdb" value="mongo"><b>Mongo</b>nosql db</label>
     <label class="typepill"><input type="checkbox" name="appdb" value="redis"><b>Redis</b>cache / kv</label>
   </div></div>

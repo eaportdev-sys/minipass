@@ -62,7 +62,7 @@ const TERMS_TEXT = [
   '1. You operate this panel. Every site it builds, runs, or exposes is yours.',
   '2. Deployed apps run arbitrary code from connected repos. You are responsible',
   '   for the content, behavior, and legal compliance of everything you deploy.',
-  '3. Database engines run under their own upstream licenses (e.g. MySQL GPL-2.0,',
+  '3. Database engines run under their own upstream licenses (e.g. MySQL/MariaDB GPL-2.0,',
   '   MongoDB SSPL). Commercial use is your call to clear, not ours.',
   '4. Backups are your responsibility until automated backups exist. Download them',
   '   from the site Files tab and store them somewhere that is not this box.',
@@ -211,8 +211,8 @@ app.get('/api/apps/:id/databases/:type/dump', async (req, res) => {
     const cexecTo = (args) => runToFile(ca[0], [...ca.slice(1), 'exec', '-T', ...args], tmp, { cwd: dir });
     if (type === 'postgres') {
       await cexecTo(['-e', `PGPASSWORD=${cfg.pass}`, svc, 'pg_dump', '-U', cfg.user, '-h', 'localhost', cfg.db]);
-    } else if (type === 'mysql') {
-      await cexecTo([svc, 'mysqldump', '-u', cfg.user, `-p${cfg.pass}`, cfg.db]);
+    } else if (type === 'mysql' || type === 'mariadb') {
+      await cexecTo([svc, type === 'mariadb' ? 'mariadb-dump' : 'mysqldump', '-u', cfg.user, `-p${cfg.pass}`, cfg.db]);
     } else if (type === 'mongo') {
       const uri = `mongodb://${encodeURIComponent(cfg.user)}:${encodeURIComponent(cfg.pass)}@localhost:${cfg.port || 27017}/${encodeURIComponent(cfg.db || '')}?authSource=admin`;
       await cexecTo([svc, 'mongodump', `--uri=${uri}`, '--archive']);
@@ -1076,7 +1076,7 @@ async function detectRepo(repo, { login, token } = {}) {
       if (blob && blob.content) pkg = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8'));
     } catch {}
   }
-  const { decideType, expandWorkspaces, matchWorkspaces, findBackends } = require('./lib/detect');
+  const { decideType, expandWorkspaces, matchWorkspaces, findBackends, sqlDatabaseHints } = require('./lib/detect');
   const out = decideType(tree, pkg);
   // monorepo sub-apps, tool-agnostic: vite heuristic + workspace manifests
   // (npm workspaces, pnpm-workspace.yaml, lerna.json, turbo/nx conventions)
@@ -1128,7 +1128,22 @@ async function detectRepo(repo, { login, token } = {}) {
       } catch { pkgs[d] = null; }
     }
     out.backends = findBackends(tree, pkgs);
+    for (const pkg_ of Object.values(pkgs).filter(Boolean)) {
+      for (const db of decideType(['package.json'], pkg_).dbs || []) if (!out.dbs.includes(db)) out.dbs.push(db);
+    }
   } catch {}
+  // Prefer MariaDB over a generic mysql/mysql2 dependency when an exported
+  // schema contains a MariaDB-only marker. Keep this capped: detection should
+  // never download an entire migrations history.
+  const sqlCandidates = tree.filter(p => /(^|\/)(baseline|schema|dump)[^/]*\.sql$/i.test(p)).slice(0, 3);
+  for (const p of sqlCandidates) {
+    const text = await readText(p);
+    if (!sqlDatabaseHints(text).includes('mariadb')) continue;
+    out.dbs = (out.dbs || []).filter(db => db !== 'mysql');
+    if (!out.dbs.includes('mariadb')) out.dbs.push('mariadb');
+    out.dbReason = `MariaDB schema marker in ${p}`;
+    break;
+  }
   return out;
 }
 app.get('/api/github/detect', async (req, res) => {
@@ -2168,8 +2183,15 @@ app.post('/api/panel/scan', (req, res) => {
       if (!fs.existsSync(path.join(dir, 'docker-compose.yml'))) continue;
       if (db_.apps.some(a => a.id === name)) { found.push(name + ' (kept)'); continue; }
       const env = parseEnvFile(path.join(dir, '.env'));
-      const detected = ['postgres', 'mysql', 'mongo', 'redis'].filter(t => env[t.toUpperCase() + '_HOST']);
-      const dbLabel = detected.length ? detected : (env.DB_HOST ? ['external'] : []);
+      const detected = ['postgres', 'mysql', 'mariadb', 'mongo', 'redis'].filter(t => env[t.toUpperCase() + '_HOST']);
+      let dbLabel = detected;
+      if (!dbLabel.length && env.DB_HOST) {
+        if (env.MARIADB_ROOT_PASSWORD) dbLabel = ['mariadb'];
+        else if (env.MYSQL_ROOT_PASSWORD) dbLabel = ['mysql'];
+        else if (env.POSTGRES_PASSWORD) dbLabel = ['postgres'];
+        else dbLabel = ['external'];
+      } else if (!dbLabel.length && env.MONGO_URL) dbLabel = ['mongo'];
+      else if (!dbLabel.length && env.REDIS_URL) dbLabel = ['redis'];
       let hostPort = parseInt(env.HOST_PORT, 10);
       if (!hostPort || used.has(hostPort)) {
         hostPort = nextPort;

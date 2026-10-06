@@ -14,6 +14,7 @@ function decideType(paths, pkg) {
   const dbs = [];
   if (deps.pg || deps.postgres || deps['pg-hstore']) dbs.push('postgres');
   if (deps.mysql || deps.mysql2) dbs.push('mysql');
+  if (deps.mariadb) dbs.push('mariadb');
   if (deps.mongoose || deps.mongodb) dbs.push('mongo');
   if (deps.redis || deps.ioredis || deps.bull || deps.bullmq) dbs.push('redis');
   if (any(/prisma\/schema\.prisma$/)) {
@@ -99,4 +100,13 @@ function findBackends(tree, pkgs) {
   return [...new Set(found)];
 }
 
-module.exports = { decideType, expandWorkspaces, matchWorkspaces, findBackends };
+// A MariaDB export can be consumed through MySQL-compatible drivers, so
+// package dependencies alone often say mysql/mysql2. Schema syntax is the
+// stronger signal when it names MariaDB or a MariaDB-only UCA 1400 collation.
+function sqlDatabaseHints(text) {
+  const sql = String(text || '');
+  if (/\bMariaDB\b/i.test(sql) || /utf8mb4_uca1400_[a-z0-9_]+/i.test(sql)) return ['mariadb'];
+  return [];
+}
+
+module.exports = { decideType, expandWorkspaces, matchWorkspaces, findBackends, sqlDatabaseHints };

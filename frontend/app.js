@@ -272,6 +272,7 @@ function runtimeKind(container, service) {
   const hint = `${container.service || ''} ${container.image || ''}`.toLowerCase();
   if (hint.includes('postgres')) return 'PostgreSQL database';
   if (hint.includes('redis')) return 'Redis cache';
+  if (hint.includes('mariadb')) return 'MariaDB database';
   if (hint.includes('mysql')) return 'MySQL database';
   if (hint.includes('mongo')) return 'MongoDB database';
   return 'Supporting container';
