@@ -256,7 +256,20 @@ function save(d) { fs.writeFileSync(DATA_FILE, JSON.stringify(d, null, 2)); }
 function pubApp(a) {
   const g = a.github || null;
   const pub = g ? { repo: g.repo, branch: g.branch, login: g.login, sha: g.sha, pollMinutes: g.pollMinutes, hasToken: !!g.token } : g;
-  return { ...a, github: pub };
+  // SPA/static servers commonly return index.html for every path. Old landing
+  // detection therefore mistook /health/live for their homepage. Preserve an
+  // operator-set path, otherwise frontend roots always open at /.
+  const homePath = ['static', 'react'].includes(a.type) && !a.homePathManual ? '' : (a.homePath || '');
+  return { ...a, homePath, github: pub };
+}
+function publicServices(meta, dir) {
+  return svc.fullServices(meta, dir).map(s => {
+    const frontendRoot = ['static', 'react'].includes(s.type) && !(s.name === 'app' && meta.homePathManual);
+    const homePath = s.name === 'app'
+      ? (frontendRoot ? '' : (meta.homePath || ''))
+      : (frontendRoot ? '' : (s.homePath || ''));
+    return { ...s, homePath };
+  });
 }
 // Portable compose: prefer `docker compose` (v2), fallback to `docker-compose` (v1).
 // Override with COMPOSE_BIN env, e.g. COMPOSE_BIN="docker-compose".
@@ -382,7 +395,7 @@ app.get('/api/types', (req, res) => {
 
 app.get('/api/apps', (req, res) => res.json(load().apps.map(meta => ({
   ...pubApp(meta),
-  services: svc.fullServices(meta, appDir(APPS_DIR, meta.id))
+  services: publicServices(meta, appDir(APPS_DIR, meta.id))
 }))));
 
 app.post('/api/apps', async (req, res) => {
@@ -601,35 +614,50 @@ async function markDirty(id, reason) {
     if (m && !m.dirty) { m.dirty = { reason, at: new Date().toISOString() }; save(db2); }
   } catch {}
 }
-// Auto-detect the landing path when the user hasn't set one: first non-404 among
-// common health/index routes (401/403 count - the route exists, only auth blocks it).
-// Probes from inside the app's own compose network, so no published ports are needed.
+// Detect a landing path per service. Frontend images always open at /: SPA
+// fallbacks return 200 for arbitrary health paths and cannot prove such a route
+// exists. Backend services are probed by their own Compose DNS name and port.
 async function autodetectHome(id) {
   try {
     const dir = appDir(APPS_DIR, id);
     const fresh = load().apps.find(a => a.id === id);
-    if (!fresh || fresh.homePath) return;
-    const env = parseEnvFile(path.join(dir, '.env'));
-    const cport = parseInt(env.PORT, 10) || 3000;
+    if (!fresh) return;
+    const services = svc.fullServices(fresh, dir).filter(s => s.enabled !== false);
     const net = `${id}_default`;
     const cands = ['/health/live', '/health/ready', '/health', '/api/health', '/api', '/v1', '/'];
-    for (let round = 0; round < 6; round++) {
-      if (round) await new Promise(r => setTimeout(r, 5000));
-      for (const p of cands) {
-        try {
-          const code = execSync(
-            `docker run --rm --network ${net} curlimages/curl:latest -s -o /dev/null -w "%{http_code}" --max-time 5 http://app:${cport}${p}`,
-            { timeout: 25000 }).toString().trim();
-          if (/^[234]/.test(code) || code === '401' || code === '403') {
-            if (p === '/') return; // default already - nothing to store
-            const db3 = load();
-            const m3 = db3.apps.find(a => a.id === id);
-            if (m3 && !m3.homePath) { m3.homePath = p; save(db3); }
-            return;
-          }
-        } catch {}
+    const results = [];
+    for (const service of services) {
+      if (['static', 'react'].includes(service.type)) {
+        results.push({ name: service.name, path: '' });
+        continue;
+      }
+      let found = null;
+      for (let round = 0; round < 2 && found == null; round++) {
+        if (round) await new Promise(r => setTimeout(r, 2000));
+        for (const p of cands) {
+          try {
+            const url = `http://${service.name}:${parseInt(service.port, 10) || 3000}${p}`;
+            const code = String(await runOut(DOCKER_BIN, ['run', '--rm', '--network', net, 'curlimages/curl:latest', '-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '5', url], { timeout: 25000 })).trim();
+            if (/^[234]/.test(code) || code === '401' || code === '403') { found = p === '/' ? '' : p; break; }
+          } catch {}
+        }
+      }
+      if (found != null) results.push({ name: service.name, path: found });
+    }
+    if (!results.length) return;
+    const db3 = load();
+    const m3 = db3.apps.find(a => a.id === id);
+    if (!m3) return;
+    let changed = false;
+    for (const result of results) {
+      if (result.name === 'app') {
+        if (!m3.homePathManual && (m3.homePath || '') !== result.path) { m3.homePath = result.path; changed = true; }
+      } else if (Array.isArray(m3.services)) {
+        const stored = m3.services.find(s => s.name === result.name);
+        if (stored && (stored.homePath || '') !== result.path) { stored.homePath = result.path; changed = true; }
       }
     }
+    if (changed) save(db3);
   } catch (e) { console.error(id, 'autodetect:', e.message); }
 }
 function deploy(id, opts = {}) {
@@ -842,7 +870,7 @@ async function deployNow(id, opts = {}) {
     throw new Error('new containers unhealthy - rolled back: ' + gate.detail);
   }
   await recordDeploy(id, { sha, at: stamp(), status: 'ok' });
-  autodetectHome(id).catch(e => console.error(id, e.message));
+  await autodetectHome(id);
   return true;
   } finally {
     if (localStage) localStage.cleanup();
@@ -865,7 +893,7 @@ app.get('/api/apps/:id/status', async (req, res) => {
   if (!meta) return res.status(404).json({ error: 'unknown app' });
   const history = meta.deployHistory || [];
   const liveDeploy = meta.lastGoodDeploy || history.find(h => h.status === 'ok') || (meta.lastDeploy && meta.lastDeploy.status === 'ok' ? meta.lastDeploy : null);
-  res.json({ app: pubApp(meta), services: svc.fullServices(meta, appDir(APPS_DIR, meta.id)), lastDeploy: meta.lastDeploy || null, liveDeploy, history: history.slice(0, 5), containers: await appContainers(meta.id), deploying: deployLocks.has(meta.id), deployOp: deployOps.get(meta.id) || null, pushEvent: pushEvents.get(meta.id) || null });
+  res.json({ app: pubApp(meta), services: publicServices(meta, appDir(APPS_DIR, meta.id)), lastDeploy: meta.lastDeploy || null, liveDeploy, history: history.slice(0, 5), containers: await appContainers(meta.id), deploying: deployLocks.has(meta.id), deployOp: deployOps.get(meta.id) || null, pushEvent: pushEvents.get(meta.id) || null });
 });
 async function appContainers(id) {
   let containers = [];
@@ -1288,7 +1316,7 @@ function serviceCandidate(meta, dir, input, requireSubdir = false) {
 app.get('/api/apps/:id/services', (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta) return res.status(404).json({ error: 'unknown app' });
-  res.json({ services: svc.fullServices(meta, appDir(APPS_DIR, meta.id)), dirty: meta.dirty || null, homePath: meta.homePath || '' });
+  res.json({ services: publicServices(meta, appDir(APPS_DIR, meta.id)), dirty: meta.dirty || null, homePath: pubApp(meta).homePath, homePathManual: !!meta.homePathManual });
 });
 app.get('/api/apps/:id/services/check', (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
@@ -1760,6 +1788,7 @@ app.post('/api/apps/:id/home', (req, res) => {
     let p = String((req.body && req.body.path) || '').trim();
     if (p && !p.startsWith('/')) p = '/' + p;
     meta.homePath = p || '';
+    meta.homePathManual = true;
     save(db_);
     res.json({ ok: true, homePath: meta.homePath });
   } catch (e) { res.status(500).json({ error: e.message }); }

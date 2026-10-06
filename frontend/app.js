@@ -67,8 +67,8 @@ function appPublishedServices(a) {
 }
 function appLinksMarkup(a, services) {
   if (!services.length) return '<div class="app-links-empty">No published local service.</div>';
-  return services.map((s, i) => {
-    const path = (s.name === 'app' || (i === 0 && services.length === 1)) ? (a.homePath || '') : '';
+  return services.map(s => {
+    const path = s.homePath != null ? s.homePath : (s.name === 'app' ? (a.homePath || '') : '');
     const url = `http://${location.hostname}:${s.hostPort}${path}`;
     return `<div class="app-link-row"><span>${safeHtml(s.name || 'app')}</span><a href="${safeHtml(url)}" target="_blank" rel="noopener noreferrer">${safeHtml(url.replace(/^http:\/\//, ''))}</a></div>`;
   }).join('');
@@ -160,6 +160,12 @@ async function saveHome() {
   toast(r.ok ? 'open path saved' : (r.error || 'failed'), !!r.ok);
   refresh(); loadDeployStatus(); loadServices();
 }
+async function refreshSiteData() {
+  if (!currentApp) return;
+  await Promise.allSettled([
+    refresh(), loadDeployStatus(), loadServices(), loadDatabases(), loadMigrateSuggest()
+  ]);
+}
 async function saveMigrate() {
   if (!currentApp) return;
   const body = {
@@ -169,7 +175,7 @@ async function saveMigrate() {
     check: document.getElementById('migrateCheck').value
   };
   const r = await (await fetch(`/api/apps/${currentApp}/migrate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
-  toast(r.ok ? 'migrate settings saved' : (r.error || 'failed'), !!r.ok);
+  toast(r.ok ? (body.command.trim() ? 'migration saved — it runs automatically before every deploy' : 'automatic pre-deploy migration disabled') : (r.error || 'failed'), !!r.ok);
   loadDeployStatus();
 }
 function fillMigrate(cmd, dir, svc, check) {
@@ -1032,7 +1038,7 @@ async function runDeploy(id, services) {
     tail.textContent = (outcome && (outcome.error || '')) || 'failed';
     toast('redeploy failed: ' + ((outcome && outcome.error) || 'unknown'), false);
   }
-  loadDeployStatus(); loadServices(); refresh();
+  refreshSiteData();
   setTimeout(() => { prog.style.display = 'none'; }, 15000);
 }
 function toast(msg, ok = true) {
@@ -1467,10 +1473,10 @@ async function loadServices() {
     const r = await (await fetch(`/api/apps/${currentApp}/services`)).json();
     const list = r.services || [];
     const dirty = !!r.dirty;
-    const homePath = r.homePath || '';
     document.getElementById('svcList').innerHTML = list.map(s => {
-      const url = s.hostPort ? `http://${location.hostname}:${s.hostPort}${s.name === 'app' ? homePath : ''}` : null;
-      const label = s.hostPort ? `${location.hostname}:${s.hostPort}${s.name === 'app' ? homePath : ''}` : '';
+      const openPath = s.homePath || '';
+      const url = s.hostPort ? `http://${location.hostname}:${s.hostPort}${openPath}` : null;
+      const label = s.hostPort ? `${location.hostname}:${s.hostPort}${openPath}` : '';
       const enabled = s.enabled !== false;
       return `<div class="service-card" id="svc-${s.name}"><div class="service-card-head"><div><b>${safeHtml(s.name)}</b><span class="badge type">${safeHtml(s.type)}</span>` +
         `<div class="meta">${s.subdir ? `/${safeHtml(s.subdir)}` : 'repository root'}</div></div><span class="badge service-state ${enabled ? 'on' : 'off'}">${enabled ? 'enabled' : 'disabled'}</span></div>` +
@@ -1573,8 +1579,7 @@ async function addService() {
       scheduleServiceCheck();
     }
   }
-  refresh();
-  loadServices();
+  refreshSiteData();
 }
 async function seedStandardDockerfile() {
   if (!currentApp) return;
@@ -1600,8 +1605,7 @@ async function toggleService(name, enable) {
   toast((enable ? 'starting ' : 'stopping ') + name + '… (applies on redeploy)');
   const r = await (await fetch(`/api/apps/${currentApp}/services/${name}/enable`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: enable }) })).json();
   toast(r.ok ? (name + (enable ? ' will start' : ' will stop') + ' on redeploy') : (r.error || 'failed'), !!r.ok);
-  refresh();
-  loadServices();
+  refreshSiteData();
 }
 async function removeService(name) {
   const ok = await uiConfirm({ title: 'Remove service ' + name + '?', body: 'Container removed on next redeploy, code and data volumes stay. The folder is untouched.', confirmLabel: 'Remove', danger: true });
@@ -1611,8 +1615,7 @@ async function removeService(name) {
   toast('removing ' + name + '…');
   const r = await (await fetch(`/api/apps/${currentApp}/services/${name}`, { method: 'DELETE' })).json();
   toast(r.ok ? (name + ' removed - redeploy to apply') : (r.error || 'failed'), !!r.ok);
-  refresh();
-  loadServices();
+  refreshSiteData();
 }
 function openTerm() {
   if (!currentApp) return;
@@ -1699,7 +1702,7 @@ setInterval(async () => {
         stage.textContent = `failed via ${remoteOp.source}`;
         toast(`deploy via ${remoteOp.source} failed: ` + ((d && d.error) || 'unknown'), false);
       }
-      loadDeployStatus(); loadServices(); refresh();
+      refreshSiteData();
       setTimeout(() => { box.style.display = 'none'; }, 15000);
     }
     if (p !== slot && !(p === 'local' && recv)) box.style.display = 'none';
