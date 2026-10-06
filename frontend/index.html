@@ -148,7 +148,8 @@
             <input id="envVal" placeholder="value" autocomplete="off">
             <button onclick="envAdd()">add variable</button>
           </div>
-          <div class="actions"><button class="btn primary" onclick="saveEnv()">save changes</button><button onclick="fillEnvDefaults()">add defaults</button><button onclick="envDownload(false)">download .env</button><button onclick="envDownload(true)">download .env.example</button></div>
+          <div class="actions"><button class="btn primary" onclick="saveEnv()">save changes</button><button onclick="fillEnvDefaults()">load defaults</button><button onclick="envDownload(false)">download .env</button><button onclick="envDownload(true)">download .env.example</button></div>
+          <div class="meta">The panel snapshots each service's .env/.env.example once. Load defaults restores that private snapshot, maps local frontend/API URLs to published ports, and generates secure JWT/session secrets. Repository files and custom remote URLs are never changed.</div>
           <pre id="envOut"></pre>
         </div>
       </div>

@@ -484,7 +484,8 @@ async function fillEnvDefaults() {
   try {
     const r = await (await fetch(`/api/apps/${currentApp}/env/defaults`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
     document.getElementById('envOut').textContent = JSON.stringify(r, null, 2);
-    toast(r.ok ? (r.added && r.added.length ? ('defaults added: ' + r.added.join(', ') + ' - redeploy to apply') : 'defaults already present') : (r.error || 'failed'), !!r.ok);
+    const changed = [...(r.added || []), ...(r.updated || [])];
+    toast(r.ok ? (changed.length ? ('defaults loaded: ' + changed.join(', ') + ' - redeploy to apply') : 'defaults already correct') : (r.error || 'failed'), !!r.ok);
     loadEnv(); refresh(); loadServices();
   } catch (e) { document.getElementById('envOut').textContent = 'failed: ' + e.message; }
 }

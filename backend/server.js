@@ -13,6 +13,7 @@ const svc = require('./lib/services');
 const dbTools = require('./lib/db-tools');
 const migrations = require('./lib/migrations');
 const routes = require('./lib/routes');
+const envDefaults = require('./lib/env-defaults');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -446,6 +447,10 @@ app.post('/api/apps', async (req, res) => {
     const created = createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain, hostPort, gitToken: siteToken, subdir, gitBranch: explicitBranch, standardDockerfile: req.body.standardDockerfile === true });
     const db_ = load();
     const meta = { id, type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: domain || '', token, hostPort, subdir: created.subdir || '', createdAt: new Date().toISOString() };
+    // Capture repository env sources before the first deploy. Never fail an
+    // otherwise valid create solely because the private snapshot could not be written.
+    try { applyEnvDefaults(meta, created.dir, req.hostname, req.protocol); }
+    catch (e) { console.error(id, 'env defaults snapshot:', e.message); }
     db_.apps = db_.apps.filter(a => a.id !== id).concat([meta]);
     save(db_);
     // auto webhook for site-token links (best effort - needs PANEL_URL reachable)
@@ -1420,6 +1425,10 @@ app.post('/api/apps/:id/services', async (req, res) => {
     meta.services = [...services, { name, subdir, type, port, hostPort, enabled: true }];
     const out = svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
     meta.services = out.normalized;
+    // A new service contributes its .env/.env.example exactly once. This also
+    // resolves frontend/API localhost placeholders now that its role is known.
+    try { applyEnvDefaults(meta, dir, req.hostname, req.protocol); }
+    catch (e) { console.error(meta.id, 'env defaults snapshot:', e.message); }
     save(db_);
     await markDirty(meta.id, 'service ' + name + ' added');
     const correctedFrom = requestedType !== 'auto' && requestedType !== type ? requestedType : null;
@@ -2040,19 +2049,11 @@ function scanEnvNeeds(dir) {
   return [...found].sort();
 }
 // Sensible self-generated defaults: values the panel can compute without asking.
-// Only added when missing, never overwrite, editable/deletable like any custom key.
 function suggestedDefaults(meta) {
-  // Only universal keys here. Origin names vary per stack
-  // (CORS_ORIGINS, ALLOWED_ORIGINS, FRONTEND_URL…) so doctor flags those
-  // for manual fill instead of guessing wrong.
-  return {
-    NODE_ENV: 'production',
-    HOST: '0.0.0.0',
-    TRUST_PROXY: '1'
-  };
+  return { ...envDefaults.BUILT_INS };
 }
 // Environment editor: custom keys editable, managed keys (ports, generated creds)
-// locked. POST redeploys so containers pick the new env up.
+// locked. POST saves pending changes; deploy explicitly to apply them.
 function readEnvVars(envPath) {
   const vars = [];
   try {
@@ -2178,30 +2179,49 @@ app.put('/api/apps/:id/env', async (req, res) => {
     res.json({ ok: true, saved: true, skipped: skippedAll, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+function applyEnvDefaults(meta, dir, hostname, protocol, requestedKeys) {
+  const services = svc.fullServices(meta, dir);
+  const origins = envDefaults.publishedOrigins(services, hostname, protocol);
+  const snapshot = envDefaults.snapshotDefaults(dir, path.join(dir, 'code'), services);
+  const resolved = envDefaults.resolvedDefaults(path.join(dir, 'code'), services, origins, snapshot.values, snapshot.originals);
+  const managed = managedKeys(dir);
+  const allowed = { ...resolved.values, ...suggestedDefaults(meta) };
+  for (const key of managed) delete allowed[key];
+  const asked = Array.isArray(requestedKeys) && requestedKeys.length
+    ? requestedKeys.filter(k => Object.prototype.hasOwnProperty.call(allowed, k))
+    : Object.keys(allowed);
+  const envPath = path.join(dir, '.env');
+  const valOf = new Map(readEnvVars(envPath).map(v => [v.key, v.value]));
+  // Fill missing/empty values. Also repair captured local-development placeholders
+  // once the corresponding published frontend/backend service is known.
+  const fill = asked.filter(k => !valOf.has(k) || (!String(valOf.get(k)).trim() && String(allowed[k]).trim()));
+  const corrected = {};
+  for (const k of asked.filter(k => valOf.has(k) && String(valOf.get(k)).trim())) {
+    const value = envDefaults.correctedValue(k, valOf.get(k), resolved, origins);
+    if (value != null) corrected[k] = value;
+  }
+  const update = Object.keys(corrected);
+  const change = [...new Set([...fill, ...update])];
+  if (change.length) {
+    let arr = [];
+    try { arr = fs.readFileSync(envPath, 'utf8').split('\n'); } catch {}
+    for (const k of change) {
+      const i = arr.findIndex(l => new RegExp(`^\\s*${k}\\s*=`).test(l));
+      const value = Object.prototype.hasOwnProperty.call(corrected, k) ? corrected[k] : allowed[k];
+      if (i >= 0) arr[i] = `${k}=${value}`;
+      else arr.push(`${k}=${value}`);
+    }
+    fs.writeFileSync(envPath, arr.join('\n').replace(/\s*$/, '') + '\n');
+  }
+  return { added: fill, updated: update, origins, defaultSources: snapshot.sources, pending: true };
+}
 app.post('/api/apps/:id/env/defaults', async (req, res) => {
   try {
     const meta = load().apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
-    const dir = appDir(APPS_DIR, meta.id);
-    const allowed = suggestedDefaults(meta);
-    const asked = Array.isArray(req.body && req.body.keys) && req.body.keys.length
-      ? req.body.keys.filter(k => Object.prototype.hasOwnProperty.call(allowed, k))
-      : Object.keys(allowed);
-    const valOf = new Map(readEnvVars(path.join(dir, '.env')).map(v => [v.key, v.value]));
-    // Fill when missing OR empty - a present-but-empty suggested key can't function.
-    // Never touch non-empty values.
-    const fill = asked.filter(k => !valOf.has(k) || !String(valOf.get(k)).trim());
-    if (!fill.length) return res.json({ ok: true, added: [], pending: true });
-    let arr = [];
-    try { arr = fs.readFileSync(path.join(dir, '.env'), 'utf8').split('\n'); } catch {}
-    for (const k of fill) {
-      const i = arr.findIndex(l => new RegExp(`^\\s*${k}\\s*=`).test(l));
-      if (i >= 0) arr[i] = `${k}=${allowed[k]}`;
-      else arr.push(`${k}=${allowed[k]}`);
-    }
-    fs.writeFileSync(path.join(dir, '.env'), arr.join('\n').replace(/\s*$/, '') + '\n');
-    await markDirty(meta.id, 'env defaults added');
-    res.json({ ok: true, added: fill, pending: true });
+    const result = applyEnvDefaults(meta, appDir(APPS_DIR, meta.id), req.hostname, req.protocol, req.body && req.body.keys);
+    if (result.added.length || result.updated.length) await markDirty(meta.id, 'env defaults restored');
+    res.json({ ok: true, ...result });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/apps/:id', async (req, res) => {

@@ -103,7 +103,12 @@ them back.
 ### 4 · Environment, files, databases
 
 - **Environment tab**: generated keys are managed (read-only except `DOMAIN`);
-  custom keys are fully editable. Every save redeploys.
+  custom keys are fully editable and save pending a redeploy. The panel privately
+  snapshots each service's `.env`/`.env.example` when first discovered;
+  **Load defaults** restores missing keys from that stable snapshot. It maps localhost frontend/API
+  URLs to the correct published service and replaces JWT/session-style secret
+  placeholders with cryptographically random values. Repository files, existing
+  custom remote URLs, and external credentials are never changed.
 - **Files tab**: lazy folder tree + reader/editor; uploads accept zip, files, or a folder.
 - **Databases**: add from the site page; admin UIs launch on demand
   (ports `8900–8999`) and stop when you close the popup, with a 30-minute fallback.
