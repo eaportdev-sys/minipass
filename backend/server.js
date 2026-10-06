@@ -1881,6 +1881,36 @@ app.post('/api/apps/:id/api-backend', async (req, res) => {
     res.json({ ok: true, linked: label, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+app.post('/api/apps/:id/github/unlink', async (req, res) => {
+  // Full off-switch for GitHub automation: clears the link (polling stops),
+  // rotates the panel token (the old webhook URL dies immediately), and
+  // best-effort deletes the repo-side webhook when a site token is present.
+  // Code and repoUrl stay: manual redeploys still pull (public repos fine).
+  try {
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    if (!meta.github) return res.json({ ok: true, unlinked: false, note: 'no github link on this site' });
+    const repo = meta.github.repo;
+    const token = meta.github.token;
+    let webhookDeleted = false;
+    if (repo && token) {
+      try {
+        const [o, n] = String(repo).split('/');
+        const hooks = await gh.apiWith(token, `/repos/${o}/${n}/hooks`);
+        const ours = (Array.isArray(hooks) ? hooks : []).find(h => h && h.config && String(h.config.url || '').includes(`/webhook/${meta.id}`));
+        if (ours) {
+          await gh.apiWith(token, `/repos/${o}/${n}/hooks/${ours.id}`, { method: 'DELETE' });
+          webhookDeleted = true;
+        }
+      } catch {}
+    }
+    meta.github = null;
+    meta.token = crypto.randomBytes(16).toString('hex');
+    save(db_);
+    res.json({ ok: true, unlinked: true, webhookDeleted });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.post('/api/apps/:id/regenerate', (req, res) => {
   try {
     const db_ = load();

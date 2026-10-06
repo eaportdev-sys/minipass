@@ -838,6 +838,18 @@ async function regenHook() {
   if (r.token) { refresh(); toast('webhook regenerated - update GitHub'); }
   else toast(r.error || 'failed', false);
 }
+async function unlinkGithub() {
+  if (!currentApp) return;
+  const ok = await uiConfirm({
+    title: 'Unlink GitHub?',
+    body: 'Stops webhook + polling auto-deploys for this site. Code stays; manual redeploys still pull.',
+    confirmLabel: 'Unlink', danger: true
+  });
+  if (!ok) return;
+  const r = await (await fetch(`/api/apps/${currentApp}/github/unlink`, { method: 'POST' })).json();
+  toast(r.ok ? 'github unlinked - auto-deploy off' : (r.error || 'failed'), !!r.ok);
+  refresh();
+}
 function showSiteTab(t) {
   document.querySelectorAll('.sitetab').forEach(s => s.style.display = 'none');
   document.getElementById('tab-' + t).style.display = 'block';
