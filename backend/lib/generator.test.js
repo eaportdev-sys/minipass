@@ -8,7 +8,7 @@ const path = require('path');
 // exactly while adding new database types.
 const originalRandomBytes = crypto.randomBytes;
 crypto.randomBytes = n => Buffer.alloc(n);
-const { DB_IMAGES, normDbs, dbEnv, dbService } = require('./generator');
+const { DB_IMAGES, normDbs, dbEnv, dbService, createApp } = require('./generator');
 const { databaseConfig } = require('./db-tools');
 const { decideType, sqlDatabaseHints } = require('./detect');
 const password = 'A'.repeat(24);
@@ -50,6 +50,24 @@ try {
   assert.deepEqual(sqlDatabaseHints('DEFAULT COLLATE=utf8mb4_uca1400_ai_ci;'), ['mariadb']);
   assert.deepEqual(sqlDatabaseHints('-- MariaDB dump 10.19'), ['mariadb']);
   assert.deepEqual(sqlDatabaseHints('COLLATE=utf8mb4_0900_ai_ci;'), []);
+
+  const appsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-create-docker-'));
+  try {
+    const pending = path.join(appsDir, 'sample');
+    fs.mkdirSync(path.join(pending, 'code', '.git'), { recursive: true });
+    fs.mkdirSync(path.join(pending, 'code', 'server'), { recursive: true });
+    fs.writeFileSync(path.join(pending, 'code', 'server', 'package.json'), '{"scripts":{"build":"tsc","start":"node dist/index.js"}}');
+    const input = {
+      appsDir, templatesDir: path.resolve(__dirname, '../../templates'), name: 'sample', type: 'node',
+      repoUrl: 'https://github.com/example/sample.git', db: [], hostPort: 8000, subdir: 'server'
+    };
+    assert.throws(() => createApp(input), /no Dockerfile/, 'create first explains the missing Dockerfile');
+    const created = createApp({ ...input, standardDockerfile: true });
+    assert.equal(created.subdir, 'server');
+    const dockerfile = fs.readFileSync(path.join(pending, 'code', 'server', 'Dockerfile'), 'utf8');
+    assert(dockerfile.includes('exec npm start'), 'explicit create retry seeds the standard Node image');
+    assert(fs.readFileSync(path.join(pending, 'docker-compose.yml'), 'utf8').includes('code/server'));
+  } finally { fs.rmSync(appsDir, { recursive: true, force: true }); }
   console.log('database generation and MariaDB support: OK');
 } finally {
   crypto.randomBytes = originalRandomBytes;

@@ -402,6 +402,7 @@ app.post('/api/apps', async (req, res) => {
   try {
     const { name, type, repoUrl, db, port, domain } = req.body;
     if (!name || !type) return res.status(400).json({ error: 'name and type required' });
+    if (!['static', 'react', 'node', 'php'].includes(type)) return res.status(400).json({ error: 'unsupported application type' });
     const id = name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
     const token = crypto.randomBytes(16).toString('hex');
     // localhost: auto-assign host port 8000+ so app is reachable without a domain
@@ -441,7 +442,7 @@ app.post('/api/apps', async (req, res) => {
     }
     const dbs = normDbs(req.body.dbs !== undefined ? req.body.dbs : db);
     const subdir = String(req.body.subdir || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '') || '';
-    const created = createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain, hostPort, gitToken: siteToken, subdir, gitBranch: explicitBranch });
+    const created = createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain, hostPort, gitToken: siteToken, subdir, gitBranch: explicitBranch, standardDockerfile: req.body.standardDockerfile === true });
     const db_ = load();
     const meta = { id, type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: domain || '', token, hostPort, subdir: created.subdir || '', createdAt: new Date().toISOString() };
     db_.apps = db_.apps.filter(a => a.id !== id).concat([meta]);
@@ -465,7 +466,25 @@ app.post('/api/apps', async (req, res) => {
     // build async so UI returns fast (goes through deploy() so it lands in deploy.log)
     deploy(id).catch(e => console.error(id, e.message));
     res.json({ ...pubApp(meta), localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote });
-  } catch (e) { res.status(500).json({ error: redactUrl(e.message) }); }
+  } catch (e) {
+    const error = redactUrl(e.message);
+    const needsDockerfile = /no Dockerfile in build context and type/i.test(error);
+    res.status(needsDockerfile ? 409 : 500).json({ error, needsDockerfile });
+  }
+});
+// Canceling create removes only an unfinished checkout. Registered sites and
+// anything with a generated Compose file are never touched by this endpoint.
+app.delete('/api/apps/pending/:id', (req, res) => {
+  try {
+    const id = String(req.params.id || '').toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    if (!id) return res.status(400).json({ error: 'bad site name' });
+    if (load().apps.some(a => a.id === id)) return res.status(409).json({ error: 'site is already registered' });
+    const dir = appDir(APPS_DIR, id);
+    if (!fs.existsSync(dir)) return res.json({ ok: true, removed: false });
+    if (fs.existsSync(path.join(dir, 'docker-compose.yml'))) return res.status(409).json({ error: 'refusing to remove a composed site' });
+    fs.rmSync(dir, { recursive: true, force: true });
+    res.json({ ok: true, removed: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 const redactUrl = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');

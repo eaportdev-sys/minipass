@@ -110,7 +110,8 @@ them back.
 - **Terminal tab**: full PTY in the browser (`docker exec` into the live container).
 - **Services**: each runnable folder becomes a service. If a folder lacks a
   Dockerfile and the type has no safe default, the panel says so instead of
-  guessing — click **use standard Dockerfile** to drop in the type template
+  guessing — during create or Add service, click **use standard Dockerfile**
+  to drop in the type template
   (box-local; commit it to the repo so fresh clones keep it).
 - **Migrations**: Deploy tab → pre-deploy migration. Detection recognizes
   project scripts, Knex, Prisma, Sequelize, TypeORM, Drizzle, MikroORM, Django,

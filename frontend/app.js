@@ -786,6 +786,9 @@ function showSiteTab(t) {
   if (t === 'logs') showLogs();
 }
 async function createApp() {
+  const session = createModalSession;
+  await createCleanupPromise.catch(() => {});
+  if (session !== createModalSession) return;
   const v = id => document.getElementById(id).value.trim();
   const typeEl = document.querySelector('input[name=apptype]:checked');
   const dbs = [...document.querySelectorAll('input[name=appdb]:checked')].map(e => e.value);
@@ -794,7 +797,7 @@ async function createApp() {
   const body = {
     name: v('name'), type: typeEl ? typeEl.value : 'static', dbs,
     repoUrl: v('repo'), domain: access === 'domain' ? v('domain') : '',
-    subdir: v('subdir')
+    subdir: v('subdir'), standardDockerfile: createStandardDockerfile
   };
   // site-owned connection: fresh token travels with this build only
   const ghSel = document.getElementById('ghrepo');
@@ -807,12 +810,26 @@ async function createApp() {
   }
   const br = v('branch');
   if (br) body.branch = br;
-  const r = await (await fetch('/api/apps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+  const buildBtn = document.getElementById('createBuildBtn');
+  const cancelBtn = document.getElementById('createCancelBtn');
+  buildBtn.disabled = true;
+  cancelBtn.disabled = true;
+  document.getElementById('createDockerAction').style.display = 'none';
+  let r;
+  try {
+    r = await (await fetch('/api/apps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+  } catch (e) { r = { error: e.message }; }
+  if (session !== createModalSession) return;
   document.getElementById('out').textContent = JSON.stringify(r, null, 2);
+  if (r.needsDockerfile) document.getElementById('createDockerAction').style.display = 'block';
+  buildBtn.disabled = false;
+  cancelBtn.disabled = false;
   refresh();
-  if (!r.error) closeCreate();
+  if (!r.error) closeCreate(true);
 }
 async function detectType() {
+  const session = createModalSession;
+  const request = ++createDetectRequest;
   const sel = document.getElementById('ghrepo');
   const opt = sel.selectedOptions.length ? sel.selectedOptions[0] : null;
   let repo = sel.value;
@@ -826,6 +843,7 @@ async function detectType() {
   if (!token) { toast('paste a token first - detection never uses stored accounts', false); return; }
   try {
     const r = await (await fetch('/api/github/detect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo, token }) })).json();
+    if (session !== createModalSession || request !== createDetectRequest) return;
     if (r.type) {
       const radio = document.querySelector(`input[name=apptype][value=${r.type}]`);
       if (radio) radio.checked = true;
@@ -848,6 +866,8 @@ async function detectType() {
   } catch {}
 }
 function setSubdir(f, type) {
+  createStandardDockerfile = false;
+  document.getElementById('createDockerAction').style.display = 'none';
   document.getElementById('subdir').value = f;
   if (type) {
     const radio = document.querySelector(`input[name=apptype][value=${type}]`);
@@ -905,11 +925,27 @@ async function saveToken(token) {
   return await (await fetch('/api/github/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })).json();
 }
 let modalLogin = null;
+let createModalSession = 0;
+let createConnectRequest = 0;
+let createDetectRequest = 0;
+let createStandardDockerfile = false;
+let createCleanupPromise = Promise.resolve();
 async function modalListRepos() {
+  const session = createModalSession;
+  const request = ++createConnectRequest;
   // fresh token every build - preview WITHOUT saving to the shared pool
   const token = document.getElementById('ghModalToken').value.trim();
   if (!token) { toast('paste a token first', false); return; }
-  const r = await (await fetch('/api/github/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })).json();
+  const button = document.getElementById('ghModalConnect');
+  button.disabled = true;
+  button.textContent = 'connecting…';
+  let r;
+  try {
+    r = await (await fetch('/api/github/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })).json();
+  } catch (e) { r = { error: e.message }; }
+  if (session !== createModalSession || request !== createConnectRequest) return;
+  button.disabled = false;
+  button.textContent = 'connect';
   if (r.error) { toast(r.error, false); return; }
   modalLogin = r.login;
   const sel = document.getElementById('ghrepo');
@@ -945,7 +981,14 @@ function accessChanged() {
   if (ob) ob.style.display = isDomain ? 'block' : 'none';
 }
 function openCreate() {
+  resetCreateForm();
   document.getElementById('modal').classList.add('open');
+}
+function resetCreateForm() {
+  createModalSession++;
+  createConnectRequest++;
+  createDetectRequest++;
+  createStandardDockerfile = false;
   document.getElementById('name').value = '';
   document.getElementById('repo').value = '';
   document.getElementById('domain').value = '';
@@ -959,14 +1002,34 @@ function openCreate() {
   document.getElementById('branch').value = '';
   document.getElementById('subdir').value = '';
   document.getElementById('subdirHint').style.display = 'none';
+  document.getElementById('subdirHint').innerHTML = '';
   document.getElementById('ghrepo').innerHTML = '<option value="">GitHub repo…</option>';
   document.getElementById('ghRepoRow').style.display = 'none';
   document.getElementById('ghConnectRow').style.display = 'block';
   document.getElementById('ghConnState').textContent = 'paste a fresh token for this site';
+  document.getElementById('ghStoreNote').textContent = 'This token will be stored on the new site only — never shared, never pooled.';
+  document.getElementById('ghModalConnect').disabled = false;
+  document.getElementById('ghModalConnect').textContent = 'connect';
+  document.getElementById('createBuildBtn').disabled = false;
+  document.getElementById('createCancelBtn').disabled = false;
+  document.getElementById('createDockerAction').style.display = 'none';
   modalLogin = null;
   accessChanged();
 }
-function closeCreate() { document.getElementById('modal').classList.remove('open'); }
+function useCreateStandardDockerfile() {
+  createStandardDockerfile = true;
+  document.getElementById('createDockerAction').style.display = 'none';
+  createApp();
+}
+function closeCreate(created = false) {
+  const rawName = document.getElementById('name').value.trim();
+  document.getElementById('modal').classList.remove('open');
+  resetCreateForm();
+  if (!created && rawName) {
+    const id = rawName.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    if (id) createCleanupPromise = fetch(`/api/apps/pending/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true }).catch(() => {});
+  }
+}
 function toggleTheme() {
   const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
   document.documentElement.dataset.theme = t;

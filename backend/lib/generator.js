@@ -177,7 +177,7 @@ function dbService(db, name, svc, vol) {
   return { lines: [], compose: '', vol, url: null, info: null };
 }
 
-function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', port, domain, hostPort, gitToken, subdir, gitBranch }) {
+function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', port, domain, hostPort, gitToken, subdir, gitBranch, standardDockerfile = false }) {
   const dir = appDir(appsDir, name);
   // resume allowed when a previous create died before writing compose (keys preserved)
   const resume = fs.existsSync(dir) && !fs.existsSync(path.join(dir, 'docker-compose.yml'));
@@ -228,10 +228,20 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   }
   let sub = wantSub;
   if (sub && !fs.existsSync(path.join(dir, 'code', sub))) sub = '';
+  const buildDir = sub ? path.join(dir, 'code', sub) : path.join(dir, 'code');
+  // Explicit create-modal opt-in. Never replace a repository Dockerfile; this
+  // only fills the missing file after the first validation explains why it is
+  // needed. A failed first create remains resumable, so retry does not reclone.
+  if (standardDockerfile && !fs.existsSync(path.join(buildDir, 'Dockerfile'))) {
+    const tpl = path.join(templatesDir, type);
+    fs.copyFileSync(path.join(tpl, 'Dockerfile'), path.join(buildDir, 'Dockerfile'));
+    if ((type === 'react' || type === 'static') && !fs.existsSync(path.join(buildDir, 'nginx.conf')) && fs.existsSync(path.join(tpl, 'nginx.conf')))
+      fs.copyFileSync(path.join(tpl, 'nginx.conf'), path.join(buildDir, 'nginx.conf'));
+  }
   // No Dockerfile anywhere is a loud, specific error - unless the repo shape makes
   // a template choice unambiguous (static index, spa build script, php entry, node index).
   // Never invent an entrypoint: node without index.js must bring its own Dockerfile.
-  ensureDockerfile(sub ? path.join(dir, 'code', sub) : path.join(dir, 'code'), type, templatesDir);
+  ensureDockerfile(buildDir, type, templatesDir);
   let appPort = port || TYPE_PORT[type] || 3000;
   if (!port) appPort = inferPort(sub ? path.join(dir, 'code', sub) : path.join(dir, 'code'), appPort);
   // static/react always need our nginx.conf (SPA fallback; proxy added on link).

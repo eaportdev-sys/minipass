@@ -313,8 +313,8 @@
     <div class="meta">Only works on the custom-domain path (GitHub rejects plain-http callbacks).</div></div>
     <button onclick="window.open('https://github.com/settings/tokens?type=beta','_blank')">connect github</button>
     <div class="meta">Sign in if asked → Generate new token (fine-grained) → Contents <b>read-only</b> + Webhooks <b>read+write</b> → copy, paste here:</div>
-    <input id="ghModalToken" type="password" placeholder="github_pat_…" style="width:220px">
-    <button onclick="modalListRepos()">connect</button>
+    <input id="ghModalToken" type="password" placeholder="github_pat_…" autocomplete="new-password" style="width:220px">
+    <button id="ghModalConnect" onclick="modalListRepos()">connect</button>
     <div class="meta" id="ghStoreNote">This token will be stored on the new site only — never shared, never pooled.</div></div>
   </div>
   <div class="msec"><div class="mlabel">4 · Code source</div>
@@ -343,7 +343,8 @@
     <label class="typepill"><input type="checkbox" name="appdb" value="mongo"><b>Mongo</b>nosql db</label>
     <label class="typepill"><input type="checkbox" name="appdb" value="redis"><b>Redis</b>cache / kv</label>
   </div></div>
-  <div class="modalbtns"><button class="btn primary" onclick="createApp()">Build</button><button onclick="closeCreate()">Cancel</button></div>
+  <div id="createDockerAction" class="meta" style="display:none"><button onclick="useCreateStandardDockerfile()">use standard Dockerfile and retry</button><span> Explicit opt-in; never overwrites a repository Dockerfile.</span></div>
+  <div class="modalbtns"><button id="createBuildBtn" class="btn primary" onclick="createApp()">Build</button><button id="createCancelBtn" onclick="closeCreate()">Cancel</button></div>
   <pre id="out"></pre>
 </div></div>
 <div id="toasts"></div>
