@@ -669,7 +669,7 @@ async function autodetectHome(id) {
     if (!fresh) return;
     const services = svc.fullServices(fresh, dir).filter(s => s.enabled !== false);
     const net = `${id}_default`;
-    const cands = ['/health/live', '/health/ready', '/health', '/api/health', '/api', '/v1', '/'];
+    const cands = routes.PROBE_PATHS;
     const results = [];
     for (const service of services) {
       if (['static', 'react'].includes(service.type)) {
@@ -1088,7 +1088,7 @@ app.get('/api/apps/:id/doctor', async (req, res) => {
     const cport = parseInt(env.PORT, 10) || 3000;
     const net = `${meta.id}_default`;
     const probed = [];
-    for (const p of ['/health/live', '/health/ready', '/health', '/api/health', '/api', '/v1', '/']) {
+    for (const p of routes.PROBE_PATHS) {
       try {
         const code = execSync(`docker run --rm --network ${net} curlimages/curl:latest -s -o /dev/null -w "%{http_code}" --max-time 5 http://app:${cport}${p}`, { timeout: 15000 }).toString().trim();
         probed.push(`${p}→${code}`);

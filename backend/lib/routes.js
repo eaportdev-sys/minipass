@@ -3,6 +3,11 @@ const path = require('path');
 
 const SKIP = new Set(['.git', 'build', 'coverage', 'dist', 'node_modules', 'test', 'tests', '__tests__', 'vendor']);
 const SOURCE_EXT = /\.(?:cjs|js|jsx|mjs|php|ts|tsx)$/i;
+const PROBE_PATHS = Object.freeze([
+  '/health/live', '/health/ready', '/healthz', '/readyz', '/livez', '/health',
+  '/api/health/live', '/api/health/ready', '/api/healthz', '/api/readyz', '/api/livez', '/api/health',
+  '/status', '/api/status', '/api', '/v1', '/'
+]);
 
 function safeRoute(value) {
   const route = String(value || '').trim();
@@ -13,9 +18,9 @@ function safeRoute(value) {
 
 function routeScore(route) {
   const exact = {
-    '/health/live': 0, '/health/ready': 1, '/health': 2,
-    '/api/health/live': 3, '/api/health/ready': 4, '/api/health': 5,
-    '/docs': 6, '/swagger': 7, '/api': 8, '/v1': 9, '/': 20
+    '/health/live': 0, '/health/ready': 1, '/healthz': 2, '/readyz': 3, '/livez': 4, '/health': 5,
+    '/api/health/live': 6, '/api/health/ready': 7, '/api/healthz': 8, '/api/readyz': 9, '/api/livez': 10, '/api/health': 11,
+    '/status': 12, '/api/status': 13, '/docs': 14, '/swagger': 15, '/api': 16, '/v1': 17, '/': 30
   };
   if (exact[route] != null) return exact[route];
   if (/health|ready|live/i.test(route)) return 10;
@@ -81,4 +86,4 @@ function detectOpenPaths(root, maxFiles = 250) {
   });
 }
 
-module.exports = { safeRoute, routeScore, extractRoutes, detectOpenPaths };
+module.exports = { PROBE_PATHS, safeRoute, routeScore, extractRoutes, detectOpenPaths };
