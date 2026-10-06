@@ -767,7 +767,7 @@ async function deployNow(id, opts = {}) {
   // defensive invariant against any future call that bypasses the queue.
   if (deployLocks.has(id)) throw new Error('internal deploy queue violation');
   deployLocks.add(id);
-  const opSource = ['webhook', 'poll', 'local-push', 'manual'].includes(opts.source) ? opts.source : 'manual';
+  const opSource = ['webhook', 'poll', 'local-push', 'manual', 'local'].includes(opts.source) ? opts.source : 'manual';
   deployOps.set(id, { source: opSource, startedAt: Date.now() });
   pushEvents.delete(id);
   let localStage = null;
@@ -810,6 +810,7 @@ async function deployNow(id, opts = {}) {
       throw e;
     }
   } else if (meta.repoUrl) {
+    if (!opts.skipSync) {
     const isSsh = /^(git@|ssh:\/\/)/i.test(meta.repoUrl);
     const url = isSsh ? meta.repoUrl : gh.authUrlFor(meta, meta.repoUrl);
     const env = isSsh ? appGitEnv(dir) : process.env;
@@ -836,6 +837,7 @@ async function deployNow(id, opts = {}) {
       await recordDeploy(id, { sha: sha0, at: new Date().toISOString(), status: 'error', error: ('git sync failed - running containers untouched: ' + msg).slice(-500) });
       throw new Error(msg);
     }
+    } // end pull (local rebuilds skip the sync: box files are the source of truth)
   }
   // self-heal seeded build files: a panel-seeded Dockerfile/nginx.conf that later
   // vanished (swept, deleted, never committed) kills the build cryptically.
@@ -946,6 +948,9 @@ async function deployNow(id, opts = {}) {
     try { tail = fs.readFileSync(buildLog, 'utf8').split('\n').slice(-25).join('\n'); } catch {}
     await recordDeploy(id, { sha, at: stamp(), status: 'error', error: ('build failed - running containers untouched: ' + (tail || e.message)).trim().slice(-500) });
     throw new Error('build failed - running containers untouched: ' + (tail || e.message).trim().split('\n').slice(-3).join(' '));
+  }
+  if (opts.skipSync) {
+    try { fs.appendFileSync(buildLog, '--- built from local box files (git sync skipped) ---\n'); } catch {}
   }
   // pre-swap migrations: one-off container from the fresh image, DBs already up.
   // Fail = abort before anything is swapped; running containers untouched.
@@ -1120,10 +1125,11 @@ app.post('/api/apps/:id/deploy', async (req, res) => {
     const only = Array.isArray(req.body && req.body.services)
       ? [...new Set(req.body.services.filter(s => /^[A-Za-z0-9_-]{1,32}$/.test(s || '')))]
       : [];
-    const source = ['manual', 'local-push'].includes(req.body && req.body.source) ? req.body.source : 'manual';
+    const source = ['manual', 'local', 'local-push'].includes(req.body && req.body.source) ? req.body.source : 'manual';
+    const skipSync = (req.body && req.body.source) === 'local';
     const pushedSha = /^[0-9a-f]{40}$/.test((req.body && req.body.sha) || '') ? req.body.sha : null;
     const pushedBranch = /^[A-Za-z0-9._/-]{1,64}$/.test((req.body && req.body.branch) || '') ? req.body.branch : null;
-    await deploy(req.params.id, { only, source, pushedSha, pushedBranch });
+    await deploy(req.params.id, { only, source, skipSync, pushedSha, pushedBranch });
     res.json({ ok: true, redeployed: true, services: only.length ? only : undefined });
   }
   catch (e) { res.status(500).json({ error: e.message }); }

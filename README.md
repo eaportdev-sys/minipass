@@ -18,6 +18,8 @@ minipass turns a folder or git repo into a running site with one flow:
   or connect GitHub (webhook or polling) when available
 - Atomic deploys: build first, swap only on success, health-check, auto-rollback.
   A taken host port is automatically rebound to the next free one before the build.
+  **Redeploy** pulls the repo first (recovery path for broken box edits);
+  **local rebuild** skips the pull and builds the box files as-is.
 - Extras: per-site terminal, file manager, environment editor, on-demand
   database UIs (pgAdmin, phpMyAdmin for MySQL/MariaDB, mongo-express, Redis Commander)
 

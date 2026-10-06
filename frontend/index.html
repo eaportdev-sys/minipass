@@ -169,7 +169,7 @@
       <div id="tab-deploy" class="sitetab" style="display:none">
         <div class="deploy-top-grid">
           <div class="card deploy-manual-card">
-            <div class="sectionhead"><div><b>Deploy now</b><div class="meta">Rebuild and release the current source safely.</div></div><button class="btn primary deploy-now-btn" onclick="deployCurrent()">redeploy</button></div>
+            <div class="sectionhead"><div><b>Deploy now</b><div class="meta">Rebuild and release safely. Redeploy pulls the repo first; local rebuild uses the box files as-is (keeps Files-tab edits).</div></div><div class="deploy-now-btns"><button class="btn primary deploy-now-btn" onclick="deployCurrent()">redeploy</button><button class="deploy-now-btn" onclick="deployLocal()">local rebuild</button></div></div>
             <div class="deploy-safety-flow" aria-label="Deployment stages">
               <div><span>1</span><b>Build</b><small>Running containers stay online</small></div>
               <div><span>2</span><b>Swap</b><small>Only after a successful image build</small></div>

@@ -126,6 +126,11 @@ async function deployCurrent() {
   await deploy(currentApp);
   loadDeployStatus();
 }
+async function deployLocal() {
+  if (!currentApp) return;
+  await runDeploy(currentApp, null, true);
+  loadDeployStatus();
+}
 async function syncGithub() {
   if (!currentApp) return;
   const ok = await uiConfirm({ title: 'Sync checkout to GitHub?', body: 'Use this only for recovery. Tracked and untracked box edits are saved in a git stash, then code/ resets to GitHub. Databases and volumes are untouched. Type the site name to confirm.', requireText: currentApp, confirmLabel: 'Sync', danger: true });
@@ -248,7 +253,7 @@ async function loadMigrateSuggest() {
   } catch { box.innerHTML = ''; }
 }
 function deploySourceName(source) {
-  return ({ manual: 'Manual', webhook: 'GitHub webhook', poll: 'GitHub poll', 'local-push': 'Local push' })[source] || source || 'Unknown';
+  return ({ manual: 'Manual', local: 'Local files', webhook: 'GitHub webhook', poll: 'GitHub poll', 'local-push': 'Local push' })[source] || source || 'Unknown';
 }
 function deployRecordParts(h) {
   const when = (h.at || '').replace('T', ' ').slice(0, 19) || 'time unavailable';
@@ -1129,7 +1134,7 @@ async function deploy(id) {
 // Deploy with live notice: elapsed timer, progress bar to 100%, stage + log tail,
 // success/fail at the end. Polls /status (deploying flag) + build log; the bar
 // eases toward 95% on elapsed time and snaps to 100% when the server finishes.
-async function runDeploy(id, services) {
+async function runDeploy(id, services, local = false) {
   const prog = document.getElementById('deployProg');
   const bar = document.getElementById('deployBar');
   const pct = document.getElementById('deployPct');
@@ -1161,9 +1166,9 @@ async function runDeploy(id, services) {
       tail.textContent = last.slice(-160);
     } catch {}
   }, 2500);
-  stage.textContent = services && services.length ? ('redeploying ' + services.join(',') + '… (others untouched)') : ('redeploying ' + id + '…');
+  stage.textContent = services && services.length ? ('redeploying ' + services.join(',') + '… (others untouched)') : (local ? ('rebuilding ' + id + ' from local files… (no repo pull)') : ('redeploying ' + id + '…'));
   try {
-    const r = await (await fetch(`/api/apps/${id}/deploy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(services && services.length ? { services, source: 'manual' } : { source: 'manual' }) })).json();
+    const r = await (await fetch(`/api/apps/${id}/deploy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(services && services.length ? { services, source: local ? 'local' : 'manual' } : { source: local ? 'local' : 'manual' }) })).json();
     outcome = r;
   } catch (e) { outcome = { ok: false, error: e.message }; }
   done = true;
