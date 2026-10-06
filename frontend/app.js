@@ -393,8 +393,32 @@ function fillSiteHeader(a) {
     box.innerHTML = `<div class="local-git-disabled"><b>Direct push is not configured</b><div class="meta">Create a private bare Git remote and its deploy hook on this server.</div><button class="btn primary" onclick="initLocalGit()">enable local git push</button></div>`;
   }
 }
+async function copyText(text) {
+  // navigator.clipboard needs a secure context (https/localhost) - plain LAN
+  // http falls back to the legacy execCommand path, which still works there.
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return !!ok;
+  } catch { return false; }
+}
 async function copyLocal() {
-  try { await navigator.clipboard.writeText(document.getElementById('localRemote').textContent); toast('remote command copied'); } catch {}
+  const ok = await copyText(document.getElementById('localRemote').textContent);
+  toast(ok ? 'remote command copied' : 'copy failed - select and copy manually', ok);
 }
 async function initLocalGit() {
   if (!currentApp) return;
@@ -411,7 +435,7 @@ async function disableLocalGit() {
   else toast(r.error || 'failed', false);
 }
 async function copyHook() {
-  try { await navigator.clipboard.writeText(document.getElementById('hookUrl').textContent); } catch {}
+  await copyText(document.getElementById('hookUrl').textContent);
 }
 async function loadEnv() {
   if (!currentApp) return;
@@ -501,9 +525,13 @@ async function genToken() {
   } catch (e) { out.value = ''; toast('generate failed: ' + e.message, false); }
 }
 async function copyToken() {
-  const v = document.getElementById('tokOut').value;
+  const el = document.getElementById('tokOut');
+  const v = el.value;
   if (!v) { toast('generate a secret first', false); return; }
-  try { await navigator.clipboard.writeText(v); toast('secret copied - paste it somewhere safe'); } catch { toast('copy failed - select and copy manually', false); }
+  if (await copyText(v)) { toast('secret copied - paste it somewhere safe'); return; }
+  el.focus();
+  el.select();
+  toast('copy failed - value selected, press Ctrl+C', false);
 }
 function tokenToNew() {
   const v = document.getElementById('tokOut').value;
