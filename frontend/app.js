@@ -900,16 +900,16 @@ async function detectType() {
   const sel = document.getElementById('ghrepo');
   const opt = sel.selectedOptions.length ? sel.selectedOptions[0] : null;
   let repo = sel.value;
-  // create flow always uses the fresh pasted token - stored accounts are never consulted
+  // create flow prefers its own fresh token but never requires one: public
+  // repos detect fine without it (shared unauthenticated quota, no account used)
   const token = document.getElementById('ghModalToken').value.trim();
   if (!repo) {
     const m = document.getElementById('repo').value.trim().match(/github\.com[:/]([^/]+)\/([^/]+?)(\.git)?\/?$/i);
     if (!m) return;
     repo = m[1] + '/' + m[2];
   }
-  if (!token) { toast('paste a token first - detection never uses stored accounts', false); return; }
   try {
-    const r = await (await fetch('/api/github/detect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo, token }) })).json();
+    const r = await (await fetch('/api/github/detect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(token ? { repo, token } : { repo }) })).json();
     if (session !== createModalSession || request !== createDetectRequest) return;
     if (r.type) {
       const radio = document.querySelector(`input[name=apptype][value=${r.type}]`);

@@ -15,6 +15,7 @@ const migrations = require('./lib/migrations');
 const routes = require('./lib/routes');
 const envDefaults = require('./lib/env-defaults');
 const tokens = require('./lib/tokens');
+const portsLib = require('./lib/ports');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -364,7 +365,15 @@ async function pollGithub() {
     pollState.set(meta.id, now);
     try {
       const parts = String(g.repo).split('/');
-      const c = await gh.apiFor(meta, `/repos/${parts[0]}/${parts[1]}/commits/${encodeURIComponent(g.branch || 'main')}`);
+      const commitsPath = `/repos/${parts[0]}/${parts[1]}/commits/${encodeURIComponent(g.branch || 'main')}`;
+      let c;
+      try {
+        c = await gh.apiFor(meta, commitsPath);
+      } catch (e) {
+        // token-free public link: poll without credentials (shared 60/hr quota)
+        if (gh.tokenFor(meta)) throw e;
+        c = await gh.apiPublic(commitsPath);
+      }
       const sha = c && c.sha;
       if (!sha || sha === g.sha) continue;
       await deploy(meta.id, { source: 'poll' });
@@ -424,23 +433,38 @@ app.post('/api/apps', async (req, res) => {
     let ghLink = null;
     const ghRepo = req.body.ghRepo;
     if (ghRepo && ghRepo.repo) {
-      if (!siteToken) return res.status(400).json({ error: 'repo picked but no site token pasted' });
-      const me = await gh.apiWith(siteToken, '/user')
-        .catch(() => { throw new Error('site token rejected by github - regenerate and repaste'); });
       const parts = String(ghRepo.repo).split('/');
-      const info = await gh.apiWith(siteToken, `/repos/${parts[0]}/${parts[1]}`)
-        .catch(() => { throw new Error('token cannot read ' + ghRepo.repo + ' - check repo access on the token'); });
-      let head = null;
-      try {
-        const br = explicitBranch || info.default_branch;
-        const c = await gh.apiWith(siteToken, `/repos/${parts[0]}/${parts[1]}/commits/${encodeURIComponent(br)}`);
-        head = c && c.sha;
-      } catch {}
-      finalRepoUrl = info.clone_url;
-      ghLink = { repo: info.full_name, branch: explicitBranch || info.default_branch, login: me.login, sha: head, pollMinutes: 5, token: siteToken };
-    } else if (siteToken && finalRepoUrl) {
+      if (parts.length !== 2 || !parts[0] || !parts[1]) return res.status(400).json({ error: 'repo must be owner/name' });
+      if (!siteToken) {
+        // public repo: verify unauthenticated, clone token-free. No auto-webhook
+        // without a token - polling/manual redeploy stays available.
+        const info = await gh.apiPublic(`/repos/${parts[0]}/${parts[1]}`)
+          .catch(() => { throw new Error('repo is not public - paste a site token for private repos'); });
+        finalRepoUrl = info.clone_url;
+        ghLink = { repo: info.full_name, branch: explicitBranch || info.default_branch, login: null, sha: null, pollMinutes: 0, token: null };
+      } else {
+        const me = await gh.apiWith(siteToken, '/user')
+          .catch(() => { throw new Error('site token rejected by github - regenerate and repaste'); });
+        const info = await gh.apiWith(siteToken, `/repos/${parts[0]}/${parts[1]}`)
+          .catch(() => { throw new Error('token cannot read ' + ghRepo.repo + ' - check repo access on the token'); });
+        let head = null;
+        try {
+          const br = explicitBranch || info.default_branch;
+          const c = await gh.apiWith(siteToken, `/repos/${parts[0]}/${parts[1]}/commits/${encodeURIComponent(br)}`);
+          head = c && c.sha;
+        } catch {}
+        finalRepoUrl = info.clone_url;
+        ghLink = { repo: info.full_name, branch: explicitBranch || info.default_branch, login: me.login, sha: head, pollMinutes: 5, token: siteToken };
+      }
+    } else if (finalRepoUrl) {
       const m = finalRepoUrl.match(/github\.com[:/]([^/]+)\/([^/]+?)(\.git)?\/?$/i);
-      if (m) ghLink = { repo: `${m[1]}/${m[2]}`, branch: explicitBranch, login: null, sha: null, pollMinutes: 5, token: siteToken };
+      if (m && siteToken) ghLink = { repo: `${m[1]}/${m[2]}`, branch: explicitBranch, login: null, sha: null, pollMinutes: 5, token: siteToken };
+      else if (m && !siteToken) {
+        // pasted public URL: link it token-free after a public readability check,
+        // so pull/poll work unauthenticated and the webhook stays manual.
+        const pub = await gh.apiPublic(`/repos/${m[1]}/${m[2]}`).catch(() => null);
+        if (pub) ghLink = { repo: pub.full_name, branch: explicitBranch || pub.default_branch, login: null, sha: null, pollMinutes: 5, token: null };
+      }
       else siteToken = null;
     }
     const dbs = normDbs(req.body.dbs !== undefined ? req.body.dbs : db);
@@ -704,6 +728,40 @@ function deploy(id, opts = {}) {
   return run;
 }
 
+// Deploy-time port rebind: a stored host port may be squatted by an orphan
+// container, a manual `docker run`, or another site's un-refreshed claim.
+// Our own running containers legitimately hold our ports and never count.
+// On any move, meta + .env + compose are rewritten before the build, so every
+// later stage (build, migrate, up, health gate) sees the new ports.
+async function rebindHostPorts(id, dir, meta, composeCmd) {
+  const enabled = svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false && s.hostPort);
+  if (!enabled.length) return [];
+  let own = [];
+  try { own = String(await sh(`${composeCmd} ps -q`, dir)).split(/\s+/).map(s => s.trim()).filter(Boolean); }
+  catch { own = []; }
+  let bound;
+  try {
+    bound = portsLib.parsePublishedPorts(await sh('docker ps --format "{{.ID}} {{.Ports}}"', dir));
+  } catch {
+    return []; // docker unreachable - keep stored ports, `up` reports the truth
+  }
+  const selfPorts = new Set(enabled.map(s => parseInt(s.hostPort, 10)));
+  const registryOthers = new Set([...hostPortsInUse()].filter(p => !selfPorts.has(p)));
+  const moves = portsLib.planRebind(enabled.map(s => ({ name: s.name, hostPort: s.hostPort })), { bound, own, registryOthers });
+  if (!moves.length) return [];
+  const byName = new Map(moves.map(m => [m.name, m.to]));
+  for (const s of enabled) if (byName.has(s.name)) s.hostPort = byName.get(s.name);
+  if (!meta.services || !meta.services.length) meta.services = enabled;
+  const primary = enabled.find(s => s.name === 'app') || enabled[0];
+  meta.hostPort = primary.hostPort;
+  envSetManaged(dir, { HOST_PORT: String(primary.hostPort) });
+  svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
+  const db = load();
+  const m = db.apps.find(a => a.id === id);
+  if (m) { m.services = meta.services; m.hostPort = meta.hostPort; save(db); }
+  return moves.map(m => ({ service: m.name, from: m.from, to: m.to }));
+}
+
 async function deployNow(id, opts = {}) {
   // The queue above serializes builds. Keep the lock as live UI state and as a
   // defensive invariant against any future call that bypasses the queue.
@@ -721,6 +779,21 @@ async function deployNow(id, opts = {}) {
   let buildCodeDir = codeDir;
   let composeCmd = COMPOSE_BIN;
   let sourceSha = null;
+
+  // Host ports are claimed at create time, but orphans from deleted sites,
+  // manual containers, or hand edits can squat a stored port. Rebind to the
+  // next free port now instead of dying in `up` with "port is already allocated".
+  // Covers every trigger path below (manual, webhook, poll, local-push).
+  try {
+    const moved = await rebindHostPorts(id, dir, meta, composeCmd);
+    if (moved.length) {
+      try { fs.appendFileSync(path.join(dir, 'deploy.log'), moved.map(u => `host port ${u.from} taken - ${u.service} moved to ${u.to}\n`).join('')); } catch {}
+    }
+  } catch (e) {
+    const shaRb = await currentSha(dir);
+    await recordDeploy(id, { sha: shaRb, at: new Date().toISOString(), status: 'error', error: ('host port rebind failed - running containers untouched: ' + e.message).slice(-500) });
+    throw e;
+  }
 
   if (opSource === 'local-push') {
     try {
@@ -1119,17 +1192,19 @@ app.post('/api/github/token', async (req, res) => {
     res.json({ ok: true, login: me.login });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-// Stack detection. Token-first and pool-NEVER: the create flow always carries its
+// Stack detection. Token-first, pool-NEVER: the create flow always carries its
 // own fresh token, so a revoked pool credential can never poison detection.
+// Public repos need no token at all: unauthenticated reads involve no account.
 async function detectRepo(repo, { login, token } = {}) {
   const m = String(repo || '').match(/^([^/]+)\/([^/]+?)(\.git)?$/);
   if (!m) throw new Error('repo must be owner/name');
-  if (!token && !login) throw new Error('paste a token first - detection never uses stored accounts');
   const get = token
     ? (p) => gh.apiWith(token, p)
-    : (p) => gh.apiAs(login, p);
+    : login
+      ? (p) => gh.apiAs(login, p)
+      : (p) => gh.apiPublic(p);
   const t = await get(`/repos/${m[1]}/${m[2]}/git/trees/HEAD?recursive=1`)
-    .catch(e => { throw new Error('cannot read repo (token access?): ' + e.message); });
+    .catch(e => { throw new Error('cannot read repo (private? paste a token): ' + e.message); });
   const tree = (t.tree || []).filter(e => e.type === 'blob').map(e => e.path);
   let pkg = null;
   const pkgPath = tree.filter(p => /(^|\/)package\.json$/.test(p)).sort((a, b) => a.length - b.length)[0];

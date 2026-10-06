@@ -16,7 +16,8 @@ minipass turns a folder or git repo into a running site with one flow:
   MySQL, MariaDB 11.8 LTS, MongoDB, or Redis database
 - Deploy by pushing git **directly to the box over SSH** (works with no GitHub),
   or connect GitHub (webhook or polling) when available
-- Atomic deploys: build first, swap only on success, health-check, auto-rollback
+- Atomic deploys: build first, swap only on success, health-check, auto-rollback.
+  A taken host port is automatically rebound to the next free one before the build.
 - Extras: per-site terminal, file manager, environment editor, on-demand
   database UIs (pgAdmin, phpMyAdmin for MySQL/MariaDB, mongo-express, Redis Commander)
 
@@ -95,7 +96,10 @@ sources each get their own status indicator.
 
 ### 3 · Or connect GitHub (optional)
 
-Paste a fine-grained token on the site (Contents read-only, Webhooks read+write),
+Public repos need no token at all: paste the repo URL, detection + clone +
+polling all work unauthenticated (webhook auto-register is the only thing a
+token buys you there). For private repos, paste a fine-grained token on the
+site (Contents read-only, Webhooks read+write),
 pick a repo, done — webhook auto-registers when the panel is reachable, otherwise
 turn on polling (every 1/5/15 min). Tokens stay server-side; the API never echoes
 them back.

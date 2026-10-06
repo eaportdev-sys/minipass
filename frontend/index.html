@@ -336,7 +336,7 @@
   <div class="meta">Pick a repo — type + databases below set themselves:</div>
   <select id="ghrepo" onchange="detectType()"><option value="">GitHub repo…</option></select>
   </div>
-  <input id="repo" placeholder="…or paste git url (private: SSH + repo key, or HTTPS with token)" onchange="detectType()">
+  <input id="repo" placeholder="…or paste git url (public repos need no token; private: SSH + repo key, or HTTPS with token)" onchange="detectType()">
   <input id="branch" placeholder="branch (default repo branch)" style="width:220px">
   <div class="meta" id="subdirHint" style="display:none"></div>
   <input id="subdir" placeholder="subfolder for monorepos (e.g. eaport-web)">

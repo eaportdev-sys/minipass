@@ -108,6 +108,22 @@ async function apiWith(token, p, opts = {}) {
   return r.json();
 }
 
+// Unauthenticated reads for PUBLIC repos only (60 req/hr per IP - plenty for
+// detection/verify/poll). Never touches stored accounts: there is no account
+// involved at all, so a revoked pool credential cannot poison these calls.
+async function apiPublic(p, opts = {}) {
+  const r = await fetch(`https://api.github.com${p}`, {
+    ...opts,
+    headers: {
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      ...(opts.headers || {})
+    }
+  });
+  if (!r.ok) throw new Error(`github api ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  return r.json();
+}
+
 // Per-site resolution: site token first, then linked panel account, then default.
 function tokenFor(meta) {
   if (meta && meta.github && meta.github.token) return meta.github.token;
@@ -141,4 +157,4 @@ async function api(p, opts = {}) {
   return apiAs(null, p, opts);
 }
 
-module.exports = { getAuth, getLogins, saveAuth, clearAuth, authUrl, authUrlWith, authUrlFor, api, apiAs, apiWith, apiFor, tokenFor, tokenFile };
+module.exports = { getAuth, getLogins, saveAuth, clearAuth, authUrl, authUrlWith, authUrlFor, api, apiAs, apiWith, apiPublic, apiFor, tokenFor, tokenFile };
