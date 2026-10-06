@@ -34,6 +34,7 @@ const gh = require('./lib/github');
 app.post('/webhook/:id', express.raw({ type: '*/*' }), async (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta || req.query.token !== meta.token) return res.status(401).send('bad token');
+  if (!meta.github || meta.github.enabled !== true) return res.status(409).send('github automation disabled');
   const sig = req.headers['x-hub-signature-256'];
   if (sig && meta.github) {
     const expect = 'sha256=' + crypto.createHmac('sha256', meta.token).update(req.body).digest('hex');
@@ -259,7 +260,7 @@ function save(d) { fs.writeFileSync(DATA_FILE, JSON.stringify(d, null, 2)); }
 // Strip secrets for every API response - tokens stay server-side only.
 function pubApp(a) {
   const g = a.github || null;
-  const pub = g ? { repo: g.repo, branch: g.branch, login: g.login, sha: g.sha, pollMinutes: g.pollMinutes, hasToken: !!g.token } : g;
+  const pub = g ? { repo: g.repo, branch: g.branch, login: g.login, sha: g.sha, pollMinutes: g.pollMinutes, enabled: g.enabled === true, hasToken: !!g.token } : g;
   // SPA/static servers commonly return index.html for every path. Old landing
   // detection therefore mistook /health/live for their homepage. Preserve an
   // operator-set path, otherwise frontend roots always open at /.
@@ -360,7 +361,7 @@ async function pollGithub() {
   const now = Date.now();
   for (const meta of db_.apps) {
     const g = meta.github;
-    if (!g || !g.repo || !(g.pollMinutes > 0)) continue;
+    if (!g || !g.repo || g.enabled !== true || !(g.pollMinutes > 0)) continue;
     if (now - (pollState.get(meta.id) || 0) < g.pollMinutes * 60 * 1000) continue;
     pollState.set(meta.id, now);
     try {
@@ -390,6 +391,7 @@ app.post('/api/apps/:id/poll', (req, res) => {
     const meta = db_.apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
     if (!meta.github) return res.status(400).json({ error: 'link a github repo first' });
+    if (meta.github.enabled !== true) return res.status(409).json({ error: 'enable github automation first' });
     meta.github.pollMinutes = Math.max(0, Math.min(60, parseInt(req.body.minutes, 10) || 0));
     save(db_);
     res.json({ ok: true, pollMinutes: meta.github.pollMinutes });
@@ -441,7 +443,7 @@ app.post('/api/apps', async (req, res) => {
         const info = await gh.apiPublic(`/repos/${parts[0]}/${parts[1]}`)
           .catch(() => { throw new Error('repo is not public - paste a site token for private repos'); });
         finalRepoUrl = info.clone_url;
-        ghLink = { repo: info.full_name, branch: explicitBranch || info.default_branch, login: null, sha: null, pollMinutes: 0, token: null };
+        ghLink = { repo: info.full_name, branch: explicitBranch || info.default_branch, login: null, sha: null, pollMinutes: 0, enabled: false, token: null };
       } else {
         const me = await gh.apiWith(siteToken, '/user')
           .catch(() => { throw new Error('site token rejected by github - regenerate and repaste'); });
@@ -454,16 +456,16 @@ app.post('/api/apps', async (req, res) => {
           head = c && c.sha;
         } catch {}
         finalRepoUrl = info.clone_url;
-        ghLink = { repo: info.full_name, branch: explicitBranch || info.default_branch, login: me.login, sha: head, pollMinutes: 5, token: siteToken };
+        ghLink = { repo: info.full_name, branch: explicitBranch || info.default_branch, login: me.login, sha: head, pollMinutes: 0, enabled: false, token: siteToken };
       }
     } else if (finalRepoUrl) {
       const m = finalRepoUrl.match(/github\.com[:/]([^/]+)\/([^/]+?)(\.git)?\/?$/i);
-      if (m && siteToken) ghLink = { repo: `${m[1]}/${m[2]}`, branch: explicitBranch, login: null, sha: null, pollMinutes: 5, token: siteToken };
+      if (m && siteToken) ghLink = { repo: `${m[1]}/${m[2]}`, branch: explicitBranch, login: null, sha: null, pollMinutes: 0, enabled: false, token: siteToken };
       else if (m && !siteToken) {
         // pasted public URL: link it token-free after a public readability check,
         // so pull/poll work unauthenticated and the webhook stays manual.
         const pub = await gh.apiPublic(`/repos/${m[1]}/${m[2]}`).catch(() => null);
-        if (pub) ghLink = { repo: pub.full_name, branch: explicitBranch || pub.default_branch, login: null, sha: null, pollMinutes: 5, token: null };
+        if (pub) ghLink = { repo: pub.full_name, branch: explicitBranch || pub.default_branch, login: null, sha: null, pollMinutes: 0, enabled: false, token: null };
       }
       else siteToken = null;
     }
@@ -478,22 +480,9 @@ app.post('/api/apps', async (req, res) => {
     catch (e) { console.error(id, 'env defaults snapshot:', e.message); }
     db_.apps = db_.apps.filter(a => a.id !== id).concat([meta]);
     save(db_);
-    // auto webhook for site-token links (best effort - needs PANEL_URL reachable)
-    let webhookNote = 'manual - paste the webhook URL into repo Settings → Webhooks';
-    const base = (process.env.PANEL_URL || '').replace(/\/$/, '');
-    if (ghLink && ghLink.repo && siteToken && base) {
-      try {
-        const [o, n] = ghLink.repo.split('/');
-        await gh.apiWith(siteToken, `/repos/${o}/${n}/hooks`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: 'web', active: true, events: ['push'],
-            config: { url: `${base}/webhook/${id}?token=${token}`, content_type: 'json', secret: token, insecure_ssl: '0' }
-          })
-        });
-        webhookNote = 'auto-created - push to deploy';
-      } catch {}
-    }
+    // Source linking and automatic deployment are separate choices. The first
+    // build is manual and automation stays off until explicitly enabled.
+    const webhookNote = ghLink ? 'github linked - automation disabled' : 'no github automation';
     // build async so UI returns fast (goes through deploy() so it lands in deploy.log)
     deploy(id).catch(e => console.error(id, e.message));
     res.json({ ...pubApp(meta), localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote });
@@ -983,7 +972,9 @@ async function deployNow(id, opts = {}) {
     throw new Error('new containers unhealthy - rolled back: ' + gate.detail);
   }
   await recordDeploy(id, { sha, at: stamp(), status: 'ok' });
-  await autodetectHome(id);
+  // Landing-path discovery is optional follow-up work. Do not hold the deploy
+  // lock (and keep the UI pulsing) after the release is already healthy/live.
+  autodetectHome(id).catch(e => console.error(id, 'home detection:', e.message));
   return true;
   } finally {
     if (localStage) localStage.cleanup();
@@ -1323,7 +1314,8 @@ app.get('/api/github/repos', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/github/link', async (req, res) => {
-  // { appId, repo: "owner/name", login? } -> set repoUrl + auto-create push webhook
+  // { appId, repo: "owner/name", login? } -> connect the source. Automatic
+  // deployment remains off until the site owner explicitly enables it.
   try {
     const { appId, repo, login } = req.body;
     const parts = String(repo || '').split('/');
@@ -1339,22 +1331,9 @@ app.post('/api/github/link', async (req, res) => {
       head = c && c.sha;
     } catch {}
     meta.repoUrl = info.clone_url;
-    meta.github = { repo: info.full_name, branch: info.default_branch, login: acct && acct.login, sha: head, pollMinutes: 5 };
+    meta.github = { repo: info.full_name, branch: info.default_branch, login: acct && acct.login, sha: head, pollMinutes: 0, enabled: false };
     save(db_);
-    const base = (process.env.PANEL_URL || '').replace(/\/$/, '');
-    if (base) {
-      try {
-        await gh.apiAs(login || (meta.github && meta.github.login) || undefined, `/repos/${parts[0]}/${parts[1]}/hooks`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: 'web', active: true, events: ['push'],
-            config: { url: `${base}/webhook/${meta.id}?token=${meta.token}`, content_type: 'json', secret: meta.token, insecure_ssl: '0' }
-          })
-        });
-        return res.json({ ok: true, repoUrl: meta.repoUrl, webhook: 'auto-created - push to deploy' });
-      } catch (e) { /* panel unreachable from github or no hook rights: manual flow still works */ }
-    }
-    res.json({ ok: true, repoUrl: meta.repoUrl, webhook: 'manual - paste the webhook URL into repo Settings → Webhooks' });
+    res.json({ ok: true, repoUrl: meta.repoUrl, automation: false, webhook: 'disabled until enabled on the site deploy page' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 // Push-to-deploy: bare repo per app on the host. The hook only notifies the
@@ -1887,36 +1866,73 @@ app.post('/api/apps/:id/api-backend', async (req, res) => {
     res.json({ ok: true, linked: label, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/apps/:id/github/unlink', async (req, res) => {
-  // Full off-switch for GitHub automation: clears the link (polling stops),
-  // rotates the panel token (the old webhook URL dies immediately), and
-  // best-effort deletes the repo-side webhook when a site token is present.
-  // Code and repoUrl stay: manual redeploys still pull (public repos fine).
+async function removeGithubHook(meta) {
+  if (!meta || !meta.github || !meta.github.repo || !(meta.github.token || meta.github.login)) return false;
+  try {
+    const [o, n] = String(meta.github.repo).split('/');
+    const hooks = await gh.apiFor(meta, `/repos/${o}/${n}/hooks`);
+    const ours = (Array.isArray(hooks) ? hooks : []).find(h => h && h.config && String(h.config.url || '').includes(`/webhook/${meta.id}`));
+    if (!ours) return false;
+    await gh.apiFor(meta, `/repos/${o}/${n}/hooks/${ours.id}`, { method: 'DELETE' });
+    return true;
+  } catch { return false; }
+}
+async function createGithubHook(meta) {
+  const base = (process.env.PANEL_URL || '').replace(/\/$/, '');
+  if (!base || !meta || !meta.github || !meta.github.repo || !(meta.github.token || meta.github.login)) return false;
+  try {
+    const [o, n] = String(meta.github.repo).split('/');
+    await gh.apiFor(meta, `/repos/${o}/${n}/hooks`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'web', active: true, events: ['push'],
+        config: { url: `${base}/webhook/${meta.id}?token=${meta.token}`, content_type: 'json', secret: meta.token, insecure_ssl: '0' }
+      })
+    });
+    return true;
+  } catch { return false; }
+}
+async function githubHead(meta) {
+  const [o, n] = String(meta.github.repo || '').split('/');
+  const endpoint = `/repos/${o}/${n}/commits/${encodeURIComponent(meta.github.branch || 'main')}`;
+  try { return (await gh.apiFor(meta, endpoint) || {}).sha || null; }
+  catch {
+    try { return (await gh.apiPublic(endpoint) || {}).sha || null; }
+    catch { return null; }
+  }
+}
+async function setGithubAutomation(req, res, forcedEnabled) {
+  // Disabling stops both webhook and poll triggers while preserving the GitHub
+  // source link used by manual repo redeploys. Enabling takes a head snapshot,
+  // so the first scheduled check cannot redeploy an unchanged commit.
   try {
     const db_ = load();
     const meta = db_.apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
-    if (!meta.github) return res.json({ ok: true, unlinked: false, note: 'no github link on this site' });
-    const repo = meta.github.repo;
-    const token = meta.github.token;
-    let webhookDeleted = false;
-    if (repo && token) {
-      try {
-        const [o, n] = String(repo).split('/');
-        const hooks = await gh.apiWith(token, `/repos/${o}/${n}/hooks`);
-        const ours = (Array.isArray(hooks) ? hooks : []).find(h => h && h.config && String(h.config.url || '').includes(`/webhook/${meta.id}`));
-        if (ours) {
-          await gh.apiWith(token, `/repos/${o}/${n}/hooks/${ours.id}`, { method: 'DELETE' });
-          webhookDeleted = true;
-        }
-      } catch {}
+    if (!meta.github || !meta.github.repo) return res.status(400).json({ error: 'no github repository linked to this site' });
+    const enabled = forcedEnabled === undefined ? !!(req.body && req.body.enabled) : forcedEnabled;
+    if (enabled) {
+      const head = await githubHead(meta);
+      if (head) meta.github.sha = head;
+      meta.github.enabled = true;
+      meta.github.pollMinutes = Math.max(0, Math.min(60, parseInt(meta.github.pollMinutes, 10) || 0));
+      save(db_);
+      await removeGithubHook(meta);
+      const webhookCreated = await createGithubHook(meta);
+      return res.json({ ok: true, enabled: true, pollMinutes: meta.github.pollMinutes, sha: meta.github.sha || null, webhookCreated });
     }
-    meta.github = null;
+    const webhookDeleted = await removeGithubHook(meta);
+    meta.github.enabled = false;
+    meta.github.pollMinutes = 0;
     meta.token = crypto.randomBytes(16).toString('hex');
     save(db_);
-    res.json({ ok: true, unlinked: true, webhookDeleted });
+    res.json({ ok: true, enabled: false, webhookDeleted });
   } catch (e) { res.status(500).json({ error: e.message }); }
-});
+}
+app.post('/api/apps/:id/github/automation', (req, res) => setGithubAutomation(req, res));
+// Compatibility for older frontends: "unlink" now means disable automation;
+// the repository connection is deliberately retained.
+app.post('/api/apps/:id/github/unlink', (req, res) => setGithubAutomation(req, res, false));
 app.post('/api/apps/:id/regenerate', (req, res) => {
   try {
     const db_ = load();

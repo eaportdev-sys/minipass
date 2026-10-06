@@ -367,7 +367,7 @@ function fillSiteHeader(a) {
     power.dataset.app = a.id;
     setPowerState('sitePower', 'checking', 'Checking');
   }
-  document.getElementById('hookUrl').textContent = `${location.origin}/webhook/${a.id}?token=${a.token}`;
+  fillGithubAutomation(a);
   document.getElementById('dbList').textContent = 'attached: ' + dbLabel(a);
   document.getElementById('dbOut').textContent = '';
   const keyOut = document.getElementById('repoKeyOut');
@@ -380,12 +380,6 @@ function fillSiteHeader(a) {
   }
   fillApiLink(a);
   fillGitConn(a);
-  const ps = document.getElementById('pollSel');
-  if (ps) ps.value = String((a.github && a.github.pollMinutes) || 0);
-  const pst = document.getElementById('pollState');
-  if (pst) pst.textContent = a.github
-    ? `tracking ${a.github.repo}@${String(a.github.sha || '?').slice(0, 7)}${a.github.pollMinutes > 0 ? ` — checked every ${a.github.pollMinutes}m` : ' (webhook only)'}`
-    : 'no github repo linked';
   const box = document.getElementById('localGitBox');
   if (a.localGit) {
     const remote = `root@${location.hostname}:/srv/apps/${a.id}/repo.git`;
@@ -397,6 +391,31 @@ function fillSiteHeader(a) {
   } else {
     box.innerHTML = `<div class="local-git-disabled"><b>Direct push is not configured</b><div class="meta">Create a private bare Git remote and its deploy hook on this server.</div><button class="btn primary" onclick="initLocalGit()">enable local git push</button></div>`;
   }
+}
+function fillGithubAutomation(a) {
+  const off = document.getElementById('githubAutomationOff');
+  const on = document.getElementById('githubAutomationOn');
+  const title = document.getElementById('githubAutomationOffTitle');
+  const meta = document.getElementById('githubAutomationOffMeta');
+  const enable = document.getElementById('githubAutomationEnable');
+  if (!off || !on || !title || !meta || !enable) return;
+  if (!a.github || !a.github.repo) {
+    off.style.display = 'block'; on.style.display = 'none'; enable.style.display = 'none';
+    title.textContent = 'No GitHub repository linked';
+    meta.textContent = 'Connect a repository in Setup before enabling automatic deployments.';
+    return;
+  }
+  if (a.github.enabled !== true) {
+    off.style.display = 'block'; on.style.display = 'none'; enable.style.display = '';
+    title.textContent = 'GitHub automation is disabled';
+    meta.textContent = `${a.github.repo} stays linked for manual repository redeploys. No webhook or polling deploys will run.`;
+    return;
+  }
+  off.style.display = 'none'; on.style.display = 'block';
+  const minutes = parseInt(a.github.pollMinutes, 10) || 0;
+  document.getElementById('hookUrl').textContent = `${location.origin}/webhook/${a.id}?token=${a.token}`;
+  document.getElementById('pollSel').value = String(minutes);
+  document.getElementById('pollState').textContent = `tracking ${a.github.repo}@${String(a.github.sha || '?').slice(0, 7)}${minutes > 0 ? ` — checked every ${minutes}m` : ' — polling off'}`;
 }
 async function copyText(text) {
   // navigator.clipboard needs a secure context (https/localhost) - plain LAN
@@ -440,7 +459,8 @@ async function disableLocalGit() {
   else toast(r.error || 'failed', false);
 }
 async function copyHook() {
-  await copyText(document.getElementById('hookUrl').textContent);
+  const el = document.getElementById('hookUrl');
+  if (el) await copyText(el.textContent);
 }
 async function loadEnv() {
   if (!currentApp) return;
@@ -843,17 +863,24 @@ async function regenHook() {
   if (r.token) { refresh(); toast('webhook regenerated - update GitHub'); }
   else toast(r.error || 'failed', false);
 }
-async function unlinkGithub() {
+async function setGithubAutomation(enabled) {
   if (!currentApp) return;
-  const ok = await uiConfirm({
-    title: 'Unlink GitHub?',
-    body: 'Stops webhook + polling auto-deploys for this site. Code stays; manual redeploys still pull.',
-    confirmLabel: 'Unlink', danger: true
-  });
-  if (!ok) return;
-  const r = await (await fetch(`/api/apps/${currentApp}/github/unlink`, { method: 'POST' })).json();
-  toast(r.ok ? 'github unlinked - auto-deploy off' : (r.error || 'failed'), !!r.ok);
-  refresh();
+  if (!enabled) {
+    const ok = await uiConfirm({
+      title: 'Disable GitHub automation?',
+      body: 'Stops webhook and polling deployments. The repository stays linked and manual repo redeploys still pull from it.',
+      confirmLabel: 'Disable', danger: true
+    });
+    if (!ok) return;
+  }
+  const r = await (await fetch(`/api/apps/${currentApp}/github/automation`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled })
+  })).json();
+  toast(r.ok
+    ? (enabled ? 'github automation enabled' : 'github automation disabled - repository still linked')
+    : (r.error || 'failed'), !!r.ok);
+  await refresh();
+  loadDeployStatus();
 }
 function showSiteTab(t) {
   document.querySelectorAll('.sitetab').forEach(s => s.style.display = 'none');
@@ -1185,7 +1212,7 @@ async function runDeploy(id, services, local = false) {
     tail.textContent = (outcome && (outcome.error || '')) || 'failed';
     toast('redeploy failed: ' + ((outcome && outcome.error) || 'unknown'), false);
   }
-  refreshSiteData();
+  await refreshSiteData();
   setTimeout(() => { prog.style.display = 'none'; }, 15000);
 }
 function toast(msg, ok = true) {
@@ -1813,8 +1840,10 @@ function updatePowerStates(st) {
   setPowerState('sitePower', deploying ? 'deploying' : (running ? 'deployed' : 'off'), deploying ? 'Deploying' : (running ? 'Deployed' : 'Off'));
   const liveSlot = sourceSlot(st && st.liveDeploy && st.liveDeploy.source);
   const failedSlot = st && st.lastDeploy && st.lastDeploy.status !== 'ok' ? sourceSlot(st.lastDeploy.source) : null;
+  const githubEnabled = !!(st && st.app && st.app.github && st.app.github.enabled === true);
   for (const slot of ['hook', 'local']) {
     if (activeSlot) setPowerState(slot + 'Power', slot === activeSlot ? 'deploying' : 'idle', slot === activeSlot ? 'Deploying' : 'Idle');
+    else if (slot === 'hook' && !githubEnabled) setPowerState('hookPower', 'off', 'Disabled');
     else if (!running) setPowerState(slot + 'Power', 'off', 'Off');
     else if (failedSlot === slot) setPowerState(slot + 'Power', 'failed', 'Failed');
     else if (liveSlot === slot) setPowerState(slot + 'Power', 'deployed', 'Deployed');

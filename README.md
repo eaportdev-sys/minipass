@@ -98,13 +98,13 @@ sources each get their own status indicator.
 
 ### 3 · Or connect GitHub (optional)
 
-Public repos need no token at all: paste the repo URL, detection + clone +
-polling all work unauthenticated (webhook auto-register is the only thing a
-token buys you there). For private repos, paste a fine-grained token on the
-site (Contents read-only, Webhooks read+write),
-pick a repo, done — webhook auto-registers when the panel is reachable, otherwise
-turn on polling (every 1/5/15 min). Tokens stay server-side; the API never echoes
-them back.
+Public repos need no token at all: paste the repo URL and detection, clone, and
+manual repo redeploys work unauthenticated. GitHub automation is deliberately
+off when a site is created; enable it from Deploy only when webhook or polling
+deploys are wanted. Enabling snapshots the current head first, so it never
+redeploys the initial commit as a false change. For private repos, paste a
+fine-grained token on the site (Contents read-only, Webhooks read+write).
+Tokens stay server-side; the API never echoes them back.
 
 ### 4 · Environment, files, databases
 

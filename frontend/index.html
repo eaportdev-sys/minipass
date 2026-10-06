@@ -197,17 +197,16 @@
         <div class="deploy-source-grid">
           <div class="card deploy-source-card">
             <div class="deploy-source-head"><div><b>GitHub automation</b><div class="meta">Webhook or scheduled polling</div></div><div id="hookPower" class="source-power is-checking"><span class="power-symbol">⏻</span><span class="power-label">Checking</span></div></div>
-            <div class="deploy-setting">
-              <span class="deploy-field-label">Webhook endpoint</span>
-              <div class="deploy-copy-row"><code id="hookUrl"></code><button onclick="copyHook()">copy</button></div>
-            </div>
-            <div class="deploy-setting deploy-poll-row">
-              <label for="pollSel">Check GitHub</label>
-              <select id="pollSel" onchange="setPoll()"><option value="0">webhook only</option><option value="1">every minute</option><option value="5">every 5 min</option><option value="15">every 15 min</option></select>
-              <div class="meta" id="pollState"></div>
+            <div id="githubAutomationBox" class="local-git-box">
+              <div id="githubAutomationOff" class="local-git-disabled"><b id="githubAutomationOffTitle">Loading automation state…</b><div class="meta" id="githubAutomationOffMeta"></div><button id="githubAutomationEnable" class="btn primary" onclick="setGithubAutomation(true)">enable github automation</button></div>
+              <div id="githubAutomationOn" style="display:none">
+                <div class="local-git-status"><div><b>GitHub automation is enabled</b><div class="meta">Webhook pushes deploy immediately; polling is optional.</div></div><span class="badge service-state on">enabled</span></div>
+                <div class="deploy-setting"><span class="deploy-field-label">Webhook endpoint</span><div class="deploy-copy-row"><code id="hookUrl"></code><button onclick="copyHook()">copy</button></div></div>
+                <div class="deploy-setting deploy-poll-row"><label for="pollSel">Check GitHub</label><select id="pollSel" onchange="setPoll()"><option value="0">webhook only</option><option value="1">every minute</option><option value="5">every 5 min</option><option value="15">every 15 min</option></select><div class="meta" id="pollState"></div></div>
+                <div class="deploy-source-actions"><button onclick="regenHook()">regenerate webhook</button><button class="btn danger" onclick="setGithubAutomation(false)">disable github automation</button></div>
+              </div>
             </div>
             <div id="hookHist" class="source-last"></div>
-            <div class="deploy-source-actions"><button onclick="regenHook()">regenerate webhook</button><button class="btn danger" onclick="unlinkGithub()">unlink github</button></div>
             <div id="hookProg" class="deploy-progress" style="display:none"><div class="deploy-progress-head"><span id="hookStage">deploying…</span><span><b id="hookPct"></b> <span id="hookTime"></span></span></div><div class="progress"><div id="hookBar"></div></div></div>
           </div>
           <div class="card deploy-source-card">
