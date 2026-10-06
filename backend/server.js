@@ -1214,7 +1214,7 @@ async function detectRepo(repo, { login, token } = {}) {
       if (blob && blob.content) pkg = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8'));
     } catch {}
   }
-  const { decideType, expandWorkspaces, matchWorkspaces, findBackends, sqlDatabaseHints } = require('./lib/detect');
+  const { decideType, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints } = require('./lib/detect');
   const out = decideType(tree, pkg);
   // monorepo sub-apps, tool-agnostic: vite heuristic + workspace manifests
   // (npm workspaces, pnpm-workspace.yaml, lerna.json, turbo/nx conventions)
@@ -1252,9 +1252,14 @@ async function detectRepo(repo, { login, token } = {}) {
   for (const d of matchWorkspaces(tree, patterns)) {
     if (!out.frontends.includes(d)) out.frontends.push(d);
   }
-  // backend homes: subdirs with runnable package.json that aren't frontends
+  // backend homes: subdirs with runnable package.json that aren't frontends.
+  // Frontend markers beyond vite (CRA layout, Angular/Next/Nuxt/Vue configs,
+  // UI deps + build script) classify first so they never pose as backends.
   out.backends = [];
   try {
+    // tree markers need no package reads - classify before the capped fetch so
+    // CRA/Angular-style dirs are already excluded from pkgDirs below.
+    for (const f of findFrontends(tree)) if (!out.frontends.includes(f)) out.frontends.push(f);
     const pkgDirs = [...new Set(tree.filter(p => /(^|\/)package\.json$/.test(p))
       .map(p => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''))
       .filter(d => d && d.split('/').length <= 2 && !out.frontends.includes(d)))].slice(0, 8);
@@ -1265,7 +1270,10 @@ async function detectRepo(repo, { login, token } = {}) {
         if (blob && blob.content) pkgs[d] = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8'));
       } catch { pkgs[d] = null; }
     }
-    out.backends = findBackends(tree, pkgs);
+    // package-based pass (UI deps + build script) with the fetched manifests,
+    // then backends skip everything classified as a frontend.
+    for (const f of findFrontends(tree, pkgs)) if (!out.frontends.includes(f)) out.frontends.push(f);
+    out.backends = findBackends(tree, pkgs, out.frontends);
     for (const pkg_ of Object.values(pkgs).filter(Boolean)) {
       for (const db of decideType(['package.json'], pkg_).dbs || []) if (!out.dbs.includes(db)) out.dbs.push(db);
     }

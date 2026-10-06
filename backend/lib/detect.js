@@ -28,11 +28,11 @@ function decideType(paths, pkg) {
       deps.gatsby || deps['@vitejs/plugin-react'] || deps['@vitejs/plugin-react-swc'] ||
       any(/next\.config\.(js|mjs|ts)/);
     if (reactish) {
-      if (!scripts.build) return { type: 'react', detected: 'react', dbs, reason: `${pkgPath} uses React but has no build script - react template needs "npm run build" -> dist/` };
+      if (!scripts.build) return { type: 'react', detected: 'react', dbs, reason: `${pkgPath} uses React but has no build script - react template needs "npm run build" -> dist/ or build/` };
       return { type: 'react', detected: 'react', dbs, reason: `${pkgPath} + React deps` };
     }
     if (any(/vite\.config\.(js|ts|mjs|cjs)/)) {
-      if (!scripts.build) return { type: null, detected: 'vite', dbs, reason: 'vite project without a build script - add "build" emitting dist/ or pick manually' };
+      if (!scripts.build) return { type: null, detected: 'vite', dbs, reason: 'vite project without a build script - add "build" emitting dist/ or build/, or pick manually' };
       return { type: 'react', detected: 'vite', dbs, reason: 'vite project (built + served as static)' };
     }
     return { type: 'node', detected: 'node', dbs, reason: `${pkgPath} with no frontend markers` };
@@ -81,21 +81,71 @@ function matchWorkspaces(tree, patterns) {
   return [...new Set(found)];
 }
 
-// Backend sub-app folders: package.json with a start script or main entry, not a
-// frontend, depth <= 2. pkgs maps dir -> parsed package.json (null when unreadable).
+// Backend sub-app folders: package.json with a runnable start script or main
+// entry, not a frontend, depth <= 2. pkgs maps dir -> parsed package.json
+// (null when unreadable). skip lists dirs already classified as frontends.
 // Pure - unit-test with fixtures.
-function findBackends(tree, pkgs) {
+function findBackends(tree, pkgs, skip = []) {
+  const skipSet = new Set(skip || []);
   const found = [];
   const dirs = new Set(
     tree.filter(p => /(^|\/)package\.json$/.test(p))
       .map(p => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''))
-      .filter(d => d && d.split('/').length <= 2)
+      .filter(d => d && d.split('/').length <= 2 && !skipSet.has(d))
   );
   for (const d of dirs) {
     const pkg = pkgs[d];
     if (!pkg || typeof pkg !== 'object') continue;
     const scripts = pkg.scripts || {};
+    // dev-server start scripts (CRA, vite, ng, vue-cli, nuxt/next dev) are not
+    // production backends - the panel builds + serves those as frontends.
+    if (scripts.start && DEV_SERVER_START.some(re => re.test(String(scripts.start)))) continue;
     if (scripts.start || pkg.main) found.push(d);
+  }
+  return [...new Set(found)];
+}
+
+// Frontend sub-app folders, depth <= 2: framework config markers (vite,
+// Angular, Next, Nuxt, Vue), CRA layout (public/index.html + src entry), or a
+// package.json with UI deps + a build script and no server deps. pkgs is
+// optional - markers alone classify without any extra API reads.
+// Pure - unit-test with fixtures.
+const FRONTEND_CONFIG_MARKERS = [
+  /^vite\.config\.(js|mjs|cjs|ts)$/,
+  /^angular\.json$/,
+  /^next\.config\.(js|mjs|cjs|ts)$/,
+  /^nuxt\.config\.(js|mjs|cjs|ts)$/,
+  /^vue\.config\.js$/,
+  /^craco\.config\.js$/
+];
+const FRONTEND_DEPS = ['react', 'react-dom', 'vue', 'nuxt', '@angular/core', 'next', 'gatsby',
+  'svelte', '@sveltejs/kit', 'solid-js', 'preact', '@solidjs/start'];
+const SERVER_DEPS = ['express', 'fastify', 'koa', '@nestjs/core', 'hapi', '@hapi/hapi', 'restify'];
+const DEV_SERVER_START = [/^react-scripts start/, /^vite(\s|$)/, /^ng serve/, /^vue-cli-service serve/, /^nuxt dev/, /^next dev/];
+const CLIENT_ENTRIES = ['src/index.js', 'src/index.jsx', 'src/index.ts', 'src/index.tsx',
+  'src/main.js', 'src/main.jsx', 'src/main.ts', 'src/main.tsx', 'src/App.js', 'src/App.tsx'];
+
+function findFrontends(tree, pkgs = {}) {
+  const found = [];
+  const byDir = new Map();
+  for (const p of tree || []) {
+    if (typeof p !== 'string' || !p) continue;
+    const d = p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
+    if (!d || d.split('/').length > 2) continue;
+    if (!byDir.has(d)) byDir.set(d, []);
+    byDir.get(d).push(p.slice(d.length + 1));
+  }
+  for (const [d, files] of byDir) {
+    const roots = files.filter(f => !f.includes('/'));
+    if (roots.some(f => FRONTEND_CONFIG_MARKERS.some(re => re.test(f)))) { found.push(d); continue; }
+    if (files.includes('package.json') && files.includes('public/index.html') &&
+        CLIENT_ENTRIES.some(e => files.includes(e))) { found.push(d); continue; }
+    const pkg = pkgs[d];
+    if (pkg && typeof pkg === 'object') {
+      const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+      const scripts = pkg.scripts || {};
+      if (scripts.build && FRONTEND_DEPS.some(k => deps[k]) && !SERVER_DEPS.some(k => deps[k])) { found.push(d); continue; }
+    }
   }
   return [...new Set(found)];
 }
@@ -109,4 +159,4 @@ function sqlDatabaseHints(text) {
   return [];
 }
 
-module.exports = { decideType, expandWorkspaces, matchWorkspaces, findBackends, sqlDatabaseHints };
+module.exports = { decideType, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints };

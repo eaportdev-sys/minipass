@@ -123,7 +123,8 @@ them back.
   Dockerfile and the type has no safe default, the panel says so instead of
   guessing — during create or Add service, click **use standard Dockerfile**
   to drop in the type template
-  (box-local; commit it to the repo so fresh clones keep it).
+  (box-local; commit it to the repo so fresh clones keep it). The React template
+  serves either Vite `dist/` or CRA `build/` output.
   Published service links scan bounded source files for direct routes such as
   `app.get('/health')`, then verify likely health/API/docs paths at runtime.
 - **Migrations**: Deploy tab → pre-deploy migration. Detection recognizes
