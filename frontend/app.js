@@ -435,7 +435,7 @@ async function loadEnv() {
       }
       return `<div class="env-row" data-env-original="${key}" data-env-managed="${v.managed ? '1' : '0'}"><div class="env-key-cell">${keyInput}${badge}</div>` +
         `<input class="env-value" type="password" value="${value}" ${canEditValue ? '' : 'readonly'} aria-label="${key} value">` +
-        `<div class="env-row-actions"><button onclick="toggleEnv(this)">show</button>${v.managed ? '' : ` <button class="btn danger" onclick="envDel('${v.key}')">delete</button>`}</div></div>`;
+        `<div class="env-row-actions"><button onclick="toggleEnv(this)">show</button>${canEditValue ? `<button onclick="genEnvRow(this)">generate</button>` : ''}${v.managed ? '' : ` <button class="btn danger" onclick="envDel('${v.key}')">delete</button>`}</div></div>`;
     }).join('') || '<div class="meta">(empty env)</div>';
   } catch { box.innerHTML = '<div class="meta">load failed</div>'; }
 }
@@ -488,6 +488,44 @@ async function fillEnvDefaults() {
     toast(r.ok ? (changed.length ? ('defaults loaded: ' + changed.join(', ') + ' - redeploy to apply') : 'defaults already correct') : (r.error || 'failed'), !!r.ok);
     loadEnv(); refresh(); loadServices();
   } catch (e) { document.getElementById('envOut').textContent = 'failed: ' + e.message; }
+}
+async function genToken() {
+  const format = document.getElementById('tokFormat').value;
+  const bytes = parseInt(document.getElementById('tokLen').value, 10) || 32;
+  const out = document.getElementById('tokOut');
+  out.value = 'generating…';
+  try {
+    const r = await (await fetch('/api/tools/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ format, bytes }) })).json();
+    if (!r.ok && !r.value) { toast(r.error || 'generate failed', false); out.value = ''; return; }
+    out.value = r.value;
+  } catch (e) { out.value = ''; toast('generate failed: ' + e.message, false); }
+}
+async function copyToken() {
+  const v = document.getElementById('tokOut').value;
+  if (!v) { toast('generate a secret first', false); return; }
+  try { await navigator.clipboard.writeText(v); toast('secret copied - paste it somewhere safe'); } catch { toast('copy failed - select and copy manually', false); }
+}
+function tokenToNew() {
+  const v = document.getElementById('tokOut').value;
+  if (!v) { toast('generate a secret first', false); return; }
+  document.getElementById('envVal').value = v;
+  document.getElementById('envKey').focus();
+  toast('secret placed in the new-variable value field');
+}
+async function genEnvRow(btn) {
+  const input = btn.closest('.env-row').querySelector('.env-value');
+  if (!input) return;
+  const format = document.getElementById('tokFormat').value;
+  const bytes = parseInt(document.getElementById('tokLen').value, 10) || 32;
+  btn.disabled = true;
+  try {
+    const r = await (await fetch('/api/tools/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ format, bytes }) })).json();
+    if (!r.ok && !r.value) { toast(r.error || 'generate failed', false); return; }
+    input.value = r.value;
+    input.type = 'text';
+    toast('fresh secret filled - save changes to apply');
+  } catch (e) { toast('generate failed: ' + e.message, false); }
+  finally { btn.disabled = false; }
 }
 async function envDownload(example) {
   if (!currentApp) return;

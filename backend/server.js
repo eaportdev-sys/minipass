@@ -14,6 +14,7 @@ const dbTools = require('./lib/db-tools');
 const migrations = require('./lib/migrations');
 const routes = require('./lib/routes');
 const envDefaults = require('./lib/env-defaults');
+const tokens = require('./lib/tokens');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -2215,6 +2216,15 @@ function applyEnvDefaults(meta, dir, hostname, protocol, requestedKeys) {
   }
   return { added: fill, updated: update, origins, defaultSources: snapshot.sources, pending: true };
 }
+app.post('/api/tools/token', (req, res) => {
+  try {
+    const value = tokens.mintToken(
+      String((req.body && req.body.format) || 'base64url').trim(),
+      parseInt((req.body && req.body.bytes) || 32, 10)
+    );
+    res.json({ ok: true, format: String((req.body && req.body.format) || 'base64url').trim(), value });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 app.post('/api/apps/:id/env/defaults', async (req, res) => {
   try {
     const meta = load().apps.find(a => a.id === req.params.id);

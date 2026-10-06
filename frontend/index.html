@@ -148,6 +148,19 @@
             <input id="envVal" placeholder="value" autocomplete="off">
             <button onclick="envAdd()">add variable</button>
           </div>
+          <div class="tok-gen">
+            <div class="sectionhead"><div><b>Generate secret</b><div class="meta">Show once — copy it now, the panel never stores it.</div></div></div>
+            <div class="controlrow">
+              <select id="tokFormat" aria-label="Secret format"><option value="base64url">base64url (JWT-style)</option><option value="hex">hex</option><option value="base64">base64</option><option value="uuid">UUID v4</option></select>
+              <input id="tokLen" type="number" min="16" max="128" value="32" aria-label="Random bytes">
+              <button onclick="genToken()">generate</button>
+            </div>
+            <div class="controlrow">
+              <input id="tokOut" readonly placeholder="generated secret appears here" autocomplete="off" aria-label="Generated secret">
+              <button onclick="copyToken()">copy</button>
+              <button onclick="tokenToNew()">to new value</button>
+            </div>
+          </div>
           <div class="actions"><button class="btn primary" onclick="saveEnv()">save changes</button><button onclick="fillEnvDefaults()">load defaults</button><button onclick="envDownload(false)">download .env</button><button onclick="envDownload(true)">download .env.example</button></div>
           <div class="meta">The panel snapshots each service's .env/.env.example once. Load defaults restores that private snapshot, maps local frontend/API URLs to published ports, and generates secure JWT/session secrets. Repository files and custom remote URLs are never changed.</div>
           <pre id="envOut"></pre>

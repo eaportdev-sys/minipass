@@ -300,6 +300,11 @@ main { flex: 1; min-width: 0; width: 100%; padding: 24px; max-width: 1100px; }
 .env-row input[readonly] { color: var(--muted); cursor: default; }
 .env-row-actions { display: flex; gap: 6px; justify-content: flex-start; }
 .env-add-row { margin-top: 12px; padding: 14px 4px; border-top: 1px solid var(--border); }
+#envList { max-height: 420px; overflow-y: auto; }
+.env-grid-head { position: sticky; top: 0; background: var(--bg); z-index: 1; }
+.tok-gen { margin-top: 12px; padding: 12px 4px 0; border-top: 1px solid var(--border); }
+.tok-gen .controlrow { margin-top: 8px; }
+#tokOut { font-family: monospace; }
 .controlrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .controlrow input, .controlrow select { flex: 1 1 150px; min-width: 0; margin-left: 0; }
 .keyrow { margin-top: 12px; }

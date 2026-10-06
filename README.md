@@ -108,7 +108,9 @@ them back.
   **Load defaults** restores missing keys from that stable snapshot. It maps localhost frontend/API
   URLs to the correct published service and replaces JWT/session-style secret
   placeholders with cryptographically random values. Repository files, existing
-  custom remote URLs, and external credentials are never changed.
+  custom remote URLs, and external credentials are never changed. A one-shot
+  **Generate secret** box (base64url, hex, base64, UUID) fills any editable row
+  or the new-variable field; the variable list scrolls past ~10 rows.
 - **Files tab**: lazy folder tree + reader/editor; uploads accept zip, files, or a folder.
 - **Databases**: add from the site page; admin UIs launch on demand
   (ports `8900–8999`) and stop when you close the popup, with a 30-minute fallback.
