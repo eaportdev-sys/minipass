@@ -327,11 +327,12 @@ function serviceBlock({ svcName, ctx, port, host, portEnv }) {
   return `  ${svcName}:\n${build}    restart: unless-stopped\n    env_file: .env\n${env}${ports}    expose:\n      - "${port}"\n`;
 }
 
-// nginx for static/react frontends. With a proxy target it mirrors the vite dev
-// proxy: same-origin /api/* stripped to /* and forwarded to the backend.
+// nginx for static/react frontends. With a proxy target it forwards same-origin
+// /api/* to the backend preserving the /api prefix (Express convention:
+// backends mount their router at /api, e.g. app.use('/api', routes)).
 function nginxConf(proxy) {
   const api = proxy
-    ? `  location /api/ {\n    rewrite ^/api/(.*) /$1 break;\n    proxy_pass http://${proxy.host}:${proxy.port};\n    proxy_set_header Host $host;\n    proxy_set_header X-Real-IP $remote_addr;\n  }\n`
+    ? `  location /api/ {\n    proxy_pass http://${proxy.host}:${proxy.port};\n    proxy_set_header Host $host;\n    proxy_set_header X-Real-IP $remote_addr;\n  }\n`
     : '';
   return `# minipass-managed (rewritten on link/unlink/redeploy - keep custom confs unmarked)\nserver {\n  listen 80;\n  root /usr/share/nginx/html;\n  index index.html;\n${api}  location / {\n    try_files $uri $uri/ /index.html;\n  }\n}\n`;
 }

@@ -840,7 +840,7 @@ async function deployNow(id, opts = {}) {
       try { cur = fs.readFileSync(nc, 'utf8'); } catch {}
       if (cur === null) {
         fs.writeFileSync(nc, nginxConf(wantProxy));
-      } else if (cur.includes('# minipass-managed') && (cur.includes('location /api/') !== !!wantProxy)) {
+      } else if (cur.includes('# minipass-managed') && cur !== nginxConf(wantProxy)) {
         fs.writeFileSync(nc, nginxConf(wantProxy));
       }
     }
@@ -1704,7 +1704,7 @@ app.delete('/api/apps/:id/databases/:type/tool', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 // Frontend -> backend wiring: a static/react site proxies same-origin /api/ to another
-// app (mirrors the vite dev proxy). Reaches the target through the host gateway, so no
+// app preserving the /api prefix. Reaches the target through the host gateway, so no
 // shared networks and no changes to the target app are needed.
 app.post('/api/apps/:id/allow-backend', (req, res) => {
   try {
