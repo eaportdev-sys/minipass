@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node lib/generator.test.js && node lib/services.test.js && node lib/migrations.test.js"
+    "test": "node lib/generator.test.js && node lib/services.test.js && node lib/migrations.test.js && node lib/routes.test.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

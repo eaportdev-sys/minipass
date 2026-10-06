@@ -12,6 +12,7 @@ const { gitEnv, pubKey, appPubKey, appGitEnv } = require('./lib/ssh');
 const svc = require('./lib/services');
 const dbTools = require('./lib/db-tools');
 const migrations = require('./lib/migrations');
+const routes = require('./lib/routes');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -650,10 +651,16 @@ async function autodetectHome(id) {
         results.push({ name: service.name, path: '' });
         continue;
       }
+      const ctxDir = path.join(dir, 'code', service.subdir || '');
+      const sourceRoutes = routes.detectOpenPaths(ctxDir);
+      const directRoutes = sourceRoutes.filter(r => r.direct).map(r => r.path);
+      const mountedRoutes = sourceRoutes.filter(r => !r.direct).map(r => r.path);
+      const candidates = [...new Set([...directRoutes, ...cands, ...mountedRoutes])]
+        .sort((a, b) => routes.routeScore(a) - routes.routeScore(b));
       let found = null;
       for (let round = 0; round < 2 && found == null; round++) {
         if (round) await new Promise(r => setTimeout(r, 2000));
-        for (const p of cands) {
+        for (const p of candidates) {
           try {
             const url = `http://${service.name}:${parseInt(service.port, 10) || 3000}${p}`;
             const code = String(await runOut(DOCKER_BIN, ['run', '--rm', '--network', net, 'curlimages/curl:latest', '-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '5', url], { timeout: 25000 })).trim();
@@ -661,6 +668,9 @@ async function autodetectHome(id) {
           } catch {}
         }
       }
+      // A direct app.get/server.get/Route::get declaration is more useful than
+      // publishing a known-bad root when Docker cannot run the curl probe.
+      if (found == null && directRoutes.length) found = directRoutes[0];
       if (found != null) results.push({ name: service.name, path: found });
     }
     if (!results.length) return;

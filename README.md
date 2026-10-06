@@ -113,6 +113,8 @@ them back.
   guessing — during create or Add service, click **use standard Dockerfile**
   to drop in the type template
   (box-local; commit it to the repo so fresh clones keep it).
+  Published service links scan bounded source files for direct routes such as
+  `app.get('/health')`, then verify likely health/API/docs paths at runtime.
 - **Migrations**: Deploy tab → pre-deploy migration. Detection recognizes
   project scripts, Knex, Prisma, Sequelize, TypeORM, Drizzle, MikroORM, Django,
   Alembic, Laravel, Doctrine, Rails, Flyway, Liquibase, dbmate, EF Core, and raw
