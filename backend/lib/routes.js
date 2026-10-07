@@ -29,6 +29,16 @@ function routeScore(route) {
   return 15;
 }
 
+function liveStatus(code) {
+  const n = parseInt(String(code || '').trim(), 10);
+  return (n >= 200 && n < 400) || n === 401 || n === 403;
+}
+
+function chooseOpenPath(livePaths, current = '/') {
+  const paths = (Array.isArray(livePaths) ? livePaths : []).map(x => typeof x === 'string' ? x : x && x.path).filter(Boolean);
+  return paths.find(p => p === current) || paths.find(p => p === '/') || paths[0] || null;
+}
+
 function extractRoutes(source) {
   // Strip comments before matching so examples and disabled routes do not turn
   // into published links. This is deliberately conservative: direct app/server
@@ -86,4 +96,4 @@ function detectOpenPaths(root, maxFiles = 250) {
   });
 }
 
-module.exports = { PROBE_PATHS, safeRoute, routeScore, extractRoutes, detectOpenPaths };
+module.exports = { PROBE_PATHS, safeRoute, routeScore, liveStatus, chooseOpenPath, extractRoutes, detectOpenPaths };

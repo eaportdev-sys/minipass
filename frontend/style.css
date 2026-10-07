@@ -187,6 +187,13 @@ main { flex: 1; min-width: 0; width: 100%; padding: 24px; max-width: 1100px; }
 .local-command > small { display: block; color: var(--muted); font-size: 10px; margin-top: 6px; }
 .local-git-disabled { padding: 15px; border: 1px dashed var(--border); border-radius: 9px; text-align: center; background: var(--input); }
 .local-git-disabled button { margin-top: 8px; }
+.route-choices { margin-top: 10px; }
+.route-choice-label { color: var(--muted); font-size: 12px; margin-bottom: 7px; }
+.route-choice-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.route-choice-list button { display: inline-flex; align-items: center; gap: 7px; padding: 7px 9px; }
+.route-choice-list button span { color: var(--muted); font-size: 11px; }
+.route-choice-list button.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.route-choice-list button.unavailable { opacity: .55; }
 .upgrade-grid { display: grid; grid-template-columns: minmax(300px, .85fr) minmax(0, 1.15fr); gap: 12px; align-items: stretch; }
 .upgrade-grid > .card { margin: 0; min-width: 0; }
 .panel-state { flex: 0 0 auto; padding: 4px 9px; border: 1px solid var(--border); border-radius: 20px; color: var(--muted); background: var(--input); font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }

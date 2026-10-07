@@ -181,6 +181,32 @@ async function saveHome() {
   toast(r.ok ? 'open path saved' : (r.error || 'failed'), !!r.ok);
   refresh(); loadDeployStatus(); loadServices();
 }
+function selectHomePath(path) {
+  const selected = path === '/' ? '' : path;
+  document.getElementById('homePath').value = selected;
+  document.querySelectorAll('#routeChoices button[data-path]').forEach(button => {
+    button.classList.toggle('selected', button.dataset.path === (selected || '/'));
+  });
+}
+function renderRouteChoices(app) {
+  const box = document.getElementById('routeChoices');
+  if (!box || !app) return;
+  const raw = Array.isArray(app.openPaths) ? app.openPaths : [];
+  const items = raw.map(item => typeof item === 'string'
+    ? { path: item, live: null, code: null, source: 'source' }
+    : item).filter(item => item && /^\/[A-Za-z0-9._~!&'()+,;=@%/-]*$/.test(item.path || ''));
+  if (!items.length) {
+    box.innerHTML = '<div class="meta">No routes recorded yet. Redeploy to scan source declarations and live endpoints.</div>';
+    return;
+  }
+  const input = document.getElementById('homePath');
+  const selected = input ? (input.value || '/') : (app.homePath || '/');
+  box.innerHTML = '<div class="route-choice-label">Detected routes — select the default, then save</div><div class="route-choice-list">' + items.map(item => {
+    const available = item.live !== false;
+    const state = item.live === true ? String(item.code || 'live') : (item.live === false ? String(item.code || 'failed') : 'source');
+    return `<button data-path="${safeHtml(item.path)}" onclick="selectHomePath(this.dataset.path)" class="${item.path === selected ? 'selected' : ''}${available ? '' : ' unavailable'}"><code>${safeHtml(item.path)}</code><span>${safeHtml(state)}</span></button>`;
+  }).join('') + '</div>';
+}
 async function refreshSiteData(expectedApp = currentApp) {
   if (!expectedApp || currentApp !== expectedApp) return;
   // Header/list refreshes can rebuild parts of the active site. Finish that
@@ -349,6 +375,7 @@ async function loadDeployStatus() {
     }).join('') || '<div class="meta">No application or database containers are present.</div>';
     const hp = document.getElementById('homePath');
     if (hp && s.app) hp.value = s.app.homePath || '';
+    if (s.app) renderRouteChoices(s.app);
     const mc = document.getElementById('migrateCmd');
     if (mc && s.app) mc.value = s.app.migrateCmd || '';
     if (s.app) {
@@ -408,6 +435,8 @@ function fillSiteHeader(a) {
   }
   fillApiLink(a);
   fillGitConn(a);
+  document.getElementById('homePath').value = a.homePath || '';
+  renderRouteChoices(a);
   const box = document.getElementById('localGitBox');
   if (a.localGit) {
     const remote = `root@${location.hostname}:/srv/apps/${a.id}/repo.git`;
@@ -1891,6 +1920,7 @@ setInterval(async () => {
   const slot = !op ? null : (op.source === 'local-push' ? 'local' : 'hook');
   const recv = !op && st.pushEvent && (Date.now() - st.pushEvent.at) < 120000;
   updatePowerStates(st);
+  if (st.app) renderRouteChoices(st.app);
   for (const p of ['hook', 'local']) {
     const box = document.getElementById(p + 'Prog');
     if (!box) continue;

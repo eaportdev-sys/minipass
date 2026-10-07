@@ -125,7 +125,8 @@
         </div>
         <div class="card stepcard">
           <div class="stephead"><span class="stepno">4</span><div><b>Configure routing</b><div class="meta">Where Open lands and how services connect.</div></div></div>
-          <div class="meta">Open path: <input id="homePath" placeholder="/v1/live/events" style="width:200px"> <button onclick="saveHome()">save</button></div>
+          <div class="meta">Default Open path: <input id="homePath" placeholder="/v1/live/events" style="width:200px"> <button onclick="saveHome()">save</button></div>
+          <div id="routeChoices" class="route-choices"><div class="meta">Live routes appear here after deployment.</div></div>
           <div id="apiCard" style="display:none">
             <hr><b>API backend</b> <span class="meta" id="apiState"></span>
             <div class="meta">Same-origin <code>/api/*</code> → backend. Stored as <code>API_HOST</code>/<code>API_PORT</code>.</div>

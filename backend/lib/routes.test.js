@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { PROBE_PATHS, safeRoute, routeScore, extractRoutes, detectOpenPaths } = require('./routes');
+const { PROBE_PATHS, safeRoute, routeScore, liveStatus, chooseOpenPath, extractRoutes, detectOpenPaths } = require('./routes');
 
 assert.equal(safeRoute('/health'), '/health');
 assert.equal(safeRoute('/users/:id'), null);
@@ -10,6 +10,15 @@ assert.equal(safeRoute('${prefix}/health'), null);
 assert(PROBE_PATHS.includes('/healthz'));
 assert(PROBE_PATHS.includes('/api/healthz'));
 assert(routeScore('/healthz') < routeScore('/health'));
+assert(liveStatus('200'));
+assert(liveStatus('302'));
+assert(liveStatus('401'));
+assert(liveStatus('403'));
+assert(!liveStatus('404'));
+assert(!liveStatus('500'));
+assert.equal(chooseOpenPath(['/api', '/'], '/health/live'), '/');
+assert.equal(chooseOpenPath(['/api', '/'], '/api'), '/api');
+assert.equal(chooseOpenPath(['/healthz'], '/'), '/healthz');
 
 const extracted = extractRoutes(`
   // app.get('/disabled', handler)

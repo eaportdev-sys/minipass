@@ -673,30 +673,60 @@ async function autodetectHome(id) {
     const results = [];
     for (const service of services) {
       if (['static', 'react'].includes(service.type)) {
-        results.push({ name: service.name, path: '' });
+        results.push({ name: service.name, path: '', openPaths: [{ path: '/', code: 200, live: true, source: 'frontend' }] });
         continue;
       }
       const ctxDir = path.join(dir, 'code', service.subdir || '');
       const sourceRoutes = routes.detectOpenPaths(ctxDir);
       const directRoutes = sourceRoutes.filter(r => r.direct).map(r => r.path);
       const mountedRoutes = sourceRoutes.filter(r => !r.direct).map(r => r.path);
-      const candidates = [...new Set([...directRoutes, ...cands, ...mountedRoutes])]
-        .sort((a, b) => routes.routeScore(a) - routes.routeScore(b));
-      let found = null;
-      for (let round = 0; round < 2 && found == null; round++) {
-        if (round) await new Promise(r => setTimeout(r, 2000));
-        for (const p of candidates) {
-          try {
-            const url = `http://${service.name}:${parseInt(service.port, 10) || 3000}${p}`;
-            const code = String(await runOut(DOCKER_BIN, ['run', '--rm', '--network', net, 'curlimages/curl:latest', '-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '5', url], { timeout: 25000 })).trim();
-            if (/^[234]/.test(code) || code === '401' || code === '403') { found = p === '/' ? '' : p; break; }
-          } catch {}
+      const sourceCandidates = [...new Set([...directRoutes, ...mountedRoutes])]
+        .sort((a, b) => routes.routeScore(a) - routes.routeScore(b)).slice(0, 24);
+      const discovered = new Map(sourceCandidates.map(p => [p, {
+        path: p, code: null, live: null, source: directRoutes.includes(p) ? 'direct' : 'router'
+      }]));
+      const probeOne = async p => {
+        try {
+          const url = `http://${service.name}:${parseInt(service.port, 10) || 3000}${p}`;
+          const code = String(await runOut(DOCKER_BIN, ['run', '--rm', '--network', net, 'curlimages/curl:latest', '-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '5', url], { timeout: 25000 })).trim();
+          const item = discovered.get(p) || { path: p, source: 'probe' };
+          item.code = parseInt(code, 10) || null;
+          item.live = routes.liveStatus(code);
+          discovered.set(p, item);
+          return item;
+        } catch { return null; }
+      };
+      // Probe every literal source route so multi-route APIs can present all
+      // valid entry points. Only if none work do we walk conventional paths.
+      for (const p of sourceCandidates) await probeOne(p);
+      if (sourceCandidates.length && ![...discovered.values()].some(x => x.live)) {
+        await new Promise(r => setTimeout(r, 2000));
+        for (const p of sourceCandidates) await probeOne(p);
+      }
+      let live = [...discovered.values()].filter(x => x.live)
+        .sort((a, b) => routes.routeScore(a.path) - routes.routeScore(b.path));
+      if (!live.length) {
+        const fallbacks = cands.filter(p => !discovered.has(p));
+        for (let round = 0; round < 2 && !live.length; round++) {
+          if (round) await new Promise(r => setTimeout(r, 2000));
+          for (const p of fallbacks) {
+            const item = await probeOne(p);
+            if (item && item.live) { live = [item]; break; }
+          }
         }
       }
+      const currentPath = service.name === 'app' ? (fresh.homePath || '/') : (service.homePath || '/');
+      let found = routes.chooseOpenPath(live, currentPath);
       // A direct app.get/server.get/Route::get declaration is more useful than
       // publishing a known-bad root when Docker cannot run the curl probe.
-      if (found == null && directRoutes.length) found = directRoutes[0];
-      if (found != null) results.push({ name: service.name, path: found });
+      const anyResponse = [...discovered.values()].some(x => x.code != null);
+      if (found == null && directRoutes.length && !anyResponse) found = directRoutes[0];
+      if (found != null) {
+        const openPaths = [...discovered.values()]
+          .filter(x => sourceCandidates.includes(x.path) || x.live)
+          .sort((a, b) => Number(b.live === true) - Number(a.live === true) || routes.routeScore(a.path) - routes.routeScore(b.path));
+        results.push({ name: service.name, path: found === '/' ? '' : found, openPaths });
+      }
     }
     if (!results.length) return;
     const db3 = load();
@@ -706,9 +736,11 @@ async function autodetectHome(id) {
     for (const result of results) {
       if (result.name === 'app') {
         if (!m3.homePathManual && (m3.homePath || '') !== result.path) { m3.homePath = result.path; changed = true; }
+        if (JSON.stringify(m3.openPaths || []) !== JSON.stringify(result.openPaths || [])) { m3.openPaths = result.openPaths || []; changed = true; }
       } else if (Array.isArray(m3.services)) {
         const stored = m3.services.find(s => s.name === result.name);
         if (stored && (stored.homePath || '') !== result.path) { stored.homePath = result.path; changed = true; }
+        if (stored && JSON.stringify(stored.openPaths || []) !== JSON.stringify(result.openPaths || [])) { stored.openPaths = result.openPaths || []; changed = true; }
       }
     }
     if (changed) save(db3);
@@ -1092,7 +1124,7 @@ app.get('/api/apps/:id/doctor', async (req, res) => {
       try {
         const code = execSync(`docker run --rm --network ${net} curlimages/curl:latest -s -o /dev/null -w "%{http_code}" --max-time 5 http://app:${cport}${p}`, { timeout: 15000 }).toString().trim();
         probed.push(`${p}→${code}`);
-        if (/^[234]/.test(code) || code === '401' || code === '403') {
+        if (routes.liveStatus(code)) {
           checks.push({ name: 'landing', status: 'ok', detail: `first live route: ${p} (${code})${meta.homePath && meta.homePath !== p ? ` - open path set to ${meta.homePath}` : ''}` });
           break;
         }
