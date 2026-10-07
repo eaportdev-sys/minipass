@@ -2160,6 +2160,9 @@ function migrationFailure(error) {
   if (/ECONNREFUSED[^\n]*(?:127\.0\.0\.1|::1|localhost)/i.test(redacted)) {
     return ('database connection refused at localhost. Inside an app container, localhost is the app itself, not the managed database. Configure the project to use process.env.DB_HOST and process.env.DB_PORT, then local rebuild and retry. Original error: ' + concise).slice(0, 1200);
   }
+  if (/ER_NOT_SUPPORTED_AUTH_MODE|does not support authentication protocol|caching_sha2_password/i.test(redacted)) {
+    return ('MySQL 8 authentication (caching_sha2_password) is not supported by the repository\u2019s old `mysql` package. Fix in source: replace dependency `mysql` with `mysql2`, set the Knex client to `mysql2`, redeploy, then retry. Testing alternative: recreate the site with MariaDB. Original error: ' + concise).slice(0, 1200);
+  }
   return concise.slice(0, 1200);
 }
 function migrationResponse(prefix, error) {
