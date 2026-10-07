@@ -62,6 +62,7 @@
       <div class="site-tabs" role="tablist" aria-label="Site sections">
         <button class="tabbtn" data-tab="overview" onclick="showSiteTab('overview')">Overview</button>
         <button class="tabbtn" data-tab="setup" onclick="showSiteTab('setup')">Setup</button>
+        <button class="tabbtn" data-tab="database" onclick="showSiteTab('database')">Database</button>
         <button class="tabbtn" data-tab="environment" onclick="showSiteTab('environment')">Environment</button>
         <button class="tabbtn" data-tab="deploy" onclick="showSiteTab('deploy')">Deploy</button>
         <button class="tabbtn" data-tab="files" onclick="showSiteTab('files')">Files</button>
@@ -76,8 +77,8 @@
         </div>
         <div class="card flowintro">
           <b>Deployment workflow</b>
-          <div class="flowsteps"><span>1 · Setup source and runtime</span><span>2 · Configure environment</span><span>3 · Deploy and verify health</span></div>
-          <div class="meta">Use Setup for source, services, databases, and routing. Use Environment for configuration, then Deploy for releases and recovery.</div>
+          <div class="flowsteps"><span>1 · Setup source and services</span><span>2 · Prepare databases</span><span>3 · Configure environment</span><span>4 · Deploy and verify health</span></div>
+          <div class="meta">Use Setup for source, services, and routing. Use Database for managed data services and migrations, Environment for configuration, then Deploy for releases and recovery.</div>
         </div>
       </div>
       <div id="tab-setup" class="sitetab" style="display:none">
@@ -114,19 +115,7 @@
           <div id="svcList"></div>
         </div>
         <div class="card stepcard">
-          <div class="stephead"><span class="stepno">3</span><div><b>Attach databases</b><div class="meta" id="dbList"></div></div></div>
-          <div class="db-add-row">
-            <div><b>Add database</b><div class="meta">Existing data and passwords stay untouched.</div></div>
-            <div class="controlrow"><select id="dbAdd"><option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option><option value="mariadb">MariaDB</option><option value="mongo">MongoDB</option><option value="redis">Redis</option></select><button onclick="addDb()">add database</button></div>
-          </div>
-          <pre id="dbOut"></pre>
-          <div id="dbRuntimeList"></div>
-          <div class="meta">Database administration opens with the connection preconfigured. Closing its popup stops the UI; a 30-minute limit handles abandoned sessions.</div>
-          <div class="meta">Admin images are installed with Minipass and launch from this server without downloading. Use this only to repair a missing image or intentionally upgrade them.</div>
-          <div class="controlrow"><button onclick="pullDbToolImages()">install / upgrade admin images</button><span id="dbToolImgOut" class="meta"></span></div>
-        </div>
-        <div class="card stepcard">
-          <div class="stephead"><span class="stepno">4</span><div><b>Configure routing</b><div class="meta">Where Open lands and how services connect.</div></div></div>
+          <div class="stephead"><span class="stepno">3</span><div><b>Configure routing</b><div class="meta">Where Open lands and how services connect.</div></div></div>
           <div class="meta">Default Open path: <input id="homePath" placeholder="/v1/live/events" style="width:200px"> <button onclick="saveHome()">save</button></div>
           <div id="routeChoices" class="route-choices"><div class="meta">Live routes appear here after deployment.</div></div>
           <div id="apiCard" style="display:none">
@@ -139,6 +128,35 @@
           <div class="meta">Allow other sites to list this site as an API target:
             <select id="allowBackend"><option value="0">off</option><option value="1">on</option></select>
             <button onclick="saveAllow()">save</button></div>
+        </div>
+      </div>
+      <div id="tab-database" class="sitetab" style="display:none">
+        <div class="card">
+          <div class="sectionhead"><div><b>Managed databases</b><div class="meta" id="dbList"></div></div><button onclick="loadDatabases()">refresh</button></div>
+          <div class="db-add-row">
+            <div><b>Add database</b><div class="meta">Existing data and passwords stay untouched.</div></div>
+            <div class="controlrow"><select id="dbAdd"><option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option><option value="mariadb">MariaDB</option><option value="mongo">MongoDB</option><option value="redis">Redis</option></select><button onclick="addDb()">add database</button></div>
+          </div>
+          <pre id="dbOut"></pre>
+          <div id="dbRuntimeList"></div>
+          <div class="meta">Database administration opens with the connection preconfigured. Closing its popup stops the UI; a 30-minute limit handles abandoned sessions.</div>
+          <div class="meta">Admin images are installed with Minipass and launch from this server without downloading. Use this only to repair a missing image or intentionally upgrade them.</div>
+          <div class="controlrow"><button onclick="pullDbToolImages()">install / upgrade admin images</button><span id="dbToolImgOut" class="meta"></span></div>
+        </div>
+        <div class="card">
+          <div class="sectionhead"><div><b>Database migrations</b><div class="meta">Run and verify schema changes independently, or save a command to run after every build and before the deployment swap.</div></div></div>
+          <div class="migration-panel">
+            <label for="migrateCmd">Pre-deploy migration <span>optional — failure aborts before running containers are replaced</span></label>
+            <div class="migration-command-row"><input id="migrateCmd" placeholder="npm run migrate"><button onclick="saveMigrate()">save</button></div>
+            <div class="migration-subgrid">
+              <label>Service<select id="migrateSvc"></select></label>
+              <label>Folder<input id="migrateDir" placeholder="empty = selected service root" autocomplete="off"></label>
+            </div>
+            <div class="migration-command-row"><input id="migrateCheck" placeholder="verify command, e.g. ./node_modules/.bin/knex migrate:list"><button onclick="verifyMigrate()">verify</button></div>
+            <div class="migration-actions"><button onclick="runMigrateNow()">run migration now</button><span class="meta">run / verify execute in a one-off container only — no deploy, no swap</span></div>
+            <div id="migrateSuggest"></div>
+            <pre id="migrateOut" class="compact-output"></pre>
+          </div>
         </div>
       </div>
       <div id="tab-environment" class="sitetab" style="display:none">
@@ -177,18 +195,6 @@
               <div><span>1</span><b>Build</b><small>Running containers stay online</small></div>
               <div><span>2</span><b>Swap</b><small>Only after a successful image build</small></div>
               <div><span>3</span><b>Verify</b><small>Health gate with automatic rollback</small></div>
-            </div>
-            <div class="migration-panel">
-              <label for="migrateCmd">Pre-deploy migration <span>optional — runs after build, before swap; failure aborts</span></label>
-              <div class="migration-command-row"><input id="migrateCmd" placeholder="npm run migrate"><button onclick="saveMigrate()">save</button></div>
-              <div class="migration-subgrid">
-                <label>Service<select id="migrateSvc"></select></label>
-                <label>Folder<input id="migrateDir" placeholder="empty = selected service root" autocomplete="off"></label>
-              </div>
-              <div class="migration-command-row"><input id="migrateCheck" placeholder="verify command, e.g. ./node_modules/.bin/knex migrate:list"><button onclick="verifyMigrate()">verify</button></div>
-              <div class="migration-actions"><button onclick="runMigrateNow()">run migration now</button><span class="meta">run / verify execute in a one-off container only — no deploy, no swap</span></div>
-              <div id="migrateSuggest"></div>
-              <pre id="migrateOut" class="compact-output"></pre>
             </div>
             <div id="deployProg" class="deploy-progress" style="display:none"><div class="deploy-progress-head"><span id="deployStage">deploying…</span><span><b id="deployPct"></b> <span id="deployTime"></span></span></div><div class="progress"><div id="deployBar"></div></div><pre id="deployTail"></pre></div>
           </div>
@@ -254,7 +260,7 @@
         </div>
         <div class="card">
           <div class="sectionhead"><div><b>Backups</b><div class="meta">Download a full site archive or a single database dump. Restore is manual: extract, then rescan. Store copies off this box.</div></div><button class="btn primary" onclick="downloadSiteBackup()">download site (.tar.gz)</button></div>
-          <div class="meta">Per-database dumps live on each database card under Setup → Attach databases.</div>
+          <div class="meta">Per-database dumps live on each database card under Database → Managed databases.</div>
         </div>
       </div>
       <div id="tab-logs" class="sitetab" style="display:none">

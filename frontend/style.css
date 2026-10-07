@@ -245,7 +245,7 @@ main { flex: 1; min-width: 0; width: 100%; padding: 24px; max-width: 1100px; }
 }
 .runtime-version, .runtime-state { color: var(--muted); font-size: 13px; }
 .runtime-state { text-align: right; }
-.flowsteps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0; }
+.flowsteps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 14px 0; }
 .flowsteps span { background: var(--input); border: 1px solid var(--border); border-radius: 9px; padding: 11px; font-size: 13px; }
 .stepcard { padding: 18px; }
 .stephead { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }

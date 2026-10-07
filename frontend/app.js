@@ -99,7 +99,7 @@ async function hydrateAppCards(apps, seq) {
     }
   }));
 }
-const SITE_TABS = new Set(['overview', 'setup', 'environment', 'deploy', 'files', 'logs', 'terminal']);
+const SITE_TABS = new Set(['overview', 'setup', 'database', 'environment', 'deploy', 'files', 'logs', 'terminal']);
 function siteRoute() {
   const p = new URLSearchParams(String(location.hash || '').replace(/^#/, ''));
   const id = p.get('site');
@@ -972,7 +972,7 @@ function showSiteTab(t, remember = true) {
   });
   if (!currentApp) return;
   if (remember) rememberSiteRoute(currentApp, t);
-  if (t === 'setup') loadDatabases();
+  if (t === 'database') { loadDatabases(); loadMigrateSuggest(); }
   if (t === 'environment') loadEnv();
   if (t === 'files') listFiles('');
   if (t === 'logs') showLogs();
