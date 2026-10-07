@@ -3,6 +3,7 @@ const path = require('path');
 
 const SKIP = new Set(['.git', 'build', 'coverage', 'dist', 'node_modules', 'test', 'tests', '__tests__', 'vendor']);
 const SOURCE_EXT = /\.(?:cjs|js|jsx|mjs|php|ts|tsx)$/i;
+const PROBE_SENTINEL = '/.minipass-route-probe-404';
 const PROBE_PATHS = Object.freeze([
   '/health/live', '/health/ready', '/healthz', '/readyz', '/livez', '/health',
   '/api/health/live', '/api/health/ready', '/api/healthz', '/api/readyz', '/api/livez', '/api/health',
@@ -96,4 +97,4 @@ function detectOpenPaths(root, maxFiles = 250) {
   });
 }
 
-module.exports = { PROBE_PATHS, safeRoute, routeScore, liveStatus, chooseOpenPath, extractRoutes, detectOpenPaths };
+module.exports = { PROBE_PATHS, PROBE_SENTINEL, safeRoute, routeScore, liveStatus, chooseOpenPath, extractRoutes, detectOpenPaths };

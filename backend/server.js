@@ -685,33 +685,43 @@ async function autodetectHome(id) {
       const discovered = new Map(sourceCandidates.map(p => [p, {
         path: p, code: null, live: null, source: directRoutes.includes(p) ? 'direct' : 'router'
       }]));
-      const probeOne = async p => {
+      const probeOne = async (p, record = true) => {
         try {
           const url = `http://${service.name}:${parseInt(service.port, 10) || 3000}${p}`;
           const code = String(await runOut(DOCKER_BIN, ['run', '--rm', '--network', net, 'curlimages/curl:latest', '-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '5', url], { timeout: 25000 })).trim();
           const item = discovered.get(p) || { path: p, source: 'probe' };
           item.code = parseInt(code, 10) || null;
           item.live = routes.liveStatus(code);
-          discovered.set(p, item);
+          if (record) discovered.set(p, item);
           return item;
         } catch { return null; }
       };
       // Probe every literal source route so multi-route APIs can present all
-      // valid entry points. Only if none work do we walk conventional paths.
-      for (const p of sourceCandidates) await probeOne(p);
-      if (sourceCandidates.length && ![...discovered.values()].some(x => x.live)) {
-        await new Promise(r => setTimeout(r, 2000));
+      // valid entry points. A successful deliberately-missing path means this
+      // app has a catch-all/soft-404 (common in PHP front controllers and SPAs),
+      // so guessed health paths cannot prove anything and root is the safe default.
+      const sentinel = await probeOne(routes.PROBE_SENTINEL, false);
+      const soft404 = !!(sentinel && sentinel.live);
+      let live = [];
+      if (soft404) {
+        const root = await probeOne('/');
+        if (root && root.live) live = [root];
+      } else {
         for (const p of sourceCandidates) await probeOne(p);
-      }
-      let live = [...discovered.values()].filter(x => x.live)
-        .sort((a, b) => routes.routeScore(a.path) - routes.routeScore(b.path));
-      if (!live.length) {
-        const fallbacks = cands.filter(p => !discovered.has(p));
-        for (let round = 0; round < 2 && !live.length; round++) {
-          if (round) await new Promise(r => setTimeout(r, 2000));
-          for (const p of fallbacks) {
-            const item = await probeOne(p);
-            if (item && item.live) { live = [item]; break; }
+        if (sourceCandidates.length && ![...discovered.values()].some(x => x.live)) {
+          await new Promise(r => setTimeout(r, 2000));
+          for (const p of sourceCandidates) await probeOne(p);
+        }
+        live = [...discovered.values()].filter(x => x.live)
+          .sort((a, b) => routes.routeScore(a.path) - routes.routeScore(b.path));
+        if (!live.length) {
+          const fallbacks = cands.filter(p => !discovered.has(p));
+          for (let round = 0; round < 2 && !live.length; round++) {
+            if (round) await new Promise(r => setTimeout(r, 2000));
+            for (const p of fallbacks) {
+              const item = await probeOne(p);
+              if (item && item.live) { live = [item]; break; }
+            }
           }
         }
       }
@@ -1120,12 +1130,23 @@ app.get('/api/apps/:id/doctor', async (req, res) => {
     const cport = parseInt(env.PORT, 10) || 3000;
     const net = `${meta.id}_default`;
     const probed = [];
-    for (const p of routes.PROBE_PATHS) {
+    const probePath = p => execSync(`docker run --rm --network ${net} curlimages/curl:latest -s -o /dev/null -w "%{http_code}" --max-time 5 http://app:${cport}${p}`, { timeout: 15000 }).toString().trim();
+    let soft404 = false;
+    try {
+      const code = probePath(routes.PROBE_SENTINEL);
+      soft404 = routes.liveStatus(code);
+      probed.push(`${routes.PROBE_SENTINEL}→${code}`);
+    } catch { probed.push(`${routes.PROBE_SENTINEL}→unreachable`); }
+    const candidates = soft404 ? ['/'] : routes.PROBE_PATHS;
+    for (const p of candidates) {
       try {
-        const code = execSync(`docker run --rm --network ${net} curlimages/curl:latest -s -o /dev/null -w "%{http_code}" --max-time 5 http://app:${cport}${p}`, { timeout: 15000 }).toString().trim();
+        const code = probePath(p);
         probed.push(`${p}→${code}`);
         if (routes.liveStatus(code)) {
-          checks.push({ name: 'landing', status: 'ok', detail: `first live route: ${p} (${code})${meta.homePath && meta.homePath !== p ? ` - open path set to ${meta.homePath}` : ''}` });
+          const detail = soft404
+            ? `catch-all/soft-404 detected; safe default: / (${code})`
+            : `first live route: ${p} (${code})${meta.homePath && meta.homePath !== p ? ` - open path set to ${meta.homePath}` : ''}`;
+          checks.push({ name: 'landing', status: 'ok', detail });
           break;
         }
       } catch { probed.push(`${p}→unreachable`); }

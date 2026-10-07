@@ -2,13 +2,14 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { PROBE_PATHS, safeRoute, routeScore, liveStatus, chooseOpenPath, extractRoutes, detectOpenPaths } = require('./routes');
+const { PROBE_PATHS, PROBE_SENTINEL, safeRoute, routeScore, liveStatus, chooseOpenPath, extractRoutes, detectOpenPaths } = require('./routes');
 
 assert.equal(safeRoute('/health'), '/health');
 assert.equal(safeRoute('/users/:id'), null);
 assert.equal(safeRoute('${prefix}/health'), null);
 assert(PROBE_PATHS.includes('/healthz'));
 assert(PROBE_PATHS.includes('/api/healthz'));
+assert.equal(PROBE_SENTINEL, '/.minipass-route-probe-404');
 assert(routeScore('/healthz') < routeScore('/health'));
 assert(liveStatus('200'));
 assert(liveStatus('302'));
