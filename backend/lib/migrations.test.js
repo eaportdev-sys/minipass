@@ -25,7 +25,7 @@ try {
     scripts: { migrate: 'knex migrate:latest', 'db:init': 'node baseline.js', 'db:seed': 'node seed.js' },
     dependencies: { knex: '^3.0.0' }
   }));
-  put('server/knexfile.js', 'module.exports = {\n  development: { client: "mysql" }\n};');
+  put('server/knexfile.js', 'module.exports = {\n  development: { client: "mysql", connection: { database: process.env.DB_NAME, user: process.env.DB_USER, password: process.env.DB_PASSWORD } }\n};');
   put('server/jobs/manage.py', '');
   put('server/python/alembic.ini', '');
   put('server/sequelize/package.json', JSON.stringify({ dependencies: { 'sequelize-cli': '^6.0.0' } }));
@@ -86,6 +86,8 @@ try {
   const nested = fromRoot.find(x => x.framework === 'Knex' && x.repoDir === 'server' && x.command.startsWith('./node_modules/.bin/knex'));
   assert.deepEqual({ service: nested.service, dir: nested.dir }, { service: 'app', dir: 'server' });
   assert.equal(nested.command, './node_modules/.bin/knex migrate:latest --env development');
+  assert.match(nested.warning, /no host/i);
+  assert.match(nested.warning, /process\.env\.DB_HOST/);
 
   console.log('migration detection: OK');
 } finally {

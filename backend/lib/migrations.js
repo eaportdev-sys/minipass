@@ -95,6 +95,19 @@ function knexEnvironmentFlag(dir, files) {
   return environments.has('development') && !environments.has('production') ? ' --env development' : '';
 }
 
+function knexConnectionWarning(dir, files) {
+  const name = ['knexfile.js', 'knexfile.ts', 'knexfile.cjs', 'knexfile.mjs'].find(file => files && files.has(file));
+  if (!name) return '';
+  const text = readText(path.join(dir, name));
+  // A URL/dynamic connection may already carry its hostname. Warn only for an
+  // explicit object that declares credential/database fields but no host key.
+  const inlineConnection = /\bconnection\s*:\s*\{[\s\S]{0,3000}?\}/i.test(text);
+  const hasFields = /\b(?:database|user|password)\s*:/i.test(text);
+  const hasHost = /\bhost\s*:/i.test(text);
+  if (!inlineConnection || !hasFields || hasHost) return '';
+  return 'Knex connection configuration has database fields but no host. Containers cannot reach a managed database through localhost; add host: process.env.DB_HOST and port: Number(process.env.DB_PORT).';
+}
+
 function verifyFor(framework, dir, files) {
   const knexEnv = framework === 'Knex' ? knexEnvironmentFlag(dir, files) : '';
   return ({
@@ -129,6 +142,7 @@ function detectMigrations(codeDir, services) {
       command,
       check: candidate.check || '',
       why: candidate.why || '',
+      warning: candidate.warning || '',
       repoDir: repoDir || '.',
       service: target.service,
       dir: target.dir,
@@ -158,6 +172,7 @@ function detectMigrations(codeDir, services) {
           command: npmRunner(pkg, files, name),
           check: verifyFor(framework, dir, files),
           why: `${name} script in ${rel || 'repository root'}/package.json`,
+          warning: framework === 'Knex' ? knexConnectionWarning(dir, files) : '',
           repoDir: rel,
           explicit: true
         });
@@ -171,7 +186,7 @@ function detectMigrations(codeDir, services) {
 
     if (anyFile(files, 'knexfile.js', 'knexfile.ts', 'knexfile.cjs', 'knexfile.mjs')) {
       const envFlag = knexEnvironmentFlag(dir, files);
-      add({ framework: 'Knex', command: './node_modules/.bin/knex migrate:latest' + envFlag, check: './node_modules/.bin/knex migrate:list' + envFlag, why: `Knex configuration found; uses the repository-installed Knex version${envFlag ? ' and its only declared runtime environment' : ''}`, repoDir: rel });
+      add({ framework: 'Knex', command: './node_modules/.bin/knex migrate:latest' + envFlag, check: './node_modules/.bin/knex migrate:list' + envFlag, why: `Knex configuration found; uses the repository-installed Knex version${envFlag ? ' and its only declared runtime environment' : ''}`, warning: knexConnectionWarning(dir, files), repoDir: rel });
     }
 
     if (exists(dir, 'prisma/schema.prisma') || files.has('schema.prisma'))

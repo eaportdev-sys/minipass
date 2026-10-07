@@ -2156,7 +2156,11 @@ function migrationFailure(error) {
   }
   const redacted = raw.replace(/((?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^:\s/@]+):[^@\s/]+@/gi, '$1:***@');
   const useful = redacted.split(/\r?\n/).filter(line => !/^\s*at\b/.test(line) && !/^Node\.js v/i.test(line));
-  return (useful.join('\n').trim() || redacted).slice(0, 1200);
+  const concise = useful.join('\n').trim() || redacted;
+  if (/ECONNREFUSED[^\n]*(?:127\.0\.0\.1|::1|localhost)/i.test(redacted)) {
+    return ('database connection refused at localhost. Inside an app container, localhost is the app itself, not the managed database. Configure the project to use process.env.DB_HOST and process.env.DB_PORT, then local rebuild and retry. Original error: ' + concise).slice(0, 1200);
+  }
+  return concise.slice(0, 1200);
 }
 function migrationResponse(prefix, error) {
   const message = prefix + migrationFailure(error);
