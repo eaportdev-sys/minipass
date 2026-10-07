@@ -1420,6 +1420,22 @@ async function restoreTrash(id) {
     refresh(); loadTrash();
   } catch (e) { toast('restore failed: ' + e.message, false); }
 }
+async function emptyTrash() {
+  let count = 0;
+  try { count = (await (await fetch('/api/trash')).json()).length; } catch {}
+  if (!count) { toast('trash is already empty'); return; }
+  const ok = await uiConfirm({
+    title: `Empty trash (${count} site${count === 1 ? '' : 's'})?`,
+    body: 'Every trashed site is permanently destroyed with its data. This cannot be undone.',
+    requireText: 'empty', confirmLabel: 'Empty trash', danger: true
+  });
+  if (!ok) return;
+  try {
+    const r = await (await fetch('/api/trash', { method: 'DELETE' })).json();
+    toast(r.ok ? `trash emptied (${(r.destroyed || []).length} destroyed)` : (r.error || 'failed'), !!r.ok);
+    loadTrash(); refresh();
+  } catch (e) { toast('empty failed: ' + e.message, false); }
+}
 async function destroyTrash(id) {
   const ok = await uiConfirm({
     title: 'Destroy ' + id + ' forever?',

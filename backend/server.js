@@ -2644,16 +2644,30 @@ app.delete('/api/trash/:id', async (req, res) => {
     if (!Array.isArray(db_.trash)) db_.trash = [];
     const idx = db_.trash.map(t => t.id).lastIndexOf(req.params.id);
     if (idx < 0) return res.status(404).json({ error: 'nothing in trash for ' + req.params.id });
-    const record = db_.trash[idx];
-    const dir = path.join(TRASH_DIR, record.trashDir || record.id);
-    dbTools.stopAll(record.id);
-    if (fs.existsSync(path.join(dir, 'docker-compose.yml'))) await sh(`${COMPOSE_BIN} down -v`, dir).catch(() => {});
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    await destroyTrashRecord(db_.trash[idx]);
     db_.trash.splice(idx, 1);
     save(db_);
     res.json({ ok: true, destroyed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+app.delete('/api/trash', async (req, res) => {
+  // empty trash: permanently destroy everything held, oldest first.
+  try {
+    const db_ = load();
+    if (!Array.isArray(db_.trash)) db_.trash = [];
+    const ids = db_.trash.map(t => t.id);
+    for (const record of db_.trash) await destroyTrashRecord(record);
+    db_.trash = [];
+    save(db_);
+    res.json({ ok: true, destroyed: ids });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+async function destroyTrashRecord(record) {
+  const dir = path.join(TRASH_DIR, record.trashDir || record.id);
+  dbTools.stopAll(record.id);
+  if (fs.existsSync(path.join(dir, 'docker-compose.yml'))) await sh(`${COMPOSE_BIN} down -v`, dir).catch(() => {});
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+}
 function purgeTrash() {
   try {
     const db_ = load();
