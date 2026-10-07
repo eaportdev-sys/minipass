@@ -195,7 +195,9 @@ async function launch(id, meta, dir, type, hostPort) {
   const name = safeName(id, type);
   const secrets = [config.pass];
   try { docker(['rm', '-f', name], { stdio: 'ignore' }); } catch {}
-  const args = ['run', '-d', '--name', name, '--restart', 'unless-stopped', '--network', `${id}_default`, '-p', `${hostPort}:${tool.port}`];
+  // --pull missing makes the guarantee explicit: a launch never re-downloads,
+  // it only fetches when the image is genuinely absent (warmer missed it).
+  const args = ['run', '--pull', 'missing', '-d', '--name', name, '--restart', 'unless-stopped', '--network', `${id}_default`, '-p', `${hostPort}:${tool.port}`];
   if (type === 'postgres') {
     const f = ensurePgAdminFiles(dir, config);
     secrets.push(f.secret);
