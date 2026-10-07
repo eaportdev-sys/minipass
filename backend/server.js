@@ -316,7 +316,14 @@ function runOut(bin, args, opts = {}) {
     const chunks = [];
     const errChunks = [];
     let settled = false;
-    const errTail = () => Buffer.concat(errChunks).toString().slice(-500);
+    // Process errors usually put the actionable cause first and a long stack
+    // afterward. Preserve both ends so migration failures do not degrade into
+    // only `at Client.acquireRawConnection` frames.
+    const errDetail = () => {
+      const raw = Buffer.concat(errChunks).toString().trim();
+      if (raw.length <= 1800) return raw;
+      return raw.slice(0, 900) + '\n…\n' + raw.slice(-700);
+    };
     p.stdout.on('data', d => chunks.push(d));
     p.stderr.on('data', d => {
       if (opts.captureStderr) chunks.push(d);
@@ -328,7 +335,10 @@ function runOut(bin, args, opts = {}) {
       if (settled) return;
       settled = true;
       if (code === 0) res(Buffer.concat(chunks));
-      else rej(new Error(`${bin} exited with code ${code}${errTail() ? `: ${errTail()}` : ''}`));
+      else {
+        const detail = errDetail();
+        rej(new Error(`${bin} exited with code ${code}${detail ? `: ${detail}` : ''}`));
+      }
     });
   });
 }
@@ -1048,9 +1058,10 @@ async function deployNow(id, opts = {}) {
       try { fs.appendFileSync(buildLog, `\n--- migrate (${migrateSvc}) ---\n` + String(out).slice(-2000)); } catch {}
     } catch (e) {
       const reason = migrationFailure(e);
+      const failure = migrationResponse('migration failed - running containers untouched: ', e);
       try { fs.appendFileSync(buildLog, `\n--- migrate failed (${migrateSvc}) ---\n${reason}\n`); } catch {}
-      await recordDeploy(id, { sha, at: stamp(), status: 'error', error: ('migration failed - running containers untouched: ' + reason).trim().slice(-500) });
-      throw new Error('migration failed - running containers untouched: ' + reason.trim().split('\n').slice(-3).join(' '));
+      await recordDeploy(id, { sha, at: stamp(), status: 'error', error: failure });
+      throw new Error(failure);
     }
   }
   try {
@@ -2143,7 +2154,13 @@ function migrationFailure(error) {
   if (/node_modules\/\.bin\/[A-Za-z0-9_.-]+[^\n]*(?:not found|No such file)|will be installed|npm (?:error|err!).*(?:canceled|cancelled)|could not determine executable/i.test(raw)) {
     return 'migration tool is not installed in this app image. Add the CLI to package.json dependencies/devDependencies, redeploy, then retry. Minipass will not download an unpinned latest version during a migration.';
   }
-  return raw;
+  const redacted = raw.replace(/((?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^:\s/@]+):[^@\s/]+@/gi, '$1:***@');
+  const useful = redacted.split(/\r?\n/).filter(line => !/^\s*at\b/.test(line) && !/^Node\.js v/i.test(line));
+  return (useful.join('\n').trim() || redacted).slice(0, 1200);
+}
+function migrationResponse(prefix, error) {
+  const message = prefix + migrationFailure(error);
+  return message.length > 500 ? message.slice(0, 497) + '...' : message;
 }
 app.post('/api/apps/:id/migrate', (req, res) => {
   try {
@@ -2194,7 +2211,7 @@ app.post('/api/apps/:id/migrate-run', async (req, res) => {
     const cap = { cwd: dirAbs, captureStderr: true };
     const out = await runOut(argv[0], argv.slice(1), cap);
     res.json({ ok: true, service: svcName, output: String(out).slice(-4000) || '(no output)' });
-  } catch (e) { res.status(500).json({ error: ('migrate run failed: ' + migrationFailure(e)).slice(-500) }); }
+  } catch (e) { res.status(500).json({ error: migrationResponse('migrate run failed: ', e) }); }
 });
 // Verify-only: runs a verify command (e.g. knex migrate:list) and
 // returns its output. Accepts a one-shot {check, service, dir} override.
@@ -2216,7 +2233,7 @@ app.post('/api/apps/:id/migrate-check', async (req, res) => {
     const argv = migrateRunArgv(svcName, dir, cmd);
     const out = await runOut(argv[0], argv.slice(1), { cwd: dirAbs, captureStderr: true });
     res.json({ ok: true, service: svcName, output: String(out).slice(-4000) || '(no output)' });
-  } catch (e) { res.status(500).json({ error: ('verify failed: ' + migrationFailure(e)).slice(-500) }); }
+  } catch (e) { res.status(500).json({ error: migrationResponse('verify failed: ', e) }); }
 });
 // Detect migration frameworks and map each project folder to the most-specific
 // enabled service build context. Returned dirs are container-relative, never
