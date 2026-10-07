@@ -2151,6 +2151,10 @@ function migrateRunArgv(svcName, dir, cmd) {
 }
 function migrationFailure(error) {
   const raw = String((error && error.message) || error || 'migration failed');
+  const missingModule = raw.match(/Cannot find module '((?:@[^'/]+\/)?[^'./][^']*)'/);
+  if (missingModule) {
+    return (`migration dependency '${missingModule[1]}' is not installed in this app image. Add it to package.json dependencies, redeploy (or local rebuild after a Files-tab edit), then retry. Minipass never installs packages during a migration. Original error: ` + raw).slice(0, 1200);
+  }
   if (/node_modules\/\.bin\/[A-Za-z0-9_.-]+[^\n]*(?:not found|No such file)|will be installed|npm (?:error|err!).*(?:canceled|cancelled)|could not determine executable/i.test(raw)) {
     return 'migration tool is not installed in this app image. Add the CLI to package.json dependencies/devDependencies, redeploy, then retry. Minipass will not download an unpinned latest version during a migration.';
   }
