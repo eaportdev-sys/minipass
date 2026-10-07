@@ -187,7 +187,28 @@ function secureDefault(key, value) {
   return crypto.randomBytes(32).toString('base64url');
 }
 
-function resolvedDefaults(codeDir, services, origins, savedValues, savedOriginals) {
+// Repositories frequently prefix their database variables (DEV_DB_NAME,
+// APP_DATABASE_USER, etc.). When the semantic suffix is unambiguous, map it to
+// the panel-managed local database credentials rather than retaining example
+// placeholders. Host is mapped only when the repository actually declares a
+// host variable; source code that omits host configuration still needs fixing.
+function databaseAlias(key, runtimeValues) {
+  const name = String(key || '').toUpperCase();
+  const values = runtimeValues && typeof runtimeValues === 'object' ? runtimeValues : {};
+  const aliases = [
+    [/(?:^|_)(?:DB|DATABASE)_(?:HOST|HOSTNAME)$/, 'DB_HOST'],
+    [/(?:^|_)(?:DB|DATABASE)_PORT$/, 'DB_PORT'],
+    [/(?:^|_)(?:DB|DATABASE)_(?:NAME|DATABASE)$/, 'DB_NAME'],
+    [/(?:^|_)(?:DB|DATABASE)_(?:USER|USERNAME)$/, 'DB_USER'],
+    [/(?:^|_)(?:DB|DATABASE)_(?:PASSWORD|PASS|PSW)$/, 'DB_PASSWORD']
+  ];
+  for (const [pattern, source] of aliases) {
+    if (name !== source && pattern.test(name) && Object.prototype.hasOwnProperty.call(values, source)) return String(values[source]);
+  }
+  return null;
+}
+
+function resolvedDefaults(codeDir, services, origins, savedValues, savedOriginals, runtimeValues) {
   const examples = savedValues && typeof savedValues === 'object' ? { ...savedValues } : exampleDefaults(codeDir, services);
   const values = { ...examples, ...BUILT_INS };
   const rewritten = new Set();
@@ -201,6 +222,10 @@ function resolvedDefaults(codeDir, services, origins, savedValues, savedOriginal
         rewritten.add(key);
       }
     }
+  }
+  for (const key of Object.keys(examples)) {
+    const replacement = databaseAlias(key, runtimeValues);
+    if (replacement != null) values[key] = replacement;
   }
   for (const [key, value] of Object.entries(values)) {
     const replacement = secureDefault(key, value);
@@ -224,4 +249,4 @@ function correctedValue(key, current, resolved, origins) {
   return originals.includes(value) && resolved.values[key] !== value ? resolved.values[key] : null;
 }
 
-module.exports = { BUILT_INS, parseExample, exampleDefaults, snapshotDefaults, frontendOrigin, publishedOrigins, pointsAtFrontend, secureDefault, resolvedDefaults, correctedValue };
+module.exports = { BUILT_INS, parseExample, exampleDefaults, snapshotDefaults, frontendOrigin, publishedOrigins, pointsAtFrontend, secureDefault, databaseAlias, resolvedDefaults, correctedValue };

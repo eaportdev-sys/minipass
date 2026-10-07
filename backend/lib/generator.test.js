@@ -70,6 +70,8 @@ try {
     assert.equal(created.subdir, 'server');
     const dockerfile = fs.readFileSync(path.join(pending, 'code', 'server', 'Dockerfile'), 'utf8');
     assert(dockerfile.includes('exec npm start'), 'explicit create retry seeds the standard Node image');
+    assert(!fs.existsSync(path.join(pending, 'code', 'package.json')), 'retry never copies the starter over a repository checkout');
+    assert.equal(fs.readFileSync(path.join(pending, 'code', 'server', 'package.json'), 'utf8'), '{"scripts":{"build":"tsc","start":"node dist/index.js"}}');
     assert(fs.readFileSync(path.join(pending, 'docker-compose.yml'), 'utf8').includes('code/server'));
   } finally { fs.rmSync(appsDir, { recursive: true, force: true }); }
   console.log('database generation and MariaDB support: OK');

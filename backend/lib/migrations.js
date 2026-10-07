@@ -5,7 +5,7 @@ const SKIP_DIRS = new Set([
   '.git', '.next', '.nuxt', '.output', '.venv', 'build', 'coverage',
   'dist', 'node_modules', 'target', 'vendor'
 ]);
-const COMMAND_RE = /^[A-Za-z0-9_][A-Za-z0-9_ .:/=-]{0,199}$/;
+const COMMAND_RE = /^(?:[A-Za-z0-9_][A-Za-z0-9_ .:/=-]{0,199}|\.\/node_modules\/\.bin\/[A-Za-z0-9_.-]+(?: [A-Za-z0-9_ .:/=-]{0,160})?)$/;
 const DIR_RE = /^[A-Za-z0-9_][A-Za-z0-9_./-]{0,80}$/;
 
 function cleanRel(value) {
@@ -89,20 +89,21 @@ function frameworkFrom(text) {
 
 function verifyFor(framework) {
   return ({
-    Knex: 'npx --no-install knex migrate:list',
-    Prisma: 'npx --no-install prisma migrate status',
-    Sequelize: 'npx --no-install sequelize-cli db:migrate:status',
-    MikroORM: 'npx --no-install mikro-orm migration:list'
+    Knex: './node_modules/.bin/knex migrate:list',
+    Prisma: './node_modules/.bin/prisma migrate status',
+    Sequelize: './node_modules/.bin/sequelize-cli db:migrate:status',
+    MikroORM: './node_modules/.bin/mikro-orm migration:list'
   })[framework] || '';
 }
 
-// Migration tooling must come from the repository image. Bare npx otherwise
-// downloads the registry's latest CLI at run time, which is slow and may be
-// incompatible with the project's schema/client version.
+// Invoke the repository binary directly. New npm versions can ignore npx's old
+// --no-install flag and still contact the registry, so that flag is not a hard
+// local-only guarantee.
 function localOnlyCommand(command) {
   const cmd = String(command || '').trim();
-  if (!/^npx(?:\s|$)/.test(cmd) || /^npx\s+--no-install(?:\s|$)/.test(cmd)) return cmd;
-  return cmd.replace(/^npx\s+/, 'npx --no-install ');
+  const match = cmd.match(/^npx(?:\s+--no-install)?\s+([A-Za-z0-9_.-]+)(?=\s|$)/);
+  if (!match) return cmd;
+  return cmd.replace(match[0], `./node_modules/.bin/${match[1]}`);
 }
 
 function detectMigrations(codeDir, services) {
@@ -160,22 +161,22 @@ function detectMigrations(codeDir, services) {
     }
 
     if (anyFile(files, 'knexfile.js', 'knexfile.ts', 'knexfile.cjs', 'knexfile.mjs'))
-      add({ framework: 'Knex', command: 'npx --no-install knex migrate:latest', check: 'npx --no-install knex migrate:list', why: 'Knex configuration found; uses the repository-installed Knex version', repoDir: rel });
+      add({ framework: 'Knex', command: './node_modules/.bin/knex migrate:latest', check: './node_modules/.bin/knex migrate:list', why: 'Knex configuration found; uses the repository-installed Knex version', repoDir: rel });
 
     if (exists(dir, 'prisma/schema.prisma') || files.has('schema.prisma'))
-      add({ framework: 'Prisma', command: 'npx --no-install prisma migrate deploy', check: 'npx --no-install prisma migrate status', why: 'Prisma schema found; uses the repository-installed Prisma version', repoDir: rel });
+      add({ framework: 'Prisma', command: './node_modules/.bin/prisma migrate deploy', check: './node_modules/.bin/prisma migrate status', why: 'Prisma schema found; uses the repository-installed Prisma version', repoDir: rel });
 
     if (files.has('.sequelizerc') || deps['sequelize-cli'] || (exists(dir, 'migrations') && exists(dir, 'config')))
-      add({ framework: 'Sequelize', command: 'npx --no-install sequelize-cli db:migrate', check: 'npx --no-install sequelize-cli db:migrate:status', why: 'Sequelize migration setup found; uses the repository-installed CLI', repoDir: rel });
+      add({ framework: 'Sequelize', command: './node_modules/.bin/sequelize-cli db:migrate', check: './node_modules/.bin/sequelize-cli db:migrate:status', why: 'Sequelize migration setup found; uses the repository-installed CLI', repoDir: rel });
 
     if (deps.typeorm || [...files].some(f => /^(ormconfig|data-source)\.(js|cjs|mjs|ts|json)$/.test(f)))
       add({ framework: 'TypeORM', command: '', why: 'TypeORM found', repoDir: rel, problem: 'Add a package.json migration script that includes the project data-source option.' });
 
     if (deps['drizzle-orm'] && [...files].some(f => /^drizzle\.config\.(js|cjs|mjs|ts)$/.test(f)))
-      add({ framework: 'Drizzle', command: 'npx --no-install drizzle-kit migrate', why: 'Drizzle configuration found; uses the repository-installed CLI', repoDir: rel });
+      add({ framework: 'Drizzle', command: './node_modules/.bin/drizzle-kit migrate', why: 'Drizzle configuration found; uses the repository-installed CLI', repoDir: rel });
 
     if (deps['@mikro-orm/core'])
-      add({ framework: 'MikroORM', command: 'npx --no-install mikro-orm migration:up', check: 'npx --no-install mikro-orm migration:list', why: 'MikroORM dependency found; uses the repository-installed CLI', repoDir: rel });
+      add({ framework: 'MikroORM', command: './node_modules/.bin/mikro-orm migration:up', check: './node_modules/.bin/mikro-orm migration:list', why: 'MikroORM dependency found; uses the repository-installed CLI', repoDir: rel });
 
     if (files.has('manage.py'))
       add({ framework: 'Django', command: 'python manage.py migrate --noinput', check: 'python manage.py showmigrations --plan', why: 'Django manage.py found', repoDir: rel });

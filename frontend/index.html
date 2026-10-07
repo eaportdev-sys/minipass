@@ -185,7 +185,7 @@
                 <label>Service<select id="migrateSvc"></select></label>
                 <label>Folder<input id="migrateDir" placeholder="empty = selected service root" autocomplete="off"></label>
               </div>
-              <div class="migration-command-row"><input id="migrateCheck" placeholder="verify command, e.g. npx --no-install knex migrate:list"><button onclick="verifyMigrate()">verify</button></div>
+              <div class="migration-command-row"><input id="migrateCheck" placeholder="verify command, e.g. ./node_modules/.bin/knex migrate:list"><button onclick="verifyMigrate()">verify</button></div>
               <div class="migration-actions"><button onclick="runMigrateNow()">run migration now</button><span class="meta">run / verify execute in a one-off container only — no deploy, no swap</span></div>
               <div id="migrateSuggest"></div>
               <pre id="migrateOut" class="compact-output"></pre>
@@ -314,7 +314,7 @@
 </div>
 <div id="modal" class="modal"><div class="modalbox">
   <h2>New website</h2>
-  <div class="msec"><div class="mlabel">1 · Name</div><input id="name" placeholder="myapp"></div>
+  <div class="msec"><div class="mlabel">1 · Name</div><input id="name" placeholder="knex-demo (not the repository URL)"></div>
   <div class="msec"><div class="mlabel">2 · Access</div>
   <div class="meta">Decides how git connects: localhost → token or SSH key. Custom domain (public via DNS + tunnel) → those plus OAuth redirect.</div>
   <label class="radiorow"><input type="radio" name="access" value="local" checked onchange="accessChanged()"> <b>Localhost</b> <span class="meta">auto port 8000+, works immediately</span></label>

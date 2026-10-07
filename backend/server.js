@@ -444,10 +444,13 @@ app.post('/api/apps', async (req, res) => {
     const { name, type, repoUrl, db, port, domain } = req.body;
     if (!name || !type) return res.status(400).json({ error: 'name and type required' });
     if (!['static', 'react', 'node', 'php'].includes(type)) return res.status(400).json({ error: 'unsupported application type' });
+    const rawName = String(name).trim();
+    if (/:\/\/|[\\/]/.test(rawName)) return res.status(400).json({ error: 'site name must be short, for example knex-demo; put the repository URL in Code source' });
+    const id = rawName.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    if (!id || id.length > 32) return res.status(400).json({ error: 'site name must produce 1–32 letters, numbers, or hyphens' });
     let appDomain;
     try { appDomain = cleanDomain(domain); }
     catch (e) { return res.status(400).json({ error: e.message }); }
-    const id = name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
     const token = crypto.randomBytes(16).toString('hex');
     // localhost: auto-assign host port 8000+ so app is reachable without a domain
     const existing = load().apps;
@@ -2137,7 +2140,7 @@ function migrateRunArgv(svcName, dir, cmd) {
 }
 function migrationFailure(error) {
   const raw = String((error && error.message) || error || 'migration failed');
-  if (/will be installed|--no-install|npm (?:error|err!).*(?:canceled|cancelled)|could not determine executable/i.test(raw)) {
+  if (/node_modules\/\.bin\/[A-Za-z0-9_.-]+[^\n]*(?:not found|No such file)|will be installed|npm (?:error|err!).*(?:canceled|cancelled)|could not determine executable/i.test(raw)) {
     return 'migration tool is not installed in this app image. Add the CLI to package.json dependencies/devDependencies, redeploy, then retry. Minipass will not download an unpinned latest version during a migration.';
   }
   return raw;
@@ -2467,15 +2470,16 @@ function applyEnvDefaults(meta, dir, hostname, protocol, requestedKeys) {
   const services = svc.fullServices(meta, dir);
   const origins = envDefaults.publishedOrigins(services, hostname, protocol);
   const snapshot = envDefaults.snapshotDefaults(dir, path.join(dir, 'code'), services);
-  const resolved = envDefaults.resolvedDefaults(path.join(dir, 'code'), services, origins, snapshot.values, snapshot.originals);
+  const envPath = path.join(dir, '.env');
+  const valOf = new Map(readEnvVars(envPath).map(v => [v.key, v.value]));
+  const runtimeValues = Object.fromEntries(valOf);
+  const resolved = envDefaults.resolvedDefaults(path.join(dir, 'code'), services, origins, snapshot.values, snapshot.originals, runtimeValues);
   const managed = managedKeys(dir);
   const allowed = { ...resolved.values, ...suggestedDefaults(meta) };
   for (const key of managed) delete allowed[key];
   const asked = Array.isArray(requestedKeys) && requestedKeys.length
     ? requestedKeys.filter(k => Object.prototype.hasOwnProperty.call(allowed, k))
     : Object.keys(allowed);
-  const envPath = path.join(dir, '.env');
-  const valOf = new Map(readEnvVars(envPath).map(v => [v.key, v.value]));
   // Fill missing/empty values. Also repair captured local-development placeholders
   // once the corresponding published frontend/backend service is known.
   const fill = asked.filter(k => !valOf.has(k) || (!String(valOf.get(k)).trim() && String(allowed[k]).trim()));

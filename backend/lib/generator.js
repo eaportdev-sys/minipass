@@ -185,27 +185,34 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   fs.mkdirSync(dir, { recursive: true });
 
   // 1. code: clone or copy template starter
-  if (repoUrl && !(resume && fs.existsSync(path.join(dir, 'code', '.git')))) {
-    const branch = String(gitBranch || '').trim();
-    if (branch && !/^[A-Za-z0-9._\/-]+$/.test(branch)) throw new Error(`bad branch name '${branch}'`);
-    const isSsh = /^(git@|ssh:\/\/)/i.test(repoUrl);
-    // token injected in-memory only (stored repo URLs stay clean)
-    const { authUrl, authUrlWith } = require('./github');
-    const cloneUrl = isSsh ? repoUrl : (gitToken ? authUrlWith(repoUrl, gitToken) : authUrl(repoUrl));
-    const redact = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
-    try {
-      execSync(`git clone --depth 1 ${branch ? `-b ${branch} ` : ''}${cloneUrl} "${dir}/code"`, { stdio: 'pipe', env: isSsh ? appGitEnv(dir) : process.env });
-    } catch (e) {
-      // don't leave a half-created app behind (retry would hit "app exists");
-      // keep per-app deploy keys so the key can still be shown + registered
+  if (repoUrl) {
+    // A missing-Dockerfile create deliberately leaves the checkout resumable.
+    // On the opt-in retry, keep that checkout byte-for-byte; the old combined
+    // if/else skipped the clone and then copied the template starter over the
+    // repository's package.json.
+    const haveCheckout = resume && fs.existsSync(path.join(dir, 'code', '.git'));
+    if (!haveCheckout) {
+      const branch = String(gitBranch || '').trim();
+      if (branch && !/^[A-Za-z0-9._\/-]+$/.test(branch)) throw new Error(`bad branch name '${branch}'`);
+      const isSsh = /^(git@|ssh:\/\/)/i.test(repoUrl);
+      // token injected in-memory only (stored repo URLs stay clean)
+      const { authUrl, authUrlWith } = require('./github');
+      const cloneUrl = isSsh ? repoUrl : (gitToken ? authUrlWith(repoUrl, gitToken) : authUrl(repoUrl));
+      const redact = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
       try {
-        for (const f of fs.readdirSync(dir)) {
-          if (f === 'deploy-key' || f === 'deploy-key.pub') continue;
-          fs.rmSync(path.join(dir, f), { recursive: true, force: true });
-        }
-      } catch {}
-      const detail = redact(String((e.stderr || e.message || '')).split('\n').filter(Boolean).slice(-4).join(' | '));
-      throw new Error(`git clone failed (${isSsh ? 'SSH remote - is the app deploy key registered on that repo?' : 'HTTPS remote - private repo? connect GitHub or embed a token'}): ${detail}`);
+        execSync(`git clone --depth 1 ${branch ? `-b ${branch} ` : ''}${cloneUrl} "${dir}/code"`, { stdio: 'pipe', env: isSsh ? appGitEnv(dir) : process.env });
+      } catch (e) {
+        // don't leave a half-created app behind (retry would hit "app exists");
+        // keep per-app deploy keys so the key can still be shown + registered
+        try {
+          for (const f of fs.readdirSync(dir)) {
+            if (f === 'deploy-key' || f === 'deploy-key.pub') continue;
+            fs.rmSync(path.join(dir, f), { recursive: true, force: true });
+          }
+        } catch {}
+        const detail = redact(String((e.stderr || e.message || '')).split('\n').filter(Boolean).slice(-4).join(' | '));
+        throw new Error(`git clone failed (${isSsh ? 'SSH remote - is the app deploy key registered on that repo?' : 'HTTPS remote - private repo? connect GitHub or embed a token'}): ${detail}`);
+      }
     }
   } else {
     const tpl = path.join(templatesDir, type);
