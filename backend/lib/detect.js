@@ -159,4 +159,19 @@ function sqlDatabaseHints(text) {
   return [];
 }
 
-module.exports = { decideType, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints };
+// Prisma's client package is database-neutral, so dependency inspection cannot
+// identify the managed service. The datasource provider is explicit and is a
+// safe signal for the database choices the panel supports.
+function prismaDatabaseHints(text) {
+  const schema = String(text || '').replace(/\/\/.*$/gm, '');
+  const dbs = [];
+  const providers = { postgresql: 'postgres', mysql: 'mysql', mongodb: 'mongo' };
+  for (const match of schema.matchAll(/datasource\s+[A-Za-z_][A-Za-z0-9_]*\s*\{([\s\S]*?)\}/g)) {
+    const provider = match[1].match(/\bprovider\s*=\s*["']([^"']+)["']/i);
+    const db = provider && providers[provider[1].toLowerCase()];
+    if (db && !dbs.includes(db)) dbs.push(db);
+  }
+  return dbs;
+}
+
+module.exports = { decideType, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints };

@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { decideType, findBackends, findFrontends } = require('./detect');
+const { decideType, findBackends, findFrontends, prismaDatabaseHints } = require('./detect');
 
 // Mirrors docker/awesome-compose shapes: CRA frontend, express backend, angular.
 const tree = [
@@ -41,5 +41,16 @@ assert(findBackends(['x/package.json'], { x: api }).includes('x'));
 // decideType still calls CRA folders react (folder-scoped Add-service flow)
 const r = decideType(['package.json', 'public/index.html', 'src/index.js'], cra);
 assert.equal(r.type, 'react', JSON.stringify(r));
+
+assert.deepEqual(prismaDatabaseHints(`
+  generator client { provider = "prisma-client-js" }
+  datasource db {
+    provider = "postgresql"
+    url = env("DATABASE_URL")
+  }
+`), ['postgres']);
+assert.deepEqual(prismaDatabaseHints('datasource db { provider = "mysql" }'), ['mysql']);
+assert.deepEqual(prismaDatabaseHints('datasource db { provider = "mongodb" }'), ['mongo']);
+assert.deepEqual(prismaDatabaseHints('datasource db { provider = "sqlite" }'), []);
 
 console.log('frontend/backend folder classification: OK');

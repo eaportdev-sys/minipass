@@ -1289,7 +1289,7 @@ async function detectRepo(repo, { login, token } = {}) {
       if (blob && blob.content) pkg = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8'));
     } catch {}
   }
-  const { decideType, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints } = require('./lib/detect');
+  const { decideType, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints } = require('./lib/detect');
   const out = decideType(tree, pkg);
   // monorepo sub-apps, tool-agnostic: vite heuristic + workspace manifests
   // (npm workspaces, pnpm-workspace.yaml, lerna.json, turbo/nx conventions)
@@ -1353,6 +1353,16 @@ async function detectRepo(repo, { login, token } = {}) {
       for (const db of decideType(['package.json'], pkg_).dbs || []) if (!out.dbs.includes(db)) out.dbs.push(db);
     }
   } catch {}
+  // Prisma dependencies do not reveal the database engine. Read only the
+  // bounded schema files and use their explicit datasource provider instead.
+  const prismaCandidates = tree.filter(p => /(^|\/)schema\.prisma$/i.test(p)).slice(0, 4);
+  for (const p of prismaCandidates) {
+    const text = await readText(p);
+    for (const db of prismaDatabaseHints(text)) {
+      if (!out.dbs.includes(db)) out.dbs.push(db);
+      if (!out.dbReason) out.dbReason = `Prisma datasource in ${p}`;
+    }
+  }
   // Prefer MariaDB over a generic mysql/mysql2 dependency when an exported
   // schema contains a MariaDB-only marker. Keep this capped: detection should
   // never download an entire migrations history.
