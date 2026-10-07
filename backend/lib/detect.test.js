@@ -42,6 +42,24 @@ assert(findBackends(['x/package.json'], { x: api }).includes('x'));
 const r = decideType(['package.json', 'public/index.html', 'src/index.js'], cra);
 assert.equal(r.type, 'react', JSON.stringify(r));
 
+// Laravel apps carry a root package.json that is only the Vite asset pipeline -
+// composer.json + artisan must win over the vite/react heuristics above.
+const laravelPkg = { scripts: { build: 'vite build', dev: 'vite' }, devDependencies: { vite: '^8.0.0', 'laravel-vite-plugin': '^3.0.0', tailwindcss: '^4.0.0' } };
+const laravel = decideType(
+  ['composer.json', 'artisan', 'package.json', 'vite.config.js', 'routes/web.php', 'resources/views/welcome.blade.php', 'config/database.php'],
+  laravelPkg
+);
+assert.equal(laravel.type, 'php', JSON.stringify(laravel));
+assert(laravel.reason.includes('asset pipeline'), JSON.stringify(laravel));
+
+// PHP without Laravel markers keeps the old behavior: a React root package
+// still classifies as a frontend, plain composer projects as PHP.
+const spaOverPhp = decideType(['composer.json', 'package.json', 'vite.config.js'],
+  { scripts: { build: 'vite build' }, dependencies: { react: '^18.0.0' } });
+assert.equal(spaOverPhp.type, 'react', JSON.stringify(spaOverPhp));
+const plainPhp = decideType(['composer.json', 'index.php'], null);
+assert.equal(plainPhp.type, 'php', JSON.stringify(plainPhp));
+
 assert.deepEqual(prismaDatabaseHints(`
   generator client { provider = "prisma-client-js" }
   datasource db {
@@ -58,9 +76,11 @@ assert.deepEqual(databaseConfigHints('src/data-source.ts', `export default { typ
 assert.deepEqual(databaseConfigHints('drizzle.config.ts', `export default { dialect: 'postgresql' }`), ['postgres']);
 assert.deepEqual(databaseConfigHints('knexfile.js', `module.exports = { client: 'mysql2' }`), ['mysql']);
 assert.deepEqual(databaseConfigHints('.env.example', 'DB_CONNECTION=pgsql\nDB_HOST=127.0.0.1'), ['postgres']);
+assert.deepEqual(databaseConfigHints('.env.example', 'DB_CONNECTION=sqlite\nDB_HOST=127.0.0.1'), ['sqlite']);
 assert.deepEqual(databaseConfigHints('config/database.php', `'default' => env('DB_CONNECTION', 'mysql')`), ['mysql']);
+assert.deepEqual(databaseConfigHints('config/database.php', `'default' => env('DB_CONNECTION', 'sqlite')`), ['sqlite']);
 assert.deepEqual(databaseConfigHints('src/data-source.ts', 'export default { type: process.env.DB_TYPE }'), []);
-assert.deepEqual(databaseConfigHints('drizzle.config.ts', `export default { dialect: 'sqlite' }`), []);
+assert.deepEqual(databaseConfigHints('drizzle.config.ts', `export default { dialect: 'sqlite' }`), ['sqlite']);
 assert.deepEqual(databaseConfigHints('config/config.js', `// dialect: 'mysql'\nmodule.exports = { dialect: 'postgres' }`), ['postgres']);
 assert.deepEqual(databaseConfigHints('config/config.json', `{"development":{"dialect":"mysql"},"production":{"dialect":"postgres"}}`), []);
 

@@ -1046,6 +1046,11 @@ async function detectType() {
         document.querySelectorAll('input[name=appdb]').forEach(c => { c.checked = r.dbs.includes(c.value); });
         msg += ' + db: ' + r.dbs.join('+');
       }
+      const dbNote = document.getElementById('dbDetectNote');
+      if (dbNote) {
+        if (r.dbNote) { dbNote.style.display = 'block'; dbNote.textContent = r.dbNote; }
+        else { dbNote.style.display = 'none'; dbNote.textContent = ''; }
+      }
       toast(msg);
     } else {
       toast((r.detected ? r.detected + ' has no template yet. ' : 'could not detect type. ') + (r.reason || r.error || ''), false);
@@ -1199,6 +1204,8 @@ function resetCreateForm() {
   document.getElementById('subdirHint').style.display = 'none';
   document.getElementById('subdirHint').innerHTML = '';
   document.getElementById('ghrepo').innerHTML = '<option value="">GitHub repo…</option>';
+  const dbNote = document.getElementById('dbDetectNote');
+  if (dbNote) { dbNote.style.display = 'none'; dbNote.textContent = ''; }
   document.getElementById('ghRepoRow').style.display = 'none';
   document.getElementById('ghConnectRow').style.display = 'block';
   document.getElementById('ghConnState').textContent = 'paste a fresh token for this site';

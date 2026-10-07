@@ -1417,6 +1417,12 @@ async function detectRepo(repo, { login, token } = {}) {
   for (const p of configCandidates) {
     const text = await readText(p);
     for (const db of databaseConfigHints(p, text)) {
+      // SQLite is file-based: no managed service exists to preselect, so say
+      // so explicitly instead of leaving the database pills silent.
+      if (db === 'sqlite') {
+        if (!out.dbNote) out.dbNote = `SQLite file database declared in ${p} — no managed database needed; data lives in the container filesystem unless you tick MySQL/MariaDB/PostgreSQL instead`;
+        continue;
+      }
       if (db === 'mariadb') out.dbs = (out.dbs || []).filter(item => item !== 'mysql');
       if (!out.dbs.includes(db)) out.dbs.push(db);
       if (!out.dbReason) out.dbReason = `Explicit database setting in ${p}`;

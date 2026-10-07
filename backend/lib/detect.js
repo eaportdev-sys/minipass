@@ -22,6 +22,12 @@ function decideType(paths, pkg) {
   }
 
   const pkgPath = shallowest(/(^|\/)package\.json$/);
+  // Laravel/full-stack PHP apps ship a root package.json that is only the
+  // Vite asset pipeline (laravel-vite-plugin, tailwind). The framework
+  // markers win so the app is not misread as a standalone React frontend.
+  if (root('composer.json') && (root('artisan') || deps['laravel-vite-plugin'])) {
+    return { type: 'php', detected: 'php', dbs, reason: 'composer.json + Laravel console (artisan) - root package.json is the Vite asset pipeline' };
+  }
   if (pkgPath) {
     const scripts = (pkg && pkg.scripts) || {};
     const reactish = deps.react || deps['react-dom'] || deps['react-scripts'] || deps.next ||
@@ -169,7 +175,8 @@ function sqlDatabaseHints(text) {
 const DB_ALIASES = {
   postgres: 'postgres', postgresql: 'postgres', pg: 'postgres', pgsql: 'postgres',
   mysql: 'mysql', mysql2: 'mysql', mariadb: 'mariadb',
-  mongo: 'mongo', mongodb: 'mongo', redis: 'redis', ioredis: 'redis'
+  mongo: 'mongo', mongodb: 'mongo', redis: 'redis', ioredis: 'redis',
+  sqlite: 'sqlite', sqlite3: 'sqlite', 'better-sqlite3': 'sqlite'
 };
 
 function literalSettings(text, key) {

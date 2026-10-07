@@ -368,7 +368,8 @@
     <label class="typepill"><input type="checkbox" name="appdb" value="mariadb"><b>MariaDB</b>mysql-compatible</label>
     <label class="typepill"><input type="checkbox" name="appdb" value="mongo"><b>Mongo</b>nosql db</label>
     <label class="typepill"><input type="checkbox" name="appdb" value="redis"><b>Redis</b>cache / kv</label>
-  </div></div>
+  </div>
+  <div class="meta" id="dbDetectNote" style="display:none"></div></div>
   <div id="createDockerAction" class="create-docker-action" style="display:none">
     <div class="create-docker-copy"><b>Dockerfile required</b><span>This repository needs a container recipe for the selected app type. Minipass can add its standard one and retry the build.</span><small>Explicit opt-in — an existing repository Dockerfile is never replaced.</small></div>
     <button class="btn primary" onclick="useCreateStandardDockerfile()">Use standard Dockerfile</button>
