@@ -13,6 +13,7 @@
     <div class="brand">mini<span>pass</span></div>
     <nav>
       <button class="navitem active" data-view="websites" onclick="backToSites()">Websites</button>
+      <button class="navitem" data-view="trash" onclick="showView('trash')">Trash <span id="trashCount" class="badge" style="display:none"></span></button>
       <button class="navitem" data-view="terminal" onclick="showView('terminal')">Terminal</button>
       <button class="navitem" data-view="panel" onclick="showView('panel')">Upgrade</button>
     </nav>
@@ -269,6 +270,10 @@
       <div id="tab-terminal" class="sitetab" style="display:none">
         <div class="card"><select id="termSvc"></select> <button onclick="openTerm()">connect ssh/terminal</button><div id="term"></div></div>
       </div>
+    </section>
+    <section id="view-trash" class="view">
+      <div class="pagehead"><div><h1>Trash</h1><div class="meta">Deleted sites keep their files and data for 48 hours. Restore re-checks ports first; destroy is permanent.</div></div><button onclick="loadTrash()">refresh</button></div>
+      <div id="trashList"></div>
     </section>
     <section id="view-terminal" class="view">
       <div class="pagehead"><h1>Terminal</h1></div>

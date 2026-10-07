@@ -19,11 +19,14 @@ const portsLib = require('./lib/ports');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
+const TRASH_HOLD_MS = 48 * 3600 * 1000;
+const TRASH_DIR = path.join(APPS_DIR, '.trash');
 function pickDir(cands) { for (const c of cands) { try { if (fs.existsSync(c)) return c; } catch {} } return cands[0]; }
 const TEMPLATES_DIR = pickDir([path.resolve(__dirname, '../templates'), path.join(__dirname, 'templates'), path.join(process.cwd(), 'templates')]);
 const FRONTEND_DIR = pickDir([path.resolve(__dirname, '../frontend'), path.join(__dirname, 'frontend'), path.join(process.cwd(), 'frontend')]);
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data.json');
 fs.mkdirSync(APPS_DIR, { recursive: true });
+try { fs.mkdirSync(TRASH_DIR, { recursive: true }); } catch {}
 fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
 
 const app = express();
@@ -2550,17 +2553,127 @@ app.post('/api/apps/:id/env/defaults', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/apps/:id', async (req, res) => {
+  // soft delete: containers stop, but volumes and files move to the 48-hour
+  // trash hold so an accidental delete is restorable. Permanent destruction
+  // is DELETE /api/trash/:id (typed confirm) or the hourly purge.
   try {
-    const dir = appDir(APPS_DIR, req.params.id);
-    dbTools.stopAll(req.params.id);
-    await sh(`${COMPOSE_BIN} down -v`, dir).catch(() => {});
-    fs.rmSync(dir, { recursive: true, force: true });
     const db_ = load();
-    db_.apps = db_.apps.filter(a => a.id !== req.params.id);
+    if (!Array.isArray(db_.trash)) db_.trash = [];
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const dir = appDir(APPS_DIR, meta.id);
+    dbTools.stopAll(meta.id);
+    await sh(`${COMPOSE_BIN} down`, dir).catch(() => {});
+    let name = meta.id, n = 0;
+    while (fs.existsSync(path.join(TRASH_DIR, name))) { n++; name = `${meta.id}-${Date.now()}-${n}`; }
+    try { fs.renameSync(dir, path.join(TRASH_DIR, name)); }
+    catch (e) { return res.status(500).json({ error: 'could not move site to trash: ' + e.message }); }
+    db_.apps = db_.apps.filter(a => a.id !== meta.id);
+    db_.trash.push({ ...meta, deletedAt: Date.now(), trashDir: name });
     save(db_);
-    res.json({ ok: true });
+    res.json({ ok: true, trashed: true, restoreBy: new Date(Date.now() + TRASH_HOLD_MS).toISOString() });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+app.get('/api/trash', (req, res) => {
+  try {
+    const db_ = load();
+    const now = Date.now();
+    res.json((db_.trash || []).map(t => ({
+      ...pubApp(t),
+      deletedAt: t.deletedAt || null,
+      restoreBy: t.deletedAt ? new Date(t.deletedAt + TRASH_HOLD_MS).toISOString() : null,
+      msLeft: t.deletedAt ? Math.max(0, t.deletedAt + TRASH_HOLD_MS - now) : null
+    })));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/trash/:id/restore', async (req, res) => {
+  try {
+    const db_ = load();
+    if (!Array.isArray(db_.trash)) db_.trash = [];
+    const idx = db_.trash.map(t => t.id).lastIndexOf(req.params.id);
+    if (idx < 0) return res.status(404).json({ error: 'nothing in trash for ' + req.params.id });
+    if (db_.apps.some(a => a.id === req.params.id)) return res.status(409).json({ error: 'a live site already uses this name - delete or rename it first' });
+    const record = db_.trash[idx];
+    const from = path.join(TRASH_DIR, record.trashDir || record.id);
+    if (!fs.existsSync(path.join(from, 'docker-compose.yml'))) return res.status(410).json({ error: 'trash contents are missing - cannot restore' });
+    const dir = appDir(APPS_DIR, record.id);
+    try { fs.renameSync(from, dir); }
+    catch (e) { return res.status(500).json({ error: 'could not restore site files: ' + e.message }); }
+    const { deletedAt, trashDir, ...meta } = record;
+    // ports may have been claimed by sites created after the delete - bump
+    // them like create does, then rewrite .env + compose before starting.
+    const used = hostPortsInUse();
+    const moved = [];
+    const claim = current => {
+      let p = parseInt(current, 10) || 8000;
+      while (used.has(p) && p < 9000) p++;
+      used.add(p);
+      return p;
+    };
+    if (meta.hostPort) {
+      const p = claim(meta.hostPort);
+      if (p !== parseInt(meta.hostPort, 10)) moved.push({ from: meta.hostPort, to: p });
+      meta.hostPort = p;
+    }
+    for (const s of (meta.services || [])) {
+      if (!s.hostPort) continue;
+      const p = claim(s.hostPort);
+      if (p !== parseInt(s.hostPort, 10)) moved.push({ service: s.name, from: s.hostPort, to: p });
+      s.hostPort = p;
+    }
+    db_.apps.push(meta);
+    db_.trash.splice(idx, 1);
+    save(db_);
+    if (moved.length) {
+      try {
+        envSetManaged(dir, { HOST_PORT: String(meta.hostPort) });
+        svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
+      } catch (e) { console.error(record.id, 'restore port rewrite:', e.message); }
+    }
+    let restarted = false, restartError = null;
+    try { await sh(`${COMPOSE_BIN} up -d`, dir); restarted = true; }
+    catch (e) { restartError = e.message; }
+    try { await markDirty(meta.id, 'restored from trash'); } catch {}
+    res.json({ ok: true, restored: true, movedPorts: moved, restarted, restartError });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/trash/:id', async (req, res) => {
+  // permanent: volumes destroyed, files removed, record dropped.
+  try {
+    const db_ = load();
+    if (!Array.isArray(db_.trash)) db_.trash = [];
+    const idx = db_.trash.map(t => t.id).lastIndexOf(req.params.id);
+    if (idx < 0) return res.status(404).json({ error: 'nothing in trash for ' + req.params.id });
+    const record = db_.trash[idx];
+    const dir = path.join(TRASH_DIR, record.trashDir || record.id);
+    dbTools.stopAll(record.id);
+    if (fs.existsSync(path.join(dir, 'docker-compose.yml'))) await sh(`${COMPOSE_BIN} down -v`, dir).catch(() => {});
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    db_.trash.splice(idx, 1);
+    save(db_);
+    res.json({ ok: true, destroyed: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+function purgeTrash() {
+  try {
+    const db_ = load();
+    if (!Array.isArray(db_.trash) || !db_.trash.length) return;
+    const now = Date.now();
+    let changed = false;
+    db_.trash = db_.trash.filter(t => {
+      if (!t || !t.deletedAt || now - t.deletedAt < TRASH_HOLD_MS) return true;
+      const dir = path.join(TRASH_DIR, t.trashDir || t.id);
+      if (fs.existsSync(path.join(dir, 'docker-compose.yml'))) sh(`${COMPOSE_BIN} down -v`, dir).catch(() => {});
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+      changed = true;
+      console.log('trash expired:', t.id);
+      return false;
+    });
+    if (changed) save(db_);
+  } catch (e) { console.error('trash purge:', e.message); }
+}
+setInterval(purgeTrash, 60 * 60 * 1000).unref();
+purgeTrash();
 
 function parseEnvFile(p) {
   const out = {};

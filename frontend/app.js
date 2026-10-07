@@ -406,6 +406,7 @@ function backToSites() {
   history.replaceState(null, '', `${location.pathname}${location.search}`);
   showView('websites');
   refresh();
+  loadTrash();
 }
 function fillSiteHeader(a) {
   if (!a) return;
@@ -1164,6 +1165,7 @@ function dirtyBadge(a) {
 function showView(view) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + view));
   document.querySelectorAll('.navitem').forEach(n => n.classList.toggle('active', n.dataset.view === view));
+  if (view === 'trash') loadTrash();
 }
 function accessChanged() {
   const accessEl = document.querySelector('input[name=access]:checked');
@@ -1371,19 +1373,65 @@ async function toggleSitePower() {
 async function rmApp(id) {
   const ok = await uiConfirm({
     title: 'Delete ' + id + '?',
-    body: 'Containers, volumes and files are removed. This cannot be undone.',
-    requireText: id, confirmLabel: 'Delete', danger: true
+    body: 'Containers stop and the site moves to Trash for 48 hours (files and data kept). Permanent destruction happens in Trash or by expiry.',
+    requireText: id, confirmLabel: 'Move to trash', danger: true
   });
   if (!ok) return;
   // optimistic: gone from screen instantly, restored on failure
   const card = document.getElementById('card-' + id);
   if (card) card.remove();
-  toast('deleting ' + id + '…');
+  toast('moving ' + id + ' to trash…');
   try {
-    await fetch('/api/apps/' + id, { method: 'DELETE' });
-    toast(id + ' deleted');
+    const r = await (await fetch('/api/apps/' + id, { method: 'DELETE' })).json();
+    toast(r.trashed ? (id + ' in trash — restorable for 48h') : (id + ' deleted'), true);
     if (id === currentApp) backToSites(); else refresh();
+    loadTrash();
   } catch (e) { toast('delete failed: ' + e.message, false); refresh(); }
+}
+function trashLeft(ms) {
+  if (ms == null) return 'time unknown';
+  const h = Math.floor(ms / 3600000), m = Math.ceil((ms % 3600000) / 60000);
+  return h > 0 ? `${h}h ${m}m left` : `${m}m left`;
+}
+async function loadTrash() {
+  const box = document.getElementById('trashList');
+  const count = document.getElementById('trashCount');
+  try {
+    const list = await (await fetch('/api/trash')).json();
+    if (count) { count.style.display = list.length ? '' : 'none'; count.textContent = list.length; }
+    if (!box) return;
+    box.innerHTML = list.length ? list.map(t => {
+      const when = (t.deletedAt ? new Date(t.deletedAt).toISOString().replace('T', ' ').slice(0, 19) : '?');
+      return `<div class="card appcard"><div class="appcard-layout"><div class="appcard-main">` +
+        `<div class="appcard-title"><div><h3>${safeHtml(t.id)}</h3><div class="badges"><span class="badge type">${safeHtml(t.type || '?')}</span><span class="badge">db: ${safeHtml(dbLabel(t))}</span><span class="badge">${safeHtml(trashLeft(t.msLeft))}</span></div></div></div>` +
+        `<div class="meta">deleted ${safeHtml(when)} · destroys itself ${safeHtml((t.restoreBy || '?').replace('T', ' ').slice(0, 19))}</div></div>` +
+        `<div class="appcard-actions"><button class="btn primary" onclick="restoreTrash('${safeHtml(t.id)}')">restore</button><button class="btn danger" onclick="destroyTrash('${safeHtml(t.id)}')">delete forever</button></div>` +
+        `</div></div>`;
+    }).join('') : '<div class="card">Trash is empty.</div>';
+  } catch { if (box) box.innerHTML = '<div class="card">trash unreachable</div>'; }
+}
+async function restoreTrash(id) {
+  toast('restoring ' + id + '… (ports re-checked first)');
+  try {
+    const r = await (await fetch(`/api/trash/${id}/restore`, { method: 'POST' })).json();
+    if (!r.ok) { toast(r.error || 'restore failed', false); return; }
+    const moved = (r.movedPorts || []).map(m => `${m.service ? m.service + ':' : ''}${m.from}→${m.to}`).join(', ');
+    toast(id + ' restored' + (moved ? ` — port taken, moved ${moved}` : '') + (r.restarted ? '' : ' (restart it from Websites)'), true);
+    refresh(); loadTrash();
+  } catch (e) { toast('restore failed: ' + e.message, false); }
+}
+async function destroyTrash(id) {
+  const ok = await uiConfirm({
+    title: 'Destroy ' + id + ' forever?',
+    body: 'Containers, volumes, files and data are removed. This cannot be undone.',
+    requireText: id, confirmLabel: 'Destroy forever', danger: true
+  });
+  if (!ok) return;
+  try {
+    const r = await (await fetch('/api/trash/' + id, { method: 'DELETE' })).json();
+    toast(r.ok ? (id + ' destroyed') : (r.error || 'failed'), !!r.ok);
+    loadTrash(); refresh();
+  } catch (e) { toast('destroy failed: ' + e.message, false); }
 }
 async function showLogs() {
   if (!currentApp) { logsEl.textContent = 'open a website first'; return; }
