@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { decideType, findBackends, findFrontends, prismaDatabaseHints } = require('./detect');
+const { decideType, findBackends, findFrontends, prismaDatabaseHints, databaseConfigHints, sqlDatabaseHints } = require('./detect');
 
 // Mirrors docker/awesome-compose shapes: CRA frontend, express backend, angular.
 const tree = [
@@ -52,5 +52,20 @@ assert.deepEqual(prismaDatabaseHints(`
 assert.deepEqual(prismaDatabaseHints('datasource db { provider = "mysql" }'), ['mysql']);
 assert.deepEqual(prismaDatabaseHints('datasource db { provider = "mongodb" }'), ['mongo']);
 assert.deepEqual(prismaDatabaseHints('datasource db { provider = "sqlite" }'), []);
+
+assert.deepEqual(databaseConfigHints('config/config.json', '{"production":{"dialect":"postgres"}}'), ['postgres']);
+assert.deepEqual(databaseConfigHints('src/data-source.ts', `export default { type: 'mariadb' }`), ['mariadb']);
+assert.deepEqual(databaseConfigHints('drizzle.config.ts', `export default { dialect: 'postgresql' }`), ['postgres']);
+assert.deepEqual(databaseConfigHints('knexfile.js', `module.exports = { client: 'mysql2' }`), ['mysql']);
+assert.deepEqual(databaseConfigHints('.env.example', 'DB_CONNECTION=pgsql\nDB_HOST=127.0.0.1'), ['postgres']);
+assert.deepEqual(databaseConfigHints('config/database.php', `'default' => env('DB_CONNECTION', 'mysql')`), ['mysql']);
+assert.deepEqual(databaseConfigHints('src/data-source.ts', 'export default { type: process.env.DB_TYPE }'), []);
+assert.deepEqual(databaseConfigHints('drizzle.config.ts', `export default { dialect: 'sqlite' }`), []);
+assert.deepEqual(databaseConfigHints('config/config.js', `// dialect: 'mysql'\nmodule.exports = { dialect: 'postgres' }`), ['postgres']);
+assert.deepEqual(databaseConfigHints('config/config.json', `{"development":{"dialect":"mysql"},"production":{"dialect":"postgres"}}`), []);
+
+assert.deepEqual(sqlDatabaseHints('CREATE EXTENSION IF NOT EXISTS pgcrypto;'), ['postgres']);
+assert.deepEqual(sqlDatabaseHints('id BIGINT AUTO_INCREMENT PRIMARY KEY ENGINE=InnoDB;'), ['mysql']);
+assert.deepEqual(sqlDatabaseHints('-- MariaDB dump\nENGINE=InnoDB;'), ['mariadb']);
 
 console.log('frontend/backend folder classification: OK');

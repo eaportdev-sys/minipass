@@ -993,7 +993,7 @@ async function createApp() {
   } catch (e) { r = { error: e.message }; }
   if (session !== createModalSession) return;
   document.getElementById('out').textContent = JSON.stringify(r, null, 2);
-  if (r.needsDockerfile) document.getElementById('createDockerAction').style.display = 'block';
+  if (r.needsDockerfile) document.getElementById('createDockerAction').style.display = 'flex';
   buildBtn.disabled = false;
   cancelBtn.disabled = false;
   refresh();

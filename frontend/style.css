@@ -9,6 +9,7 @@
   --accent: #4f8cff;
   --accent-d: #376fd0;
   --danger: #e5534b;
+  --warn: #d29922;
   --ok: #3fb950;
   --input: #0c0e12;
   --shadow: 0 8px 24px rgba(0, 0, 0, .35);
@@ -23,6 +24,7 @@
   --accent: #2456e0;
   --accent-d: #1a42b4;
   --danger: #c93a32;
+  --warn: #9a6700;
   --ok: #1a7f37;
   --input: #eef1f7;
   --shadow: 0 8px 24px rgba(30, 50, 100, .10);
@@ -393,6 +395,11 @@ a { color: var(--accent); }
 .typepill:has(input:checked) { border-color: var(--accent); color: var(--text); background: var(--input); }
 .typepill input { display: none; }
 .typepill b { display: block; color: var(--text); }
+.create-docker-action { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 14px 0 4px; padding: 14px; border: 1px solid var(--warn); border-radius: 11px; background: var(--input); }
+.create-docker-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 4px; }
+.create-docker-copy b { color: var(--text); }
+.create-docker-copy span, .create-docker-copy small { color: var(--muted); line-height: 1.35; }
+.create-docker-action button { flex: 0 0 auto; margin: 0; }
 .modalbtns { display: flex; gap: 8px; margin-top: 14px; }
 .view { display: none; }
 .view.active { display: block; }
@@ -410,6 +417,7 @@ a { color: var(--accent); }
 @keyframes opblink { to { visibility: hidden; } }
 #cmOk.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 @media (max-width: 720px) {
+  .create-docker-action { align-items: stretch; flex-direction: column; }
   .sidebar { width: 64px; }
   .brand { font-size: 0; }
   .brand span { font-size: 20px; }

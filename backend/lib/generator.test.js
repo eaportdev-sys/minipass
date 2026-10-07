@@ -49,7 +49,7 @@ try {
   assert.deepEqual(detected.dbs, ['mariadb']);
   assert.deepEqual(sqlDatabaseHints('DEFAULT COLLATE=utf8mb4_uca1400_ai_ci;'), ['mariadb']);
   assert.deepEqual(sqlDatabaseHints('-- MariaDB dump 10.19'), ['mariadb']);
-  assert.deepEqual(sqlDatabaseHints('COLLATE=utf8mb4_0900_ai_ci;'), []);
+  assert.deepEqual(sqlDatabaseHints('COLLATE=utf8mb4_0900_ai_ci;'), ['mysql']);
 
   const phpDockerfile = fs.readFileSync(path.resolve(__dirname, '../../templates/php/Dockerfile'), 'utf8');
   assert(phpDockerfile.startsWith('# minipass template'), 'PHP Dockerfile is marked as panel-owned');

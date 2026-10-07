@@ -1289,7 +1289,7 @@ async function detectRepo(repo, { login, token } = {}) {
       if (blob && blob.content) pkg = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8'));
     } catch {}
   }
-  const { decideType, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints } = require('./lib/detect');
+  const { decideType, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints } = require('./lib/detect');
   const out = decideType(tree, pkg);
   // monorepo sub-apps, tool-agnostic: vite heuristic + workspace manifests
   // (npm workspaces, pnpm-workspace.yaml, lerna.json, turbo/nx conventions)
@@ -1363,17 +1363,30 @@ async function detectRepo(repo, { login, token } = {}) {
       if (!out.dbReason) out.dbReason = `Prisma datasource in ${p}`;
     }
   }
-  // Prefer MariaDB over a generic mysql/mysql2 dependency when an exported
-  // schema contains a MariaDB-only marker. Keep this capped: detection should
-  // never download an entire migrations history.
-  const sqlCandidates = tree.filter(p => /(^|\/)(baseline|schema|dump)[^/]*\.sql$/i.test(p)).slice(0, 3);
+  // Standard ORM/framework config files can state the engine even when their
+  // package dependency is database-neutral. Dynamic env expressions are not
+  // inferred; only explicit literal values preselect a service.
+  const configCandidates = tree.filter(p => /(^|\/)(?:knexfile\.(?:js|cjs|mjs|ts)|(?:ormconfig|data-source|typeorm\.config)\.(?:json|js|cjs|mjs|ts)|drizzle\.config\.(?:js|cjs|mjs|ts)|(?:config\/config|sequelize\.config)\.(?:json|js|cjs|mjs|ts)|\.env\.(?:example|sample)|config\/database\.php)$/i.test(p)).slice(0, 12);
+  for (const p of configCandidates) {
+    const text = await readText(p);
+    for (const db of databaseConfigHints(p, text)) {
+      if (db === 'mariadb') out.dbs = (out.dbs || []).filter(item => item !== 'mysql');
+      if (!out.dbs.includes(db)) out.dbs.push(db);
+      if (!out.dbReason) out.dbReason = `Explicit database setting in ${p}`;
+    }
+  }
+  // Strong SQL dialect signatures provide a bounded fallback. Prefer MariaDB
+  // over a generic mysql/mysql2 dependency when a schema says MariaDB.
+  const sqlCandidates = tree.filter(p => /(^|\/)(?:(?:baseline|schema|dump)[^/]*\.sql|(?:migrations?|sql)\/[^/]+\.sql)$/i.test(p)).slice(0, 6);
   for (const p of sqlCandidates) {
     const text = await readText(p);
-    if (!sqlDatabaseHints(text).includes('mariadb')) continue;
-    out.dbs = (out.dbs || []).filter(db => db !== 'mysql');
-    if (!out.dbs.includes('mariadb')) out.dbs.push('mariadb');
-    out.dbReason = `MariaDB schema marker in ${p}`;
-    break;
+    const hinted = sqlDatabaseHints(text);
+    if (!hinted.length) continue;
+    for (const db of hinted) {
+      if (db === 'mariadb') out.dbs = (out.dbs || []).filter(item => item !== 'mysql');
+      if (!out.dbs.includes(db)) out.dbs.push(db);
+    }
+    if (!out.dbReason) out.dbReason = `Database dialect marker in ${p}`;
   }
   return out;
 }

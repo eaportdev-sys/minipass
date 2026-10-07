@@ -156,14 +156,56 @@ function findFrontends(tree, pkgs = {}) {
 function sqlDatabaseHints(text) {
   const sql = String(text || '');
   if (/\bMariaDB\b/i.test(sql) || /utf8mb4_uca1400_[a-z0-9_]+/i.test(sql)) return ['mariadb'];
+  if (/--\s*PostgreSQL database dump/i.test(sql) || /\bCREATE\s+EXTENSION\b/i.test(sql) ||
+      /\b(?:BIG|SMALL)?SERIAL\b/i.test(sql) || /\bSET\s+search_path\b/i.test(sql) ||
+      /\bLANGUAGE\s+plpgsql\b/i.test(sql) || /::(?:uuid|jsonb|regclass)\b/i.test(sql) ||
+      /\bGENERATED\s+(?:BY DEFAULT|ALWAYS)\s+AS\s+IDENTITY\b/i.test(sql)) return ['postgres'];
+  if (/--\s*MySQL dump/i.test(sql) || /\bENGINE\s*=\s*(?:InnoDB|MyISAM)\b/i.test(sql) ||
+      /\bAUTO_INCREMENT\b/i.test(sql) || /\bDEFAULT\s+CHARSET\s*=/i.test(sql) ||
+      /utf8mb4_0900_[a-z0-9_]+/i.test(sql) || /\bLOCK TABLES\b/i.test(sql)) return ['mysql'];
   return [];
+}
+
+const DB_ALIASES = {
+  postgres: 'postgres', postgresql: 'postgres', pg: 'postgres', pgsql: 'postgres',
+  mysql: 'mysql', mysql2: 'mysql', mariadb: 'mariadb',
+  mongo: 'mongo', mongodb: 'mongo', redis: 'redis', ioredis: 'redis'
+};
+
+function literalSettings(text, key) {
+  const source = String(text || '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*(?:\/\/|#).*$/gm, '');
+  const re = new RegExp(`["']?${key}["']?\\s*[:=]\\s*["']([^"']+)["']`, 'gi');
+  return [...source.matchAll(re)].map(match => match[1].trim().toLowerCase());
+}
+
+// Infer only from explicit literals in conventional ORM/framework config
+// files. Dynamic process.env values are intentionally ignored: selecting a
+// database from a variable name would be a guess rather than repository fact.
+function databaseConfigHints(filePath, text) {
+  const file = String(filePath || '').replace(/\\/g, '/').toLowerCase();
+  const body = String(text || '');
+  let values = [];
+  if (/(^|\/)drizzle\.config\.(?:js|cjs|mjs|ts)$/.test(file)) values = literalSettings(body, 'dialect');
+  else if (/(^|\/)knexfile\.(?:js|cjs|mjs|ts)$/.test(file)) values = literalSettings(body, 'client');
+  else if (/(^|\/)(?:ormconfig|data-source|typeorm\.config)\.(?:json|js|cjs|mjs|ts)$/.test(file)) values = literalSettings(body, 'type');
+  else if (/(^|\/)(?:config\/config|sequelize\.config)\.(?:json|js|cjs|mjs|ts)$/.test(file)) values = literalSettings(body, 'dialect');
+  else if (/(^|\/)\.env\.(?:example|sample)$/.test(file)) {
+    const match = body.match(/^\s*DB_CONNECTION\s*=\s*["']?([A-Za-z0-9_-]+)["']?\s*(?:#.*)?$/mi);
+    values = match ? [match[1].toLowerCase()] : [];
+  } else if (/(^|\/)config\/database\.php$/.test(file)) {
+    const fallback = body.match(/['"]default['"]\s*=>\s*env\(\s*['"]DB_CONNECTION['"]\s*,\s*['"]([^'"]+)['"]/i);
+    const direct = body.match(/['"]default['"]\s*=>\s*['"]([^'"]+)['"]/i);
+    values = [(fallback && fallback[1] || direct && direct[1] || '').toLowerCase()];
+  }
+  const dbs = [...new Set(values.map(value => DB_ALIASES[value]).filter(Boolean))];
+  return dbs.length === 1 ? dbs : [];
 }
 
 // Prisma's client package is database-neutral, so dependency inspection cannot
 // identify the managed service. The datasource provider is explicit and is a
 // safe signal for the database choices the panel supports.
 function prismaDatabaseHints(text) {
-  const schema = String(text || '').replace(/\/\/.*$/gm, '');
+  const schema = String(text || '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
   const dbs = [];
   const providers = { postgresql: 'postgres', mysql: 'mysql', mongodb: 'mongo' };
   for (const match of schema.matchAll(/datasource\s+[A-Za-z_][A-Za-z0-9_]*\s*\{([\s\S]*?)\}/g)) {
@@ -174,4 +216,4 @@ function prismaDatabaseHints(text) {
   return dbs;
 }
 
-module.exports = { decideType, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints };
+module.exports = { decideType, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints };
