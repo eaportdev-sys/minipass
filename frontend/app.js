@@ -712,7 +712,6 @@ async function loadDatabases() {
         `<div class="meta">${safeHtml(d.image || 'image unavailable')}</div><div class="meta"><b>${safeHtml(d.state)}</b>${d.status ? ` · ${safeHtml(d.status)}` : ''}</div>` +
         `<div class="db-tool-status">${toolStatus}</div><div class="db-runtime-actions">${action}${dumpBtn}</div></div>`;
     }).join('') || '<div class="meta">No managed databases are attached.</div>';
-    refreshDbToolImageState();
   } catch (e) { box.innerHTML = '<div class="meta">database status unavailable</div>'; }
 }
 function dbPopupKey(appId, type) { return `${appId}:${type}`; }
@@ -762,22 +761,8 @@ async function launchDbTool(type) {
     toast('database UI failed: ' + e.message, false);
   }
 }
-let dbToolImgPulling = false;
-async function refreshDbToolImageState() {
-  const out = document.getElementById('dbToolImgOut');
-  if (!out || dbToolImgPulling) return;
-  try {
-    const r = await (await fetch('/api/panel/db-tools/images')).json();
-    const imgs = (r && r.images) || [];
-    const ready = imgs.filter(x => x.present).length;
-    out.textContent = imgs.length
-      ? (ready === imgs.length ? `admin images on server: ${ready}/${imgs.length} ready — launches start instantly` : `admin images on server: ${ready}/${imgs.length} ready`)
-      : '';
-  } catch { /* presence indicator is best-effort only */ }
-}
 async function pullDbToolImages() {
   const out = document.getElementById('dbToolImgOut');
-  dbToolImgPulling = true;
   if (out) out.textContent = 'downloading admin images… (large on first run)';
   toast('downloading database admin images…');
   try {
@@ -793,9 +778,6 @@ async function pullDbToolImages() {
   } catch (e) {
     if (out) out.textContent = 'failed: ' + e.message;
     toast('image download failed: ' + e.message, false);
-  } finally {
-    dbToolImgPulling = false;
-    refreshDbToolImageState();
   }
 }
 async function stopDbTool(type, appId = currentApp, popupClosed = false) {
