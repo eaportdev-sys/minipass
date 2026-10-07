@@ -49,6 +49,13 @@ else
   fi
 fi
 
+# 3b. database admin UI images (keep in sync with backend/lib/db-tools.js TOOLS).
+# Pre-downloaded so the first UI launch is instant; best-effort, never fatal.
+for img in 'dpage/pgadmin4:9.18.0' 'phpmyadmin:5.2.3-apache' 'mongo-express:1.0.2-20-alpine3.19' 'rediscommander/redis-commander:latest'; do
+  msg "pre-downloading $img"
+  docker pull "$img" || true
+done
+
 # 4. optional host Node (only for running backend without docker). Pass --with-node.
 if [ "$1" = "--with-node" ]; then
   if ! command -v node >/dev/null; then

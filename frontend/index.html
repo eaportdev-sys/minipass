@@ -122,6 +122,8 @@
           <pre id="dbOut"></pre>
           <div id="dbRuntimeList"></div>
           <div class="meta">Database administration opens with the connection preconfigured. Closing its popup stops the UI; a 30-minute limit handles abandoned sessions.</div>
+          <div class="meta">Admin images live on this server — the first launch downloads its image once. Pre-download them here to avoid waiting.</div>
+          <div class="controlrow"><button onclick="pullDbToolImages()">download / upgrade admin images</button><span id="dbToolImgOut" class="meta"></span></div>
         </div>
         <div class="card stepcard">
           <div class="stephead"><span class="stepno">4</span><div><b>Configure routing</b><div class="meta">Where Open lands and how services connect.</div></div></div>

@@ -183,6 +183,24 @@ app.post('/api/panel/terms', (req, res) => {
   saveAuth(a);
   res.json({ ok: true });
 });
+// ---- Database admin images: pre-downloaded on the server so the first UI
+// launch does not wait on a large pull. The manual pull doubles as the
+// upgrade path (re-fetches every pinned admin image).
+app.get('/api/panel/db-tools/images', (req, res) => {
+  try {
+    res.json({ images: Object.entries(dbTools.TOOLS).map(([type, tool]) => ({ type, tool: tool.label, image: tool.image, present: dbTools.imagePresent(tool.image) })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+let dbToolsPulling = false;
+app.post('/api/panel/db-tools/pull', async (req, res) => {
+  if (dbToolsPulling) return res.status(409).json({ error: 'image download already in progress' });
+  dbToolsPulling = true;
+  try {
+    const results = await dbTools.pullImages();
+    res.json({ ok: results.every(r => r.ok), results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+  finally { dbToolsPulling = false; }
+});
 // ---- Backups: site tarball + per-database dumps. Downloads only - restore is
 // manual (extract the tarball, rescan). Passwords travel as argv, never shell.
 app.get('/api/apps/:id/backup', async (req, res) => {
@@ -2790,3 +2808,16 @@ wss.on('connection', (ws, req) => {
 });
 
 server.listen(PORT, () => console.log(`minipaas on :${PORT}, apps in ${APPS_DIR}`));
+// Warm the database admin images in the background (missing ones only, so
+// restarts stay fast). First UI launches then skip the large download.
+setImmediate(() => {
+  (async () => {
+    try {
+      const missing = dbTools.IMAGES.filter(image => !dbTools.imagePresent(image));
+      if (!missing.length) return;
+      console.log('db-tools: pre-downloading', missing.join(', '));
+      const results = await dbTools.pullImages(missing);
+      for (const r of results) console.log(`db-tools: ${r.ok ? 'ready' : 'FAILED'} ${r.image}${r.error ? ` - ${r.error}` : ''}`);
+    } catch (e) { console.error('db-tools pre-download:', e.message); }
+  })();
+});

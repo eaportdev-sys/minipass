@@ -232,4 +232,27 @@ function stopAll(id) {
   for (const type of Object.keys(TOOLS)) stop(id, type);
 }
 
-module.exports = { TOOLS, describe, launch, stop, stopAll, databaseConfig, safeName };
+// Admin UI images live on the server so the first launch does not wait on a
+// large download. Pulls are best-effort and sequential; launch() works
+// without them (docker fetches a missing image on demand).
+const IMAGES = [...new Set(Object.values(TOOLS).map(t => t.image))];
+
+function imagePresent(image) {
+  try { docker(['image', 'inspect', image], { stdio: 'ignore' }); return true; }
+  catch { return false; }
+}
+
+async function pullImages(images = IMAGES) {
+  const results = [];
+  for (const image of [...new Set(images)]) {
+    try {
+      await dockerAsync(['pull', image], { encoding: 'utf8', timeout: 600000, maxBuffer: 1024 * 1024 });
+      results.push({ image, ok: true });
+    } catch (e) {
+      results.push({ image, ok: false, error: String((e && e.stderr) || (e && e.message) || e).trim().split(/\r?\n/).slice(-2).join(' ').slice(-300) });
+    }
+  }
+  return results;
+}
+
+module.exports = { TOOLS, IMAGES, describe, launch, stop, stopAll, databaseConfig, safeName, imagePresent, pullImages };

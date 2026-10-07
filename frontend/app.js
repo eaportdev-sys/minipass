@@ -761,6 +761,25 @@ async function launchDbTool(type) {
     toast('database UI failed: ' + e.message, false);
   }
 }
+async function pullDbToolImages() {
+  const out = document.getElementById('dbToolImgOut');
+  if (out) out.textContent = 'downloading admin images… (large on first run)';
+  toast('downloading database admin images…');
+  try {
+    const r = await (await fetch('/api/panel/db-tools/pull', { method: 'POST' })).json();
+    if (r.results) {
+      const failed = r.results.filter(x => !x.ok);
+      if (out) out.textContent = failed.length ? `done with ${failed.length} failure(s): ${failed.map(x => x.image).join(', ')}` : 'admin images ready';
+      toast(failed.length ? `image download finished with ${failed.length} failure(s)` : 'database admin images ready', !failed.length);
+    } else {
+      if (out) out.textContent = r.error || 'failed';
+      toast(r.error || 'image download failed', false);
+    }
+  } catch (e) {
+    if (out) out.textContent = 'failed: ' + e.message;
+    toast('image download failed: ' + e.message, false);
+  }
+}
 async function stopDbTool(type, appId = currentApp, popupClosed = false) {
   if (!appId) return;
   const key = dbPopupKey(appId, type);
@@ -1232,6 +1251,7 @@ async function runDeploy(id, services, local = false) {
   const t0 = Date.now();
   let done = false;
   let outcome = null;
+  manualDeployActive = id;
   if (id === currentApp) setPowerState('sitePower', 'deploying', 'Deploying');
   prog.style.display = 'block';
   bar.style.width = '2%'; bar.style.background = '#4caf50';
@@ -1273,6 +1293,7 @@ async function runDeploy(id, services, local = false) {
     tail.textContent = (outcome && (outcome.error || '')) || 'failed';
     toast('redeploy failed: ' + ((outcome && outcome.error) || 'unknown'), false);
   }
+  manualDeployActive = null;
   await refreshSiteData(id);
   setTimeout(() => { prog.style.display = 'none'; }, 15000);
 }
@@ -1912,6 +1933,31 @@ function updatePowerStates(st) {
   }
 }
 let remoteOp = null;
+let manualDeployActive = null;
+let manualOpShown = null;
+// The Websites list has no open site, so the 3s detail poller below stays
+// idle there. Poll visible cards on a slower cadence instead, or a background
+// create-build looks stuck at "checking…/busy…" for its whole run.
+let siteListPoll = false;
+async function pollSiteList() {
+  if (siteListPoll || document.hidden) return;
+  const view = document.getElementById('view-websites');
+  if (!view || !view.classList.contains('active')) return;
+  const ids = [...document.querySelectorAll('[id^="appPower-"]')].map(el => el.id.slice('appPower-'.length));
+  if (!ids.length) return;
+  siteListPoll = true;
+  try {
+    await Promise.all(ids.map(async id => {
+      try {
+        const st = await (await fetch(`/api/apps/${encodeURIComponent(id)}/status`)).json();
+        if (!st || st.error) return;
+        const running = appIsRunning(st);
+        setAppCardState(id, st.deploying ? 'deploying' : (running ? 'deployed' : 'off'), running);
+      } catch {}
+    }));
+  } finally { siteListPoll = false; }
+}
+setInterval(() => { if (!currentApp) pollSiteList(); }, 10000);
 setInterval(async () => {
   if (!currentApp) return;
   let st;
@@ -1921,6 +1967,44 @@ setInterval(async () => {
   const recv = !op && st.pushEvent && (Date.now() - st.pushEvent.at) < 120000;
   updatePowerStates(st);
   if (st.app) renderRouteChoices(st.app);
+  // Server-side manual builds (create's background build, list-view redeploys)
+  // have no browser-side tracker, unlike runDeploy. Surface them in the main
+  // progress box so an opened site shows elapsed time instead of a bare pulse.
+  const mop = st.deployOp && (st.deployOp.source === 'manual' || st.deployOp.source === 'local') && manualDeployActive !== currentApp ? st.deployOp : null;
+  if (mop) {
+    manualOpShown = { app: currentApp, startedAt: mop.startedAt };
+    const box = document.getElementById('deployProg');
+    if (box) {
+      box.style.display = 'block';
+      const s = Math.floor((Date.now() - mop.startedAt) / 1000);
+      const bar = document.getElementById('deployBar');
+      const pctv = Math.min(95, 2 + (Date.now() - mop.startedAt) / 90000 * 93);
+      bar.style.width = pctv.toFixed(0) + '%';
+      bar.style.background = '#4caf50';
+      document.getElementById('deployPct').textContent = pctv.toFixed(0) + '%';
+      document.getElementById('deployTime').textContent = s + 's';
+      document.getElementById('deployStage').textContent = 'deploying… (started in background)';
+    }
+  } else if (manualOpShown && manualOpShown.app === currentApp) {
+    manualOpShown = null;
+    const d = st.lastDeploy;
+    const box = document.getElementById('deployProg');
+    if (box && box.style.display !== 'none') {
+      document.getElementById('deployBar').style.width = '100%';
+      document.getElementById('deployPct').textContent = '100%';
+      if (d && d.status === 'ok') {
+        document.getElementById('deployBar').style.background = '#4caf50';
+        document.getElementById('deployStage').textContent = 'done — live';
+        toast('background deploy finished', true);
+      } else {
+        document.getElementById('deployBar').style.background = 'var(--danger)';
+        document.getElementById('deployStage').textContent = 'failed';
+        toast('background deploy failed: ' + ((d && d.error) || 'unknown'), false);
+      }
+      setTimeout(() => { box.style.display = 'none'; }, 15000);
+    }
+    refreshSiteData();
+  }
   for (const p of ['hook', 'local']) {
     const box = document.getElementById(p + 'Prog');
     if (!box) continue;
