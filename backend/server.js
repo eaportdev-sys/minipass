@@ -425,6 +425,15 @@ app.get('/api/types', (req, res) => {
   ]);
 });
 
+function cleanDomain(value) {
+  const domain = String(value || '').trim().toLowerCase().replace(/\.$/, '');
+  if (!domain) return '';
+  if (domain.length > 253 || !domain.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))) {
+    throw new Error('domain must be a hostname only, for example app.example.com (no protocol, path, port, or spaces)');
+  }
+  return domain;
+}
+
 app.get('/api/apps', (req, res) => res.json(load().apps.map(meta => ({
   ...pubApp(meta),
   services: publicServices(meta, appDir(APPS_DIR, meta.id))
@@ -435,6 +444,9 @@ app.post('/api/apps', async (req, res) => {
     const { name, type, repoUrl, db, port, domain } = req.body;
     if (!name || !type) return res.status(400).json({ error: 'name and type required' });
     if (!['static', 'react', 'node', 'php'].includes(type)) return res.status(400).json({ error: 'unsupported application type' });
+    let appDomain;
+    try { appDomain = cleanDomain(domain); }
+    catch (e) { return res.status(400).json({ error: e.message }); }
     const id = name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
     const token = crypto.randomBytes(16).toString('hex');
     // localhost: auto-assign host port 8000+ so app is reachable without a domain
@@ -489,9 +501,9 @@ app.post('/api/apps', async (req, res) => {
     }
     const dbs = normDbs(req.body.dbs !== undefined ? req.body.dbs : db);
     const subdir = String(req.body.subdir || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '') || '';
-    const created = createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain, hostPort, gitToken: siteToken, subdir, gitBranch: explicitBranch, standardDockerfile: req.body.standardDockerfile === true });
+    const created = createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain: appDomain, hostPort, gitToken: siteToken, subdir, gitBranch: explicitBranch, standardDockerfile: req.body.standardDockerfile === true });
     const db_ = load();
-    const meta = { id, type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: domain || '', token, hostPort, subdir: created.subdir || '', createdAt: new Date().toISOString() };
+    const meta = { id, type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: appDomain, token, hostPort, subdir: created.subdir || '', createdAt: new Date().toISOString() };
     // Capture repository env sources before the first deploy. Never fail an
     // otherwise valid create solely because the private snapshot could not be written.
     try { applyEnvDefaults(meta, created.dir, req.hostname, req.protocol); }
@@ -1032,10 +1044,10 @@ async function deployNow(id, opts = {}) {
       const out = await runOut(argv[0], argv.slice(1), { cwd: dir, captureStderr: true });
       try { fs.appendFileSync(buildLog, `\n--- migrate (${migrateSvc}) ---\n` + String(out).slice(-2000)); } catch {}
     } catch (e) {
-      let tail = '';
-      try { tail = fs.readFileSync(buildLog, 'utf8').split('\n').slice(-25).join('\n'); } catch {}
-      await recordDeploy(id, { sha, at: stamp(), status: 'error', error: ('migration failed - running containers untouched: ' + (tail || e.message)).trim().slice(-500) });
-      throw new Error('migration failed - running containers untouched: ' + (tail || e.message).trim().split('\n').slice(-3).join(' '));
+      const reason = migrationFailure(e);
+      try { fs.appendFileSync(buildLog, `\n--- migrate failed (${migrateSvc}) ---\n${reason}\n`); } catch {}
+      await recordDeploy(id, { sha, at: stamp(), status: 'error', error: ('migration failed - running containers untouched: ' + reason).trim().slice(-500) });
+      throw new Error('migration failed - running containers untouched: ' + reason.trim().split('\n').slice(-3).join(' '));
     }
   }
   try {
@@ -2119,8 +2131,16 @@ function migrateDirProblem(meta, dirAbs, svcName, dir) {
 // dir/cmd are charset-validated (no quotes/$/backtick/semicolon/&/|), so the
 // sh -c wrapper cannot break out - it only adds a safe `cd`.
 function migrateRunArgv(svcName, dir, cmd) {
-  const inner = dir ? `cd ${dir} && ${cmd}` : cmd;
+  const localCmd = migrations.localOnlyCommand(cmd);
+  const inner = dir ? `cd ${dir} && ${localCmd}` : localCmd;
   return [...composeArgv(), 'run', '--rm', svcName, 'sh', '-c', inner];
+}
+function migrationFailure(error) {
+  const raw = String((error && error.message) || error || 'migration failed');
+  if (/will be installed|--no-install|npm (?:error|err!).*(?:canceled|cancelled)|could not determine executable/i.test(raw)) {
+    return 'migration tool is not installed in this app image. Add the CLI to package.json dependencies/devDependencies, redeploy, then retry. Minipass will not download an unpinned latest version during a migration.';
+  }
+  return raw;
 }
 app.post('/api/apps/:id/migrate', (req, res) => {
   try {
@@ -2171,7 +2191,7 @@ app.post('/api/apps/:id/migrate-run', async (req, res) => {
     const cap = { cwd: dirAbs, captureStderr: true };
     const out = await runOut(argv[0], argv.slice(1), cap);
     res.json({ ok: true, service: svcName, output: String(out).slice(-4000) || '(no output)' });
-  } catch (e) { res.status(500).json({ error: ('migrate run failed: ' + e.message).slice(-500) }); }
+  } catch (e) { res.status(500).json({ error: ('migrate run failed: ' + migrationFailure(e)).slice(-500) }); }
 });
 // Verify-only: runs a verify command (e.g. knex migrate:list) and
 // returns its output. Accepts a one-shot {check, service, dir} override.
@@ -2193,7 +2213,7 @@ app.post('/api/apps/:id/migrate-check', async (req, res) => {
     const argv = migrateRunArgv(svcName, dir, cmd);
     const out = await runOut(argv[0], argv.slice(1), { cwd: dirAbs, captureStderr: true });
     res.json({ ok: true, service: svcName, output: String(out).slice(-4000) || '(no output)' });
-  } catch (e) { res.status(500).json({ error: ('verify failed: ' + e.message).slice(-500) }); }
+  } catch (e) { res.status(500).json({ error: ('verify failed: ' + migrationFailure(e)).slice(-500) }); }
 });
 // Detect migration frameworks and map each project folder to the most-specific
 // enabled service build context. Returned dirs are container-relative, never
@@ -2376,7 +2396,8 @@ app.get('/api/apps/:id/env', (req, res) => {
 app.put('/api/apps/:id/env', async (req, res) => {
   const validKey = k => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k);
   try {
-    const meta = load().apps.find(a => a.id === req.params.id);
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
     const dir = appDir(APPS_DIR, meta.id);
     const managed = managedKeys(dir);
@@ -2387,6 +2408,10 @@ app.put('/api/apps/:id/env', async (req, res) => {
     const set = { ...((req.body && req.body.set) || {}) };
     const del = Array.isArray(req.body && req.body.delete) ? req.body.delete : [];
     const rename = (req.body && req.body.rename) || {};
+    if (Object.prototype.hasOwnProperty.call(set, 'DOMAIN')) {
+      try { set.DOMAIN = cleanDomain(set.DOMAIN); }
+      catch (e) { return res.status(400).json({ error: e.message }); }
+    }
     for (const k of Object.keys(set)) {
       if (!validKey(k)) return res.status(400).json({ error: 'bad key name: ' + k });
     }
@@ -2426,6 +2451,10 @@ app.put('/api/apps/:id/env', async (req, res) => {
       else arr.push(`${k}=${clean}`);
     }
     fs.writeFileSync(path.join(dir, '.env'), arr.join('\n').replace(/\s*$/, '') + '\n');
+    if (Object.prototype.hasOwnProperty.call(set, 'DOMAIN') && meta.domain !== set.DOMAIN) {
+      meta.domain = set.DOMAIN;
+      save(db_);
+    }
     await markDirty(meta.id, 'env changed');
     const skippedAll = [...new Set([...skipped, ...lockedSet])];
     // edits save only - redeploy is an explicit user action (deploy button)

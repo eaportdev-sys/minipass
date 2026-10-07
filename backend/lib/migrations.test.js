@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { targetFor, detectMigrations } = require('./migrations');
+const { targetFor, localOnlyCommand, detectMigrations } = require('./migrations');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-migrations-'));
 const put = (name, content = '') => {
@@ -54,7 +54,10 @@ try {
   assert(migrateScript, 'server migration script detected');
   assert.equal(migrateScript.dir, '', 'service root must not become server/server');
   assert.equal(migrateScript.framework, 'Knex');
-  assert.equal(migrateScript.check, 'npx knex migrate:list');
+  assert.equal(migrateScript.check, 'npx --no-install knex migrate:list');
+  assert.equal(localOnlyCommand('npx knex migrate:latest'), 'npx --no-install knex migrate:latest');
+  assert.equal(localOnlyCommand('npx --no-install knex migrate:latest'), 'npx --no-install knex migrate:latest');
+  assert.equal(localOnlyCommand('npm run migrate'), 'npm run migrate');
 
   const initial = detected.find(x => x.command === 'npm run db:init');
   assert(initial, 'initialization script detected');

@@ -533,6 +533,7 @@ async function loadEnv() {
       const keyInput = `<input class="env-name" value="${key}" ${v.managed || protectedKey ? 'readonly' : ''} aria-label="Environment key">`;
       const badge = v.managed ? '<span class="badge">managed</span>' : '';
       const canEditValue = !v.managed || v.key === 'DOMAIN';
+      const isDomain = v.key === 'DOMAIN';
       if (v.key === 'NODE_ENV' && !v.managed) {
         const cur = String(v.value).trim();
         return `<div class="env-row" data-env-original="${key}" data-env-managed="0"><div class="env-key-cell">${keyInput}${badge}</div>` +
@@ -540,8 +541,8 @@ async function loadEnv() {
           `<div class="env-row-actions"><span class="meta">required</span></div></div>`;
       }
       return `<div class="env-row" data-env-original="${key}" data-env-managed="${v.managed ? '1' : '0'}"><div class="env-key-cell">${keyInput}${badge}</div>` +
-        `<input class="env-value" type="password" value="${value}" ${canEditValue ? '' : 'readonly'} aria-label="${key} value">` +
-        `<div class="env-row-actions"><button onclick="toggleEnv(this)">show</button>${canEditValue ? `<button onclick="genEnvRow(this)">generate</button>` : ''}${v.managed ? '' : ` <button class="btn danger" onclick="envDel('${v.key}')">delete</button>`}</div></div>`;
+        `<input class="env-value" type="${isDomain ? 'text' : 'password'}" value="${value}" ${canEditValue ? '' : 'readonly'} ${isDomain ? 'placeholder="app.example.com"' : ''} aria-label="${key} value">` +
+        `<div class="env-row-actions">${isDomain ? '<span class="meta">hostname</span>' : `<button onclick="toggleEnv(this)">show</button>${canEditValue ? `<button onclick="genEnvRow(this)">generate</button>` : ''}`}${v.managed ? '' : ` <button class="btn danger" onclick="envDel('${v.key}')">delete</button>`}</div></div>`;
     }).join('') || '<div class="meta">(empty env)</div>';
   } catch { box.innerHTML = '<div class="meta">load failed</div>'; }
 }

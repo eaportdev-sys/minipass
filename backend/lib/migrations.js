@@ -89,11 +89,20 @@ function frameworkFrom(text) {
 
 function verifyFor(framework) {
   return ({
-    Knex: 'npx knex migrate:list',
-    Prisma: 'npx prisma migrate status',
-    Sequelize: 'npx sequelize-cli db:migrate:status',
-    MikroORM: 'npx mikro-orm migration:list'
+    Knex: 'npx --no-install knex migrate:list',
+    Prisma: 'npx --no-install prisma migrate status',
+    Sequelize: 'npx --no-install sequelize-cli db:migrate:status',
+    MikroORM: 'npx --no-install mikro-orm migration:list'
   })[framework] || '';
+}
+
+// Migration tooling must come from the repository image. Bare npx otherwise
+// downloads the registry's latest CLI at run time, which is slow and may be
+// incompatible with the project's schema/client version.
+function localOnlyCommand(command) {
+  const cmd = String(command || '').trim();
+  if (!/^npx(?:\s|$)/.test(cmd) || /^npx\s+--no-install(?:\s|$)/.test(cmd)) return cmd;
+  return cmd.replace(/^npx\s+/, 'npx --no-install ');
 }
 
 function detectMigrations(codeDir, services) {
@@ -151,22 +160,22 @@ function detectMigrations(codeDir, services) {
     }
 
     if (anyFile(files, 'knexfile.js', 'knexfile.ts', 'knexfile.cjs', 'knexfile.mjs'))
-      add({ framework: 'Knex', command: 'npx knex migrate:latest', check: 'npx knex migrate:list', why: 'Knex configuration found', repoDir: rel });
+      add({ framework: 'Knex', command: 'npx --no-install knex migrate:latest', check: 'npx --no-install knex migrate:list', why: 'Knex configuration found; uses the repository-installed Knex version', repoDir: rel });
 
     if (exists(dir, 'prisma/schema.prisma') || files.has('schema.prisma'))
-      add({ framework: 'Prisma', command: 'npx prisma migrate deploy', check: 'npx prisma migrate status', why: 'Prisma schema found', repoDir: rel });
+      add({ framework: 'Prisma', command: 'npx --no-install prisma migrate deploy', check: 'npx --no-install prisma migrate status', why: 'Prisma schema found; uses the repository-installed Prisma version', repoDir: rel });
 
     if (files.has('.sequelizerc') || deps['sequelize-cli'] || (exists(dir, 'migrations') && exists(dir, 'config')))
-      add({ framework: 'Sequelize', command: 'npx sequelize-cli db:migrate', check: 'npx sequelize-cli db:migrate:status', why: 'Sequelize migration setup found', repoDir: rel });
+      add({ framework: 'Sequelize', command: 'npx --no-install sequelize-cli db:migrate', check: 'npx --no-install sequelize-cli db:migrate:status', why: 'Sequelize migration setup found; uses the repository-installed CLI', repoDir: rel });
 
     if (deps.typeorm || [...files].some(f => /^(ormconfig|data-source)\.(js|cjs|mjs|ts|json)$/.test(f)))
       add({ framework: 'TypeORM', command: '', why: 'TypeORM found', repoDir: rel, problem: 'Add a package.json migration script that includes the project data-source option.' });
 
     if (deps['drizzle-orm'] && [...files].some(f => /^drizzle\.config\.(js|cjs|mjs|ts)$/.test(f)))
-      add({ framework: 'Drizzle', command: 'npx drizzle-kit migrate', why: 'Drizzle configuration found', repoDir: rel });
+      add({ framework: 'Drizzle', command: 'npx --no-install drizzle-kit migrate', why: 'Drizzle configuration found; uses the repository-installed CLI', repoDir: rel });
 
     if (deps['@mikro-orm/core'])
-      add({ framework: 'MikroORM', command: 'npx mikro-orm migration:up', check: 'npx mikro-orm migration:list', why: 'MikroORM dependency found', repoDir: rel });
+      add({ framework: 'MikroORM', command: 'npx --no-install mikro-orm migration:up', check: 'npx --no-install mikro-orm migration:list', why: 'MikroORM dependency found; uses the repository-installed CLI', repoDir: rel });
 
     if (files.has('manage.py'))
       add({ framework: 'Django', command: 'python manage.py migrate --noinput', check: 'python manage.py showmigrations --plan', why: 'Django manage.py found', repoDir: rel });
@@ -218,4 +227,4 @@ function detectMigrations(codeDir, services) {
   });
 }
 
-module.exports = { COMMAND_RE, DIR_RE, cleanRel, targetFor, detectMigrations };
+module.exports = { COMMAND_RE, DIR_RE, cleanRel, targetFor, localOnlyCommand, detectMigrations };

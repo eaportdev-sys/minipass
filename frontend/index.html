@@ -185,7 +185,7 @@
                 <label>Service<select id="migrateSvc"></select></label>
                 <label>Folder<input id="migrateDir" placeholder="empty = selected service root" autocomplete="off"></label>
               </div>
-              <div class="migration-command-row"><input id="migrateCheck" placeholder="verify command, e.g. npx knex migrate:list"><button onclick="verifyMigrate()">verify</button></div>
+              <div class="migration-command-row"><input id="migrateCheck" placeholder="verify command, e.g. npx --no-install knex migrate:list"><button onclick="verifyMigrate()">verify</button></div>
               <div class="migration-actions"><button onclick="runMigrateNow()">run migration now</button><span class="meta">run / verify execute in a one-off container only — no deploy, no swap</span></div>
               <div id="migrateSuggest"></div>
               <pre id="migrateOut" class="compact-output"></pre>
