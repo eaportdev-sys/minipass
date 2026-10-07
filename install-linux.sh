@@ -50,10 +50,15 @@ else
 fi
 
 # 3b. database admin UI images (keep in sync with backend/lib/db-tools.js TOOLS).
-# Pre-downloaded so the first UI launch is instant; best-effort, never fatal.
+# Install once into the host Docker cache. Reruns never contact the registry for
+# images already present; upgrades are an explicit action in the panel.
 for img in 'dpage/pgadmin4:9.18.0' 'phpmyadmin:5.2.3-apache' 'mongo-express:1.0.2-20-alpine3.19' 'rediscommander/redis-commander:latest'; do
-  msg "pre-downloading $img"
-  docker pull "$img" || true
+  if docker image inspect "$img" >/dev/null 2>&1; then
+    msg "database admin image already installed: $img"
+  else
+    msg "installing database admin image: $img"
+    docker pull "$img" || true
+  fi
 done
 
 # 4. optional host Node (only for running backend without docker). Pass --with-node.

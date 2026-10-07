@@ -1874,7 +1874,7 @@ app.post('/api/apps/:id/databases/:type/tool', async (req, res) => {
     } };
     save(freshDb);
     res.json({ ok: true, ...out, expiresAt: freshMeta.dbTools[type].expiresAt });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.code === 'DB_TOOL_IMAGE_MISSING' ? 409 : 500).json({ error: e.message }); }
   finally {
     dbToolLocks.delete(lock);
     if (reservedPort) dbToolPorts.delete(reservedPort);
@@ -2808,16 +2808,3 @@ wss.on('connection', (ws, req) => {
 });
 
 server.listen(PORT, () => console.log(`minipaas on :${PORT}, apps in ${APPS_DIR}`));
-// Warm the database admin images in the background (missing ones only, so
-// restarts stay fast). First UI launches then skip the large download.
-setImmediate(() => {
-  (async () => {
-    try {
-      const missing = dbTools.IMAGES.filter(image => !dbTools.imagePresent(image));
-      if (!missing.length) return;
-      console.log('db-tools: pre-downloading', missing.join(', '));
-      const results = await dbTools.pullImages(missing);
-      for (const r of results) console.log(`db-tools: ${r.ok ? 'ready' : 'FAILED'} ${r.image}${r.error ? ` - ${r.error}` : ''}`);
-    } catch (e) { console.error('db-tools pre-download:', e.message); }
-  })();
-});

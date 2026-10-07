@@ -741,7 +741,7 @@ async function launchDbTool(type) {
   if (!currentApp) return;
   const appId = currentApp;
   const popup = window.open('', `dbui-${appId}-${type}`);
-  if (popup) popup.document.body.innerHTML = '<p style="font-family:system-ui">Starting database UI… the first image download can take a minute.</p>';
+  if (popup) popup.document.body.innerHTML = '<p style="font-family:system-ui">Starting the database UI from this server…</p>';
   toast('starting database UI…');
   try {
     const r = await (await fetch(`/api/apps/${appId}/databases/${type}/tool`, { method: 'POST' })).json();
@@ -763,14 +763,14 @@ async function launchDbTool(type) {
 }
 async function pullDbToolImages() {
   const out = document.getElementById('dbToolImgOut');
-  if (out) out.textContent = 'downloading admin images… (large on first run)';
-  toast('downloading database admin images…');
+  if (out) out.textContent = 'installing / upgrading admin images…';
+  toast('installing / upgrading database admin images…');
   try {
     const r = await (await fetch('/api/panel/db-tools/pull', { method: 'POST' })).json();
     if (r.results) {
       const failed = r.results.filter(x => !x.ok);
-      if (out) out.textContent = failed.length ? `done with ${failed.length} failure(s): ${failed.map(x => x.image).join(', ')}` : 'admin images ready';
-      toast(failed.length ? `image download finished with ${failed.length} failure(s)` : 'database admin images ready', !failed.length);
+      if (out) out.textContent = failed.length ? `done with ${failed.length} failure(s): ${failed.map(x => x.image).join(', ')}` : 'admin images installed on this server';
+      toast(failed.length ? `image install finished with ${failed.length} failure(s)` : 'database admin images installed', !failed.length);
     } else {
       if (out) out.textContent = r.error || 'failed';
       toast(r.error || 'image download failed', false);

@@ -188,6 +188,11 @@ function ensurePgAdminFiles(dir, config) {
 async function launch(id, meta, dir, type, hostPort) {
   const tool = TOOLS[type];
   if (!tool) throw new Error('unsupported database tool');
+  if (!imagePresent(tool.image)) {
+    const error = new Error(`${tool.label} is not installed on this Minipass server - use "install / upgrade admin images" in Setup, then retry`);
+    error.code = 'DB_TOOL_IMAGE_MISSING';
+    throw error;
+  }
   const config = databaseConfig(meta, dir, type);
   if (!config.host || !config.port || (type !== 'redis' && (!config.user || !config.db)) || !config.pass) {
     throw new Error(`${type} connection details are incomplete in the managed environment`);
@@ -195,7 +200,9 @@ async function launch(id, meta, dir, type, hostPort) {
   const name = safeName(id, type);
   const secrets = [config.pass];
   try { docker(['rm', '-f', name], { stdio: 'ignore' }); } catch {}
-  const args = ['run', '-d', '--name', name, '--restart', 'unless-stopped', '--network', `${id}_default`, '-p', `${hostPort}:${tool.port}`];
+  // Local-only by contract: opening a database UI must never download an
+  // image. Installation/upgrade is an explicit, separate panel operation.
+  const args = ['run', '--pull=never', '-d', '--name', name, '--restart', 'unless-stopped', '--network', `${id}_default`, '-p', `${hostPort}:${tool.port}`];
   if (type === 'postgres') {
     const f = ensurePgAdminFiles(dir, config);
     secrets.push(f.secret);
@@ -232,9 +239,8 @@ function stopAll(id) {
   for (const type of Object.keys(TOOLS)) stop(id, type);
 }
 
-// Admin UI images live on the server so the first launch does not wait on a
-// large download. Pulls are best-effort and sequential; launch() works
-// without them (docker fetches a missing image on demand).
+// Admin UI images live in the host Docker cache. The installer puts them
+// there once; pullImages() is used only by the explicit install/upgrade action.
 const IMAGES = [...new Set(Object.values(TOOLS).map(t => t.image))];
 
 function imagePresent(image) {
