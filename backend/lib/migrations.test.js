@@ -25,7 +25,7 @@ try {
     scripts: { migrate: 'knex migrate:latest', 'db:init': 'node baseline.js', 'db:seed': 'node seed.js' },
     dependencies: { knex: '^3.0.0' }
   }));
-  put('server/knexfile.js', 'module.exports = {};');
+  put('server/knexfile.js', 'module.exports = {\n  development: { client: "mysql" }\n};');
   put('server/jobs/manage.py', '');
   put('server/python/alembic.ini', '');
   put('server/sequelize/package.json', JSON.stringify({ dependencies: { 'sequelize-cli': '^6.0.0' } }));
@@ -54,12 +54,13 @@ try {
   assert(migrateScript, 'server migration script detected');
   assert.equal(migrateScript.dir, '', 'service root must not become server/server');
   assert.equal(migrateScript.framework, 'Knex');
-  assert.equal(migrateScript.check, './node_modules/.bin/knex migrate:list');
+  assert.equal(migrateScript.check, './node_modules/.bin/knex migrate:list --env development');
   assert.equal(localOnlyCommand('npx knex migrate:latest'), './node_modules/.bin/knex migrate:latest');
   assert.equal(localOnlyCommand('npx --no-install knex migrate:latest'), './node_modules/.bin/knex migrate:latest');
   assert.equal(localOnlyCommand('./node_modules/.bin/knex migrate:latest'), './node_modules/.bin/knex migrate:latest');
   assert.equal(localOnlyCommand('npm run migrate'), 'npm run migrate');
   assert(COMMAND_RE.test('./node_modules/.bin/knex migrate:latest'));
+  assert(COMMAND_RE.test('./node_modules/.bin/knex migrate:latest --env development'));
 
   const initial = detected.find(x => x.command === 'npm run db:init');
   assert(initial, 'initialization script detected');
@@ -82,8 +83,9 @@ try {
 
   const rootServices = [{ name: 'app', subdir: '', enabled: true }];
   const fromRoot = detectMigrations(tmp, rootServices);
-  const nested = fromRoot.find(x => x.framework === 'Knex' && x.repoDir === 'server');
+  const nested = fromRoot.find(x => x.framework === 'Knex' && x.repoDir === 'server' && x.command.startsWith('./node_modules/.bin/knex'));
   assert.deepEqual({ service: nested.service, dir: nested.dir }, { service: 'app', dir: 'server' });
+  assert.equal(nested.command, './node_modules/.bin/knex migrate:latest --env development');
 
   console.log('migration detection: OK');
 } finally {

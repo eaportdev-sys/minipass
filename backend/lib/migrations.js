@@ -87,9 +87,18 @@ function frameworkFrom(text) {
   return 'Project script';
 }
 
-function verifyFor(framework) {
+function knexEnvironmentFlag(dir, files) {
+  const name = ['knexfile.js', 'knexfile.ts', 'knexfile.cjs', 'knexfile.mjs'].find(file => files && files.has(file));
+  if (!name) return '';
+  const text = readText(path.join(dir, name));
+  const environments = new Set([...text.matchAll(/^\s*["']?(development|production|staging|test)["']?\s*:/gmi)].map(match => match[1].toLowerCase()));
+  return environments.has('development') && !environments.has('production') ? ' --env development' : '';
+}
+
+function verifyFor(framework, dir, files) {
+  const knexEnv = framework === 'Knex' ? knexEnvironmentFlag(dir, files) : '';
   return ({
-    Knex: './node_modules/.bin/knex migrate:list',
+    Knex: './node_modules/.bin/knex migrate:list' + knexEnv,
     Prisma: './node_modules/.bin/prisma migrate status',
     Sequelize: './node_modules/.bin/sequelize-cli db:migrate:status',
     MikroORM: './node_modules/.bin/mikro-orm migration:list'
@@ -147,7 +156,7 @@ function detectMigrations(codeDir, services) {
           framework,
           phase,
           command: npmRunner(pkg, files, name),
-          check: verifyFor(framework),
+          check: verifyFor(framework, dir, files),
           why: `${name} script in ${rel || 'repository root'}/package.json`,
           repoDir: rel,
           explicit: true
@@ -160,8 +169,10 @@ function detectMigrations(codeDir, services) {
       add({ framework: 'Project migration runner', command: `${runner} all`, why: 'Project migration runner found', repoDir: rel, explicit: true });
     }
 
-    if (anyFile(files, 'knexfile.js', 'knexfile.ts', 'knexfile.cjs', 'knexfile.mjs'))
-      add({ framework: 'Knex', command: './node_modules/.bin/knex migrate:latest', check: './node_modules/.bin/knex migrate:list', why: 'Knex configuration found; uses the repository-installed Knex version', repoDir: rel });
+    if (anyFile(files, 'knexfile.js', 'knexfile.ts', 'knexfile.cjs', 'knexfile.mjs')) {
+      const envFlag = knexEnvironmentFlag(dir, files);
+      add({ framework: 'Knex', command: './node_modules/.bin/knex migrate:latest' + envFlag, check: './node_modules/.bin/knex migrate:list' + envFlag, why: `Knex configuration found; uses the repository-installed Knex version${envFlag ? ' and its only declared runtime environment' : ''}`, repoDir: rel });
+    }
 
     if (exists(dir, 'prisma/schema.prisma') || files.has('schema.prisma'))
       add({ framework: 'Prisma', command: './node_modules/.bin/prisma migrate deploy', check: './node_modules/.bin/prisma migrate status', why: 'Prisma schema found; uses the repository-installed Prisma version', repoDir: rel });
