@@ -38,8 +38,18 @@
       </div>
     </section>
     <section id="view-websites" class="view active">
-      <div class="pagehead"><div><h1>Websites</h1><div class="meta">Development build — only Static, React, Node.js and PHP sites are supported for now.</div></div><button class="btn primary" onclick="openCreate()">+ Create</button></div>
-      <div id="apps"></div>
+      <div class="pagehead"><div class="websites-title"><h1>Websites</h1><span id="websiteCount" class="badge">0 sites</span></div><button class="btn primary" onclick="openCreate()">+ Create</button></div>
+      <div class="websites-toolbar">
+        <input id="websiteSearch" type="search" aria-label="Search websites" placeholder="Search sites, domains or repos" oninput="filterWebsites()">
+        <select id="websiteType" aria-label="Filter runtime" onchange="filterWebsites()"><option value="">All runtimes</option><option value="static">Static</option><option value="react">React</option><option value="node">Node.js</option><option value="php">PHP</option></select>
+        <select id="websiteSort" aria-label="Sort websites" onchange="filterWebsites()"><option value="name">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="type">Runtime</option></select>
+        <button onclick="refresh()">Refresh</button>
+      </div>
+      <div id="apps" class="websites-list"></div>
+      <div id="websitePagination" class="websites-pagination">
+        <span id="websiteRange" class="meta" role="status"></span>
+        <div class="websites-page-controls"><select id="websitePageSize" aria-label="Sites per page" onchange="filterWebsites()"><option value="10">10 per page</option><option value="25">25 per page</option><option value="50">50 per page</option></select><button id="websitePrev" onclick="changeWebsitePage(-1)" aria-label="Previous page">←</button><span id="websitePage" class="meta"></span><button id="websiteNext" onclick="changeWebsitePage(1)" aria-label="Next page">→</button></div>
+      </div>
     </section>
     <section id="view-site" class="view">
       <div class="pagehead"><h1 id="siteName">site</h1><button onclick="backToSites()">&larr; all sites</button></div>

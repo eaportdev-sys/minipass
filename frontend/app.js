@@ -12,11 +12,22 @@ window.fetch = (...a) => _fetch(...a).then(r => {
   return r;
 });
 const dbPopupSlots = new Map();
+let websiteApps = [];
+let websiteVisibleApps = [];
+let websitePage = 1;
+let websiteRenderSeq = 0;
+const websiteStates = new Map();
+const websiteStateSeq = new Map();
+let websiteStatusActive = 0;
+const websiteStatusWaiters = [];
 async function refresh() {
   const seq = ++appsRefreshSeq;
   const apps = await (await fetch('/api/apps')).json();
-  document.getElementById('apps').innerHTML = appsGroupedMarkup(apps);
-  hydrateAppCards(apps, seq);
+  if (seq !== appsRefreshSeq || !Array.isArray(apps)) return apps;
+  websiteApps = apps;
+  const ids = new Set(apps.map(a => a.id));
+  for (const id of websiteStates.keys()) if (!ids.has(id)) { websiteStates.delete(id); websiteStateSeq.delete(id); }
+  renderWebsites();
   // keep detail header + global terminal picker in sync
   if (currentApp && !apps.some(a => a.id === currentApp)) backToSites();
   else if (currentApp) fillSiteHeader(apps.find(a => a.id === currentApp));
@@ -30,36 +41,54 @@ async function refresh() {
 }
 function appCardMarkup(a) {
   const services = appPublishedServices(a);
-  return `<div class="card appcard" id="card-${a.id}"><div class="appcard-layout"><div class="appcard-main">` +
-    `<div class="appcard-title"><div><h3>${safeHtml(a.id)}</h3><div class="badges"><span class="badge type">${safeHtml(a.type)}</span><span class="badge">db: ${safeHtml(dbLabel(a))}</span>` +
-    (services.length > 1 ? `<span class="badge">${services.length} services</span>` : '') + (a.domain ? `<span class="badge">${safeHtml(a.domain)}</span>` : '') +
-    dirtyBadge(a) + `</div></div></div>` +
-    `<div class="app-links">${appLinksMarkup(a, services)}</div>` +
-    `<div class="appcard-actions"><button class="btn primary" onclick="openSite('${a.id}')">open details</button><span id="appLifecycle-${a.id}"><button disabled>checking…</button></span><button class="btn danger" onclick="rmApp('${a.id}')">delete</button></div></div>` +
-    `<button id="appPower-${a.id}" class="power-control app-card-power is-checking" onclick="deploy('${a.id}')" title="Checking deployment state"><span class="power-symbol">⏻</span><span class="power-label">Checking</span></button>` +
-    `</div></div>`;
+  const facts = [a.domain, dbLabel(a) !== 'none' ? 'DB: ' + dbLabel(a) : '', services.length > 1 ? services.length + ' services' : ''].filter(Boolean).join(' · ');
+  return `<div class="website-row" id="card-${a.id}" role="row">` +
+    `<div class="website-name" role="cell"><button class="website-name-link" onclick="openSite('${a.id}')">${safeHtml(a.id)}</button>${a.dirty ? '<span class="website-pending" title="Saved changes — redeploy to apply" aria-label="Changes pending">●</span>' : ''}<div class="website-facts" title="${safeHtml(facts)}">${safeHtml(facts || 'No managed database')}</div></div>` +
+    `<div class="website-runtime" role="cell"><span class="badge type">${safeHtml(a.type === 'node' ? 'Node.js' : a.type === 'php' ? 'PHP' : a.type === 'react' ? 'React' : a.type === 'static' ? 'Static' : a.type)}</span></div>` +
+    `<div role="cell"><span id="appState-${a.id}" class="website-state is-checking">Checking</span></div>` +
+    `<div class="website-urls" role="cell">${appLinksMarkup(a, services)}</div>` +
+    `<div class="website-actions" role="cell"><button id="appPower-${a.id}" class="power-control website-power is-checking" onclick="deploy('${a.id}')" title="Checking deployment state" aria-label="Checking ${safeHtml(a.id)}" disabled><span class="power-symbol">⏻</span></button><span id="appLifecycle-${a.id}"><button disabled>…</button></span><details class="website-menu"><summary aria-label="More actions for ${safeHtml(a.id)}">⋯</summary><div><button onclick="openSite('${a.id}')">Manage site</button><button class="btn danger" onclick="rmApp('${a.id}')">Move to Trash</button></div></details></div></div>`;
 }
-function appsGroupedMarkup(apps) {
-  if (!apps.length) return '<div class="card">No websites yet - hit + Create.</div>';
-  const order = ['static', 'react', 'node', 'php'];
-  const labels = { static: 'Static sites', react: 'React apps', node: 'Node.js APIs', php: 'PHP sites' };
-  const groups = new Map();
-  for (const a of apps) {
-    const t = order.includes(a.type) ? a.type : 'other';
-    if (!groups.has(t)) groups.set(t, []);
-    groups.get(t).push(a);
-  }
-  const keys = [...groups.keys()].sort((x, y) => {
-    const ix = order.includes(x) ? order.indexOf(x) : 99;
-    const iy = order.includes(y) ? order.indexOf(y) : 99;
-    return ix - iy || x.localeCompare(y);
+function websitePageData(apps, { search = '', type = '', sort = 'name', page = 1, size = 10 } = {}) {
+  const words = search.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  const filtered = apps.filter(a => {
+    const text = [a.id, a.domain, a.repoUrl, a.github && a.github.repo, a.type, dbLabel(a), ...appPublishedServices(a).map(s => s.name)].filter(Boolean).join(' ').toLowerCase();
+    return (!type || a.type === type) && words.every(word => text.includes(word));
+  }).sort((a, b) => (sort === 'type' ? String(a.type).localeCompare(String(b.type)) : 0) || a.id.localeCompare(b.id) * (sort === 'name-desc' ? -1 : 1));
+  size = [10, 25, 50].includes(Number(size)) ? Number(size) : 10;
+  const pages = Math.max(1, Math.ceil(filtered.length / size));
+  page = Math.max(1, Math.min(pages, Number(page) || 1));
+  const start = (page - 1) * size;
+  return { apps: filtered.slice(start, start + size), total: filtered.length, page, pages, start };
+}
+function filterWebsites() { websitePage = 1; renderWebsites(); }
+function changeWebsitePage(delta) { websitePage += delta; renderWebsites(); }
+function renderWebsites() {
+  const seq = ++websiteRenderSeq;
+  const data = websitePageData(websiteApps, {
+    search: document.getElementById('websiteSearch').value,
+    type: document.getElementById('websiteType').value,
+    sort: document.getElementById('websiteSort').value,
+    size: document.getElementById('websitePageSize').value,
+    page: websitePage
   });
-  return keys.map(k => {
-    const list = groups.get(k).slice().sort((a, b) => a.id.localeCompare(b.id));
-    const title = labels[k] || 'Other sites';
-    return `<section class="app-group"><div class="app-group-head"><b>${safeHtml(title)}</b><span class="badge">${list.length}</span></div>` +
-      `<div class="app-group-grid">${list.map(appCardMarkup).join('')}</div></section>`;
-  }).join('');
+  websitePage = data.page;
+  websiteVisibleApps = data.apps;
+  document.getElementById('websiteCount').textContent = `${websiteApps.length} site${websiteApps.length === 1 ? '' : 's'}`;
+  document.getElementById('apps').innerHTML = !websiteApps.length
+    ? '<div class="websites-empty"><b>No websites yet</b><span>Create your first site to get started.</span><button class="btn primary" onclick="openCreate()">+ Create website</button></div>'
+    : !data.total ? '<div class="websites-empty"><b>No matching sites</b><span>Try another search or runtime.</span></div>'
+      : '<div role="table" aria-label="Websites"><div class="website-columns" role="row"><span role="columnheader">Website</span><span role="columnheader">Runtime</span><span role="columnheader">Status</span><span role="columnheader">Published URLs</span><span role="columnheader">Actions</span></div>' + data.apps.map(appCardMarkup).join('') + '</div>';
+  document.getElementById('websitePagination').style.display = websiteApps.length ? 'flex' : 'none';
+  document.getElementById('websiteRange').textContent = data.total ? `${data.start + 1}–${data.start + data.apps.length} of ${data.total}${data.total !== websiteApps.length ? ' matches' : ' sites'}` : '0 matches';
+  document.getElementById('websitePage').textContent = `${data.page} / ${data.pages}`;
+  document.getElementById('websitePrev').disabled = data.page <= 1;
+  document.getElementById('websiteNext').disabled = data.page >= data.pages;
+  for (const a of data.apps) {
+    const cached = websiteStates.get(a.id);
+    if (cached) setAppCardState(a.id, cached.state, cached.running);
+  }
+  if (document.getElementById('view-websites').classList.contains('active') && !document.hidden) hydrateAppCards(data.apps, appsRefreshSeq, seq);
 }
 function appPublishedServices(a) {
   const list = Array.isArray(a.services) && a.services.length
@@ -68,14 +97,16 @@ function appPublishedServices(a) {
   return list.filter(s => s.enabled !== false && s.hostPort);
 }
 function appLinksMarkup(a, services) {
-  if (!services.length) return '<div class="app-links-empty">No published local service.</div>';
+  if (!services.length) return '<span class="website-facts">Not published</span>';
   return services.map(s => {
     const path = s.homePath != null ? s.homePath : (s.name === 'app' ? (a.homePath || '') : '');
     const url = `http://${location.hostname}:${s.hostPort}${path}`;
-    return `<div class="app-link-row"><span>${safeHtml(s.name || 'app')}</span><a href="${safeHtml(url)}" target="_blank" rel="noopener noreferrer">${safeHtml(url.replace(/^http:\/\//, ''))}</a></div>`;
+    return `<a class="website-url" href="${safeHtml(url)}" title="${safeHtml((s.name || 'app') + ': ' + url)}" target="_blank" rel="noopener noreferrer">${services.length > 1 ? '<span>' + safeHtml(s.name) + '</span>' : ''}<span>${safeHtml(url.replace(/^http:\/\//, ''))}</span><span aria-hidden="true">↗</span></a>`;
   }).join('');
 }
 function setAppCardState(id, state, running) {
+  websiteStates.set(id, { state, running });
+  websiteStateSeq.set(id, (websiteStateSeq.get(id) || 0) + 1);
   const power = document.getElementById('appPower-' + id);
   const lifecycle = document.getElementById('appLifecycle-' + id);
   if (!power || !lifecycle) return;
@@ -83,19 +114,41 @@ function setAppCardState(id, state, running) {
   setPowerState('appPower-' + id, state, label);
   power.disabled = state === 'deploying' || state === 'checking';
   power.title = state === 'deploying' ? 'Deployment in progress' : running ? 'Rebuild and redeploy this site' : 'Build and deploy this site';
+  power.setAttribute('aria-label', label + ' ' + id);
+  const status = document.getElementById('appState-' + id);
+  if (status) { status.className = 'website-state is-' + state; status.textContent = state === 'deploying' ? 'Deploying' : state === 'checking' ? 'Checking' : state === 'failed' ? 'Unavailable' : running ? 'Running' : 'Off'; }
   lifecycle.innerHTML = state === 'deploying' || state === 'checking'
-    ? '<button disabled>busy…</button>'
-    : running ? `<button onclick="stopApp('${id}')">stop</button>` : `<button onclick="startApp('${id}')">start</button>`;
+    ? '<button disabled>…</button>'
+    : running ? `<button onclick="stopApp('${id}')" aria-label="Stop ${safeHtml(id)}">Stop</button>` : `<button onclick="startApp('${id}')" aria-label="Start ${safeHtml(id)}">Start</button>`;
 }
-async function hydrateAppCards(apps, seq) {
-  await Promise.all(apps.map(async a => {
-    try {
-      const st = await (await fetch(`/api/apps/${a.id}/status`)).json();
-      if (seq !== appsRefreshSeq) return;
-      const running = appIsRunning(st);
-      setAppCardState(a.id, st.deploying ? 'deploying' : (running ? 'deployed' : 'off'), running);
-    } catch {
-      if (seq === appsRefreshSeq) setAppCardState(a.id, 'failed', false);
+async function websiteStatusRequest(id, current) {
+  if (websiteStatusActive < 4) websiteStatusActive++;
+  else await new Promise(resolve => websiteStatusWaiters.push(resolve));
+  try {
+    if (!current()) return null;
+    return await (await fetch(`/api/apps/${encodeURIComponent(id)}/status`)).json();
+  } finally {
+    const next = websiteStatusWaiters.shift();
+    if (next) next(); else websiteStatusActive--;
+  }
+}
+async function hydrateAppCards(apps, seq, renderSeq = websiteRenderSeq) {
+  let index = 0;
+  const current = () => seq === appsRefreshSeq && renderSeq === websiteRenderSeq && document.getElementById('view-websites').classList.contains('active');
+  // Only the visible page is probed; cap simultaneous Docker status lookups.
+  await Promise.all(Array.from({ length: Math.min(4, apps.length) }, async () => {
+    while (index < apps.length && current()) {
+      const a = apps[index++];
+      const version = websiteStateSeq.get(a.id) || 0;
+      try {
+        const st = await websiteStatusRequest(a.id, current);
+        if (!current() || version !== (websiteStateSeq.get(a.id) || 0)) continue;
+        if (!st || st.error) throw new Error('status unavailable');
+        const running = appIsRunning(st);
+        setAppCardState(a.id, st.deploying ? 'deploying' : (running ? 'deployed' : 'off'), running);
+      } catch {
+        if (current() && version === (websiteStateSeq.get(a.id) || 0)) setAppCardState(a.id, 'failed', false);
+      }
     }
   }));
 }
@@ -2034,14 +2087,7 @@ async function pollSiteList() {
   if (!ids.length) return;
   siteListPoll = true;
   try {
-    await Promise.all(ids.map(async id => {
-      try {
-        const st = await (await fetch(`/api/apps/${encodeURIComponent(id)}/status`)).json();
-        if (!st || st.error) return;
-        const running = appIsRunning(st);
-        setAppCardState(id, st.deploying ? 'deploying' : (running ? 'deployed' : 'off'), running);
-      } catch {}
-    }));
+    await hydrateAppCards(websiteVisibleApps.filter(a => ids.includes(a.id)), appsRefreshSeq);
   } finally { siteListPoll = false; }
 }
 setInterval(() => { if (!currentApp) pollSiteList(); }, 10000);
