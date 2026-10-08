@@ -191,9 +191,14 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
     // if/else skipped the clone and then copied the template starter over the
     // repository's package.json.
     const haveCheckout = resume && fs.existsSync(path.join(dir, 'code', '.git'));
+    const branch = String(gitBranch || '').trim();
+    if (branch && !/^[A-Za-z0-9._\/-]+$/.test(branch)) throw new Error(`bad branch name '${branch}'`);
+    if (haveCheckout && branch) {
+      let checkedOut = '';
+      try { checkedOut = execSync('git branch --show-current', { cwd: path.join(dir, 'code'), stdio: 'pipe' }).toString().trim(); } catch {}
+      if (checkedOut !== branch) throw new Error('pending checkout uses a different branch - cancel creation and reopen before changing branches');
+    }
     if (!haveCheckout) {
-      const branch = String(gitBranch || '').trim();
-      if (branch && !/^[A-Za-z0-9._\/-]+$/.test(branch)) throw new Error(`bad branch name '${branch}'`);
       const isSsh = /^(git@|ssh:\/\/)/i.test(repoUrl);
       // token injected in-memory only (stored repo URLs stay clean)
       const { authUrl, authUrlWith } = require('./github');

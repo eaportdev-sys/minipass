@@ -1088,25 +1088,45 @@ async function detectType() {
   // create flow prefers its own fresh token but never requires one: public
   // repos detect fine without it (shared unauthenticated quota, no account used)
   const token = document.getElementById('ghModalToken').value.trim();
+  const branchInput = document.getElementById('branch');
   if (!repo) {
     const m = document.getElementById('repo').value.trim().match(/github\.com[:/]([^/]+)\/([^/]+?)(\.git)?\/?$/i);
     if (!m) {
       state.textContent = 'Auto-detect from GitHub, or select manually.';
+      if (createDetectRepo) branchInput.value = '';
+      branchInput.title = '';
+      document.getElementById('createBranches').innerHTML = '';
+      document.getElementById('branchDefault').textContent = '';
+      createDetectRepo = '';
       return;
     }
     repo = m[1] + '/' + m[2];
   }
+  if (createDetectRepo && createDetectRepo !== repo) branchInput.value = '';
+  if (createDetectRepo !== repo) {
+    document.getElementById('createBranches').innerHTML = '';
+    document.getElementById('branchDefault').textContent = '';
+  }
+  createDetectRepo = repo;
+  const branch = branchInput.value.trim();
   state.textContent = 'Detecting runtime and databases…';
   try {
-    const r = await (await fetch('/api/github/detect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(token ? { repo, token } : { repo }) })).json();
+    const r = await (await fetch('/api/github/detect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo, branch, ...(token ? { token } : {}) }) })).json();
     if (session !== createModalSession || request !== createDetectRequest) return;
+    if (branchInput.value.trim() !== branch) return;
+    if (r.branch) {
+      branchInput.value = r.branch;
+      document.getElementById('branchDefault').textContent = r.branch === r.defaultBranch ? '(default)' : '';
+      branchInput.title = `Default: ${r.defaultBranch || 'unknown'}. Choose a suggested branch or type a name.`;
+      document.getElementById('createBranches').innerHTML = (r.branches || []).map(b => `<option value="${safeHtml(b)}">${b === r.defaultBranch ? 'default' : ''}</option>`).join('');
+    }
     if (r.type) {
       const radio = document.querySelector(`input[name=apptype][value=${r.type}]`);
       if (radio) radio.checked = true;
       const dbs = r.dbs || [];
       document.querySelectorAll('input[name=appdb]').forEach(c => { c.checked = dbs.includes(c.value); });
       const types = { static: 'Static', react: 'React', node: 'Node.js', php: 'PHP' };
-      state.textContent = `Detected ${types[r.type] || r.type}${dbs.length ? ' + ' + dbs.join(', ') : ''}. Check the selections below.`;
+      state.textContent = `Detected ${types[r.type] || r.type}${dbs.length ? ' + ' + dbs.join(', ') : ''}${r.branch ? ' on ' + r.branch : ''}. Check the selections below.`;
       state.title = r.reason || '';
       if (r.dbNote) { dbNote.style.display = 'block'; dbNote.textContent = r.dbNote; }
     } else {
@@ -1187,6 +1207,7 @@ let modalLogin = null;
 let createModalSession = 0;
 let createConnectRequest = 0;
 let createDetectRequest = 0;
+let createDetectRepo = '';
 let createStandardDockerfile = false;
 let createCleanupPromise = Promise.resolve();
 async function modalListRepos() {
@@ -1264,6 +1285,10 @@ function resetCreateForm() {
   document.querySelectorAll('input[name=appdb]').forEach(c => { c.checked = false; });
   document.getElementById('ghModalToken').value = '';
   document.getElementById('branch').value = '';
+  document.getElementById('branch').title = '';
+  document.getElementById('branchDefault').textContent = '';
+  document.getElementById('createBranches').innerHTML = '';
+  createDetectRepo = '';
   document.getElementById('subdir').value = '';
   document.getElementById('subdirHint').style.display = 'none';
   document.getElementById('subdirHint').innerHTML = '';

@@ -16,6 +16,7 @@ const routes = require('./lib/routes');
 const envDefaults = require('./lib/env-defaults');
 const tokens = require('./lib/tokens');
 const portsLib = require('./lib/ports');
+const { refreshStandardDockerfile } = require('./lib/dockerfiles');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -657,6 +658,9 @@ function createLocalPushStage(dir, meta, pushedSha, pushedBranch) {
       const ctxDir = path.join(stageCode, s.subdir || '');
       if (!fs.existsSync(ctxDir)) throw new Error(`service '${s.name}' build folder '${s.subdir || '.'}' is absent from pushed commit`);
       ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+      // Upgrade only exact historical Node/React templates, including monorepo
+      // services and detached local-push checkouts. Never rewrite custom files.
+      refreshStandardDockerfile(ctxDir, s.type, TEMPLATES_DIR);
       if (s.type === 'static' || s.type === 'react') {
         const nc = path.join(ctxDir, 'nginx.conf');
         if (!fs.existsSync(nc)) fs.writeFileSync(nc, nginxConf(null));
@@ -937,6 +941,8 @@ async function deployNow(id, opts = {}) {
         }
       }
       ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+      // Native build prerequisites also apply to ordinary repo/local rebuilds.
+      refreshStandardDockerfile(ctxDir, s.type, TEMPLATES_DIR);
       // Refresh panel-owned PHP images so existing sites gain standard Apache
       // rewrite support. The pre-marker legacy file is recognized only by an
       // exact byte-normalized match; repository/custom Dockerfiles stay sacred.
@@ -999,7 +1005,7 @@ async function deployNow(id, opts = {}) {
     for (const f of fronts) {
       const ctx = path.join(buildCodeDir, f.subdir || '');
       const df = path.join(ctx, 'Dockerfile');
-      if (fs.existsSync(df)) {
+      if (f.type === 'static' && fs.existsSync(df)) {
         const first = (fs.readFileSync(df, 'utf8').split('\n')[0] || '');
         if (first.includes('minipass template') || first.includes('build stage + serve')) {
           const tplDf = path.join(TEMPLATES_DIR, f.type, 'Dockerfile');
@@ -1317,7 +1323,7 @@ app.post('/api/github/token', async (req, res) => {
 // Stack detection. Token-first, pool-NEVER: the create flow always carries its
 // own fresh token, so a revoked pool credential can never poison detection.
 // Public repos need no token at all: unauthenticated reads involve no account.
-async function detectRepo(repo, { login, token } = {}) {
+async function detectRepo(repo, { login, token, branch } = {}) {
   const m = String(repo || '').match(/^([^/]+)\/([^/]+?)(\.git)?$/);
   if (!m) throw new Error('repo must be owner/name');
   const get = token
@@ -1325,25 +1331,29 @@ async function detectRepo(repo, { login, token } = {}) {
     : login
       ? (p) => gh.apiAs(login, p)
       : (p) => gh.apiPublic(p);
-  const t = await get(`/repos/${m[1]}/${m[2]}/git/trees/HEAD?recursive=1`)
+  const { repoSource } = require('./lib/repo-source');
+  const source = await repoSource(get, `${m[1]}/${m[2]}`, branch);
+  const ref = encodeURIComponent(source.branch);
+  const t = await get(`/repos/${m[1]}/${m[2]}/git/trees/${ref}?recursive=1`)
     .catch(e => { throw new Error('cannot read repo (private? paste a token): ' + e.message); });
   const tree = (t.tree || []).filter(e => e.type === 'blob').map(e => e.path);
   let pkg = null;
   const pkgPath = tree.filter(p => /(^|\/)package\.json$/.test(p)).sort((a, b) => a.length - b.length)[0];
   if (pkgPath) {
     try {
-      const blob = await get(`/repos/${m[1]}/${m[2]}/contents/${pkgPath}`);
+      const blob = await get(`/repos/${m[1]}/${m[2]}/contents/${pkgPath}?ref=${ref}`);
       if (blob && blob.content) pkg = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8'));
     } catch {}
   }
   const { decideType, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints } = require('./lib/detect');
   const out = decideType(tree, pkg);
+  Object.assign(out, source);
   // monorepo sub-apps, tool-agnostic: vite heuristic + workspace manifests
   // (npm workspaces, pnpm-workspace.yaml, lerna.json, turbo/nx conventions)
   out.frontends = [];
   const readText = async (p) => {
     try {
-      const b = await get(`/repos/${m[1]}/${m[2]}/contents/${p}`);
+      const b = await get(`/repos/${m[1]}/${m[2]}/contents/${p}?ref=${ref}`);
       return b && b.content ? Buffer.from(b.content, 'base64').toString('utf8') : null;
     } catch { return null; }
   };
@@ -1388,7 +1398,7 @@ async function detectRepo(repo, { login, token } = {}) {
     const pkgs = {};
     for (const d of pkgDirs) {
       try {
-        const blob = await get(`/repos/${m[1]}/${m[2]}/contents/${d}/package.json`);
+        const blob = await get(`/repos/${m[1]}/${m[2]}/contents/${d}/package.json?ref=${ref}`);
         if (blob && blob.content) pkgs[d] = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8'));
       } catch { pkgs[d] = null; }
     }
@@ -1444,11 +1454,11 @@ async function detectRepo(repo, { login, token } = {}) {
   return out;
 }
 app.get('/api/github/detect', async (req, res) => {
-  try { res.json({ ...(await detectRepo(req.query.repo, { login: req.query.login })), via: 'account' }); }
+  try { res.json({ ...(await detectRepo(req.query.repo, { login: req.query.login, branch: req.query.branch })), via: 'account' }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/github/detect', async (req, res) => {
-  try { res.json({ ...(await detectRepo(req.body.repo, { login: req.body.login, token: req.body.token })), via: 'token' }); }
+  try { res.json({ ...(await detectRepo(req.body.repo, { login: req.body.login, token: req.body.token, branch: req.body.branch })), via: 'token' }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/github/repos', async (req, res) => {

@@ -1,4 +1,7 @@
+# minipass template
 FROM node:20-alpine
+# Native npm modules can fall back to compiling when no Alpine binary exists.
+RUN apk add --no-cache python3 build-base autoconf automake libtool nasm pkgconf
 WORKDIR /app
 COPY package*.json ./
 RUN npm install

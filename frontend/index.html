@@ -367,7 +367,7 @@
         </details>
         <div id="ghRepoRow" style="display:none"><label for="ghrepo">GitHub repository</label><select id="ghrepo" onchange="detectType()"><option value="">GitHub repo…</option></select></div>
         <div class="create-source-options">
-          <label for="branch">Branch<input id="branch" placeholder="default branch"></label>
+          <label for="branch">Branch <span id="branchDefault" class="meta"></span><input id="branch" list="createBranches" placeholder="default branch" onchange="detectType()"><datalist id="createBranches"></datalist></label>
           <label for="subdir">Build folder<input id="subdir" placeholder="repo root"></label>
         </div>
         <div class="meta" id="subdirHint" style="display:none"></div>

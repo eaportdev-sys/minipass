@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 // Freeze password generation so byte-sensitive legacy output can be compared
 // exactly while adding new database types.
@@ -73,6 +74,15 @@ try {
     assert(!fs.existsSync(path.join(pending, 'code', 'package.json')), 'retry never copies the starter over a repository checkout');
     assert.equal(fs.readFileSync(path.join(pending, 'code', 'server', 'package.json'), 'utf8'), '{"scripts":{"build":"tsc","start":"node dist/index.js"}}');
     assert(fs.readFileSync(path.join(pending, 'docker-compose.yml'), 'utf8').includes('code/server'));
+    const branchDir = path.join(appsDir, 'branch-test', 'code');
+    fs.mkdirSync(branchDir, { recursive: true });
+    execFileSync('git', ['init', '--initial-branch=feature/api'], { cwd: branchDir, stdio: 'ignore' });
+    fs.writeFileSync(path.join(branchDir, 'package.json'), '{"scripts":{"start":"node server.js"}}');
+    const branchInput = { ...input, name: 'branch-test', subdir: '', gitBranch: 'release', standardDockerfile: true };
+    assert.throws(() => createApp(branchInput), /pending checkout uses a different branch/);
+    assert(!fs.existsSync(path.join(branchDir, 'Dockerfile')), 'mismatched retry cannot seed or build another branch');
+    createApp({ ...branchInput, gitBranch: 'feature/api' });
+    assert(fs.existsSync(path.join(branchDir, 'Dockerfile')), 'same-branch retry remains supported');
   } finally { fs.rmSync(appsDir, { recursive: true, force: true }); }
   console.log('database generation and MariaDB support: OK');
 } finally {

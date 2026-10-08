@@ -1,9 +1,11 @@
 # minipass template
 # build stage + serve (vite emits dist/, CRA emits build/ - normalized to dist/)
 FROM node:20-alpine AS build
+# Build tools stay in this stage; the serving image remains nginx-only.
+RUN apk add --no-cache python3 build-base autoconf automake libtool nasm pkgconf
 WORKDIR /app
 COPY package*.json ./
-RUN npm i || true
+RUN npm install
 COPY . .
 RUN npm run build && (test -d dist || (test -d build && mv build dist) || (echo "BUILD PRODUCED NO dist/ or build/ - add a build script emitting one of them or pick another type" && exit 1))
 FROM nginx:alpine
