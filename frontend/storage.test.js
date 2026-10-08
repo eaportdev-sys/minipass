@@ -18,6 +18,13 @@ const html = run('storageMarkup(report)');
 assert(html.includes('low disk space') && html.includes('writable layer: 0 B'));
 assert(html.includes('Filesystem: unavailable'));
 assert(!html.includes('<script>') && !html.includes('<error>'));
+context.report.quota = { limitBytes: 5000000000, usedBytes: 1073741824, remainingBytes: 3926258176, enforced: true };
+const charged = run('storageMarkup(report)');
+assert(charged.includes('5 GB allowance · enforced') && charged.includes('1.0 GiB used'));
+context.report.quota.enforced = false;
+context.report.quota.error = '<quota failed>';
+assert(run('storageMarkup(report)').includes('not confirmed'));
+assert(!run('storageMarkup(report)').includes('<quota failed>'));
 async function main() {
   const finishes = [];
   context.fetch = url => new Promise(resolve => { finishes.push(report => resolve({ ok: true, json: async () => report })); });

@@ -389,7 +389,9 @@ function storageSize(value) {
 }
 function storageMarkup(report) {
   const disk = report.disk;
-  return (disk ? `<div class="storage-disk${disk.low ? ' is-low' : ''}"><b>${storageSize(disk.freeBytes)} free</b> of ${storageSize(disk.totalBytes)} · ${Number(disk.usedPercent)}% used${disk.low ? ' · low disk space' : ''}<div class="meta">Filesystem holding site files. Docker build storage may use a different filesystem.</div></div>` : '') +
+  const q = report.quota;
+  const allowance = q ? `<div class="storage-disk${q.enforced ? '' : ' is-low'}"><b>${Number(q.limitBytes / 1e9).toLocaleString()} GB allowance · ${q.enforced ? 'enforced' : 'not confirmed'}</b><div>${storageSize(q.usedBytes)} used · ${storageSize(q.remainingBytes)} remaining</div><div class="meta">Site files + managed database data.${q.error ? ' ' + safeHtml(q.error) : ''}</div></div>` : '<div class="meta">Legacy site: no enforced storage allowance. Existing files/databases have not been migrated.</div>';
+  return allowance + (disk ? `<div class="meta${disk.low ? ' is-low' : ''}">Host: ${storageSize(disk.freeBytes)} free of ${storageSize(disk.totalBytes)} · ${Number(disk.usedPercent)}% used${disk.low ? ' · low disk space' : ''}. Shared Docker storage may use another filesystem.</div>` : '') +
     (report.containers || []).map(c => `<div class="storage-row"><b>${safeHtml(c.service || c.name)} · ${safeHtml(c.state)}</b><span>Filesystem: ${storageSize(c.rootFsBytes)} · writable layer: ${storageSize(c.writableBytes)}</span></div>`).join('') +
     (report.dockerAvailable && !(report.containers || []).length ? '<div class="meta">No containers present. Site files or retained images may still use disk space.</div>' : '') +
     (report.warnings || []).map(w => `<div class="meta">${safeHtml(w)}</div>`).join('');
@@ -1071,12 +1073,14 @@ async function createApp() {
   await createCleanupPromise.catch(() => {});
   if (session !== createModalSession) return;
   const v = id => document.getElementById(id).value.trim();
+  const storageGB = v('createStorageGB');
+  if (!/^(?:[1-9]\d*|0)(?:\.\d{1,3})?$/.test(storageGB) || Number(storageGB) < 0.1 || Number(storageGB) > 1000000) { toast('Enter a storage allowance from 0.1 to 1,000,000 GB (up to 3 decimal places).', false); return; }
   const typeEl = document.querySelector('input[name=apptype]:checked');
   const dbs = [...document.querySelectorAll('input[name=appdb]:checked')].map(e => e.value);
   const accessEl = document.querySelector('input[name=access]:checked');
   const access = accessEl ? accessEl.value : 'local';
   const body = {
-    name: v('name'), type: typeEl ? typeEl.value : 'static', dbs,
+    name: v('name'), type: typeEl ? typeEl.value : 'static', dbs, storageGB,
     repoUrl: v('repo'), domain: access === 'domain' ? v('domain') : '',
     subdir: v('subdir'), standardDockerfile: createStandardDockerfile,
     modernizeBuild: document.getElementById('createModernBuild').checked
@@ -1127,6 +1131,7 @@ async function detectType() {
   document.getElementById('createBuildProfile').style.display = 'none';
   document.getElementById('createModernBuildRow').style.display = 'none';
   document.getElementById('createModernBuild').checked = false;
+  document.getElementById('createRepoSize').textContent = 'Repository size: choose a GitHub repository.';
   let repo = sel.value;
   // create flow prefers its own fresh token but never requires one: public
   // repos detect fine without it (shared unauthenticated quota, no account used)
@@ -1157,6 +1162,10 @@ async function detectType() {
     const r = await (await fetch('/api/github/detect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo, branch, ...(token ? { token } : {}) }) })).json();
     if (session !== createModalSession || request !== createDetectRequest) return;
     if (branchInput.value.trim() !== branch) return;
+    const size = r.repositorySize;
+    document.getElementById('createRepoSize').textContent = size && Number.isFinite(size.bytes)
+      ? `Repository source: ${size.complete ? 'approximately ' : 'at least '}${storageSize(size.bytes)} on this branch. Excludes Git history, LFS downloads, dependencies, build output and database growth.`
+      : 'Repository size unavailable. Leave room for dependencies, uploads and database growth.';
     if (r.branch) {
       branchInput.value = r.branch;
       document.getElementById('branchDefault').textContent = r.branch === r.defaultBranch ? '(default)' : '';
@@ -1261,6 +1270,7 @@ let createConnectRequest = 0;
 let createDetectRequest = 0;
 let createDetectRepo = '';
 let createStandardDockerfile = false;
+let createStorageAvailable = null;
 let createCleanupPromise = Promise.resolve();
 async function modalListRepos() {
   const session = createModalSession;
@@ -1320,12 +1330,41 @@ function openCreate() {
   document.getElementById('modal').classList.add('open');
   document.getElementById('modal').querySelector('.create-body').scrollTop = 0;
   document.getElementById('name').focus();
+  loadCreateStorage();
+}
+function setCreateStorage(value) {
+  document.getElementById('createStorageGB').value = String(value);
+  updateCreateStorageHint();
+}
+function updateCreateStorageHint() {
+  const value = Number(document.getElementById('createStorageGB').value);
+  const hint = document.getElementById('createStorageHint');
+  hint.textContent = createStorageAvailable !== null && value * 1e9 > createStorageAvailable
+    ? 'This allowance exceeds unallocated capacity. Choose a smaller size or expand the host disk.' : '';
+}
+async function loadCreateStorage() {
+  const session = createModalSession;
+  const state = document.getElementById('createStorageState');
+  try {
+    const r = await (await fetch('/api/panel/storage')).json();
+    if (session !== createModalSession) return;
+    createStorageAvailable = r.ready && Number.isFinite(r.availableBytes) ? r.availableBytes : null;
+    state.textContent = r.ready ? `${storageSize(r.availableBytes)} available for new allowances, after existing allocations, Trash and host headroom.` : (r.error || 'Host quota setup is not ready. Run the Linux installer.');
+    updateCreateStorageHint();
+  } catch {
+    if (session === createModalSession) state.textContent = 'Host quota setup unavailable. Run the Linux installer before creating a quota-managed site.';
+  }
 }
 function resetCreateForm() {
   createModalSession++;
   createConnectRequest++;
   createDetectRequest++;
   createStandardDockerfile = false;
+  createStorageAvailable = null;
+  document.getElementById('createStorageGB').value = '5';
+  document.getElementById('createStorageState').textContent = 'Checking host quota setup…';
+  document.getElementById('createStorageHint').textContent = '';
+  document.getElementById('createRepoSize').textContent = 'Repository size: choose a GitHub repository.';
   document.getElementById('name').value = '';
   document.getElementById('repo').value = '';
   document.getElementById('domain').value = '';
@@ -1377,7 +1416,9 @@ function closeCreate(created = false) {
   resetCreateForm();
   if (!created && rawName) {
     const id = rawName.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-    if (id) createCleanupPromise = fetch(`/api/apps/pending/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true }).catch(() => {});
+    if (id) createCleanupPromise = fetch(`/api/apps/pending/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true })
+      .then(async response => { const result = await response.json(); if (!result.ok) toast('Unfinished site cleanup failed: ' + (result.error || 'retry Cancel before reusing this name'), false); })
+      .catch(e => toast('Unfinished site cleanup failed: ' + e.message, false));
   }
 }
 function toggleTheme() {

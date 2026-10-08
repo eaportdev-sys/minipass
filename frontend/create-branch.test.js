@@ -11,7 +11,7 @@ const element = id => {
 const pills = [{ value: 'postgres', checked: false }, { value: 'mysql', checked: false }];
 const context = vm.createContext({ document: { getElementById: element, querySelector: () => ({ value: 'local' }), querySelectorAll: () => pills } });
 const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
-vm.runInContext('let createModalSession=1, createDetectRequest=0, createConnectRequest=0, createDetectRepo="", createStandardDockerfile=false, modalLogin=null;\n' +
+vm.runInContext('let createModalSession=1, createDetectRequest=0, createConnectRequest=0, createDetectRepo="", createStandardDockerfile=false, createStorageAvailable=null, modalLogin=null;\n' +
   section('async function detectType(', 'function setSubdir(') +
   section('function safeHtml(', 'async function loadDatabases(') +
   section('function resetCreateForm(', 'function useCreateStandardDockerfile(') +

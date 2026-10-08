@@ -10,3 +10,5 @@ upgrade.log
 .pending-restart
 .build-status
 AGENTS.md
+host/__pycache__/
+.host-upgrade.lock

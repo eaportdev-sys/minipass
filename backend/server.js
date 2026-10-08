@@ -18,6 +18,7 @@ const tokens = require('./lib/tokens');
 const portsLib = require('./lib/ports');
 const storage = require('./lib/storage');
 const trashLib = require('./lib/trash');
+const quotas = require('./lib/quotas');
 const { refreshStandardDockerfile, standardDockerfileType } = require('./lib/dockerfiles');
 const { buildProfile, readBuildProfile, localBuildProfile, isJekyll } = require('./lib/build-profile');
 
@@ -35,6 +36,7 @@ fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
 
 const app = express();
 const lifecycleLocks = new Set();
+const creatingSites = new Set();
 let trashBusy = false;
 app.use(cors());
 // GitHub push webhook FIRST with a raw body: HMAC verification needs exact bytes,
@@ -139,8 +141,12 @@ app.use((req, res, next) => {
   if (panelAuthed(req)) return next();
   return res.status(401).json({ error: 'panel login required' });
 });
-app.use('/api/apps/:id', (req, res, next) => {
+app.use('/api/apps/:id', async (req, res, next) => {
   if (!['GET', 'HEAD'].includes(req.method) && lifecycleLocks.has(req.params.id)) return res.status(409).json({ error: 'site lifecycle operation in progress - retry when it finishes' });
+  if (!['GET', 'HEAD', 'DELETE'].includes(req.method)) {
+    try { await quotas.ensure(load().apps.find(a => a.id === req.params.id) || {}); }
+    catch (e) { return res.status(e.status || 503).json({ error: e.message }); }
+  }
   next();
 });
 app.get('/api/panel/auth-status', (req, res) => {
@@ -461,8 +467,13 @@ app.get('/api/apps', (req, res) => res.json(load().apps.map(meta => ({
   ...pubApp(meta),
   services: publicServices(meta, appDir(APPS_DIR, meta.id))
 }))));
+app.get('/api/panel/storage', async (req, res) => {
+  try { res.json(await quotas.status()); }
+  catch (e) { res.status(e.status || 503).json({ ready: false, error: e.message }); }
+});
 
 app.post('/api/apps', async (req, res) => {
+  let creatingId = null;
   try {
     const { name, type, repoUrl, db, port, domain } = req.body;
     if (!name || !type) return res.status(400).json({ error: 'name and type required' });
@@ -473,6 +484,10 @@ app.post('/api/apps', async (req, res) => {
     if (!id || id.length > 32) return res.status(400).json({ error: 'site name must produce 1–32 letters, numbers, or hyphens' });
     if (!trashLib.validId(id)) return res.status(400).json({ error: 'site name must start with a letter or number; minipass is reserved for the panel' });
     if (lifecycleLocks.has(id) || (load().trash || []).some(t => t.id === id)) return res.status(409).json({ error: 'site name is held in Trash - restore it or permanently destroy it before reusing the name' });
+    if (creatingSites.has(id) || load().apps.some(a => a.id === id)) return res.status(409).json({ error: 'site already exists or is being created' });
+    const storageBytes = quotas.limitBytes(req.body.storageGB);
+    creatingId = id;
+    creatingSites.add(id);
     let appDomain;
     try { appDomain = cleanDomain(domain); }
     catch (e) { return res.status(400).json({ error: e.message }); }
@@ -529,9 +544,14 @@ app.post('/api/apps', async (req, res) => {
     }
     const dbs = normDbs(req.body.dbs !== undefined ? req.body.dbs : db);
     const subdir = String(req.body.subdir || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '') || '';
+    const storageQuota = await quotas.reserve(id, storageBytes);
+    if (!storageQuota.enforced) throw Object.assign(new Error('host did not confirm an enforced storage allowance'), { status: 503 });
+    fs.writeFileSync(path.join(appDir(APPS_DIR, id), '.storage-quota.json'), JSON.stringify({ projectId: storageQuota.projectId, limitBytes: storageBytes }), { mode: 0o600 });
     const created = createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain: appDomain, hostPort, gitToken: siteToken, subdir, gitBranch: explicitBranch, standardDockerfile: req.body.standardDockerfile === true, modernizeBuild: req.body.modernizeBuild === true });
+    quotas.bindDatabases(created.dir);
+    envSetManaged(created.dir, { COMPOSE_PROJECT_NAME: id });
     const db_ = load();
-    const meta = { id, type: created.type || type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: appDomain, token, hostPort, subdir: created.subdir || '', buildOptions: { modernize: req.body.modernizeBuild === true }, createdAt: new Date().toISOString() };
+    const meta = { id, type: created.type || type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: appDomain, token, hostPort, subdir: created.subdir || '', storageQuota: { projectId: storageQuota.projectId, limitBytes: storageBytes }, buildOptions: { modernize: req.body.modernizeBuild === true }, createdAt: new Date().toISOString() };
     // Capture repository env sources before the first deploy. Never fail an
     // otherwise valid create solely because the private snapshot could not be written.
     try { applyEnvDefaults(meta, created.dir, req.hostname, req.protocol); }
@@ -548,21 +568,30 @@ app.post('/api/apps', async (req, res) => {
     const error = redactUrl(e.message);
     const needsDockerfile = /no Dockerfile in build context and type/i.test(error);
     const needsModernization = /Jekyll static build needs modernization/i.test(error);
-    res.status(needsDockerfile || needsModernization ? 409 : 500).json({ error, needsDockerfile, needsModernization });
+    res.status(needsDockerfile || needsModernization ? 409 : (e.status || 500)).json({ error, needsDockerfile, needsModernization });
+  } finally {
+    if (creatingId) creatingSites.delete(creatingId);
   }
 });
 // Canceling create removes only an unfinished checkout. Registered sites and
 // anything with a generated Compose file are never touched by this endpoint.
-app.delete('/api/apps/pending/:id', (req, res) => {
+app.delete('/api/apps/pending/:id', async (req, res) => {
   try {
     const id = String(req.params.id || '').toLowerCase().replace(/[^a-z0-9-]/g, '-');
     if (!id) return res.status(400).json({ error: 'bad site name' });
+    if (creatingSites.has(id)) return res.status(409).json({ error: 'site creation is still in progress' });
     if (load().apps.some(a => a.id === id)) return res.status(409).json({ error: 'site is already registered' });
     const dir = appDir(APPS_DIR, id);
-    if (!fs.existsSync(dir)) return res.json({ ok: true, removed: false });
     if (fs.existsSync(path.join(dir, 'docker-compose.yml'))) return res.status(409).json({ error: 'refusing to remove a composed site' });
+    const hadFiles = fs.existsSync(dir);
+    let charged = fs.existsSync(path.join(dir, '.storage-quota.json'));
+    try { await quotas.usage(id); charged = true; }
+    catch (e) { if (charged || (e.status !== 404 && e.status !== 503)) throw e; }
     fs.rmSync(dir, { recursive: true, force: true });
-    res.json({ ok: true, removed: true });
+    // The quota bridge is optional for legacy pending checkouts, but a saved
+    // reservation must never silently leak after a successful cancellation.
+    if (charged) await quotas.release(id);
+    res.json({ ok: true, removed: hadFiles });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -876,8 +905,10 @@ async function deployNow(id, opts = {}) {
   const meta = load().apps.find(a => a.id === id);
   const codeDir = path.join(dir, 'code');
   if (!meta) throw new Error('unknown app');
+  await quotas.ensure(meta);
+  if (meta.storageQuota) await quotas.verifyDatabases(meta.id, dir);
   let buildCodeDir = codeDir;
-  let composeCmd = COMPOSE_BIN;
+  let composeCmd = meta.storageQuota ? `${COMPOSE_BIN} -p ${id}` : COMPOSE_BIN;
   let sourceSha = null;
 
   // Host ports are claimed at create time, but orphans from deleted sites,
@@ -899,7 +930,7 @@ async function deployNow(id, opts = {}) {
     try {
       localStage = createLocalPushStage(dir, meta, opts.pushedSha, opts.pushedBranch);
       buildCodeDir = localStage.codeDir;
-      composeCmd = localStage.compose;
+      composeCmd = localStage.compose + (meta.storageQuota ? ` -p ${id}` : '');
       sourceSha = localStage.sha;
     } catch (e) {
       await recordDeploy(id, {
@@ -1147,7 +1178,14 @@ app.get('/api/apps/:id/storage', async (req, res) => {
   if (!meta) return res.status(404).json({ error: 'unknown app' });
   let pending = storageRequests.get(meta.id);
   if (!pending) {
-    pending = storage.measureStorage({ id: meta.id, dir: appDir(APPS_DIR, meta.id) });
+    pending = (async () => {
+      const report = await storage.measureStorage({ id: meta.id, dir: appDir(APPS_DIR, meta.id) });
+      if (meta.storageQuota) {
+        try { report.quota = await quotas.usage(meta.id); }
+        catch (e) { report.quota = { ...meta.storageQuota, enforced: false, error: e.message }; }
+      }
+      return report;
+    })();
     storageRequests.set(meta.id, pending);
   }
   try { res.json(await pending); }
@@ -1383,6 +1421,7 @@ async function detectRepo(repo, { login, token, branch } = {}) {
   const { decideType, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints } = require('./lib/detect');
   const out = decideType(tree, pkg);
   Object.assign(out, source);
+  out.repositorySize = quotas.repositorySize(t);
   // monorepo sub-apps, tool-agnostic: vite heuristic + workspace manifests
   // (npm workspaces, pnpm-workspace.yaml, lerna.json, turbo/nx conventions)
   out.frontends = [];
@@ -1880,8 +1919,16 @@ app.post('/api/apps/:id/db', async (req, res) => {
     // splice service in before the volumes: block (or append both at end)
     let out = yml.replace(/\nvolumes:\n/, `\n${b.compose}\nvolumes:\n`);
     if (out === yml) out = yml.replace(/\s*$/, `\n${b.compose}\nvolumes:\n  ${b.vol}:\n`);
-    else out = out.replace(/^(volumes:\n(?:  [^\n]+\n?)*)/m, `$1  ${b.vol}:\n`);
+    else {
+      // Bound quota volumes have nested driver_opts. Append at the END of the
+      // top-level volumes section, never between a volume name and its options.
+      const start = out.search(/^volumes:[ \t]*\r?$/m);
+      const next = out.slice(start).search(/\n(?=[A-Za-z_][A-Za-z0-9_-]*:)/);
+      const end = next < 0 ? out.length : start + next + 1;
+      out = out.slice(0, end).replace(/\s*$/, '\n') + `  ${b.vol}:\n` + out.slice(end);
+    }
     fs.writeFileSync(ymlPath, out);
+    if (meta.storageQuota) quotas.bindDatabases(dir);
     // merge env: existing keys win (old passwords keep matching old volumes)
     const have = new Set();
     let envText = '';
@@ -2412,7 +2459,12 @@ app.post('/api/apps/:id/stop', async (req, res) => {
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/start', async (req, res) => {
-  try { await siteLifecycle(req.params.id, () => sh(`${COMPOSE_BIN} up -d`, appDir(APPS_DIR, req.params.id))); res.json({ ok: true }); }
+  try { await siteLifecycle(req.params.id, async () => {
+    const meta = load().apps.find(a => a.id === req.params.id);
+    const dir = appDir(APPS_DIR, req.params.id);
+    if (meta && meta.storageQuota) await quotas.verifyDatabases(meta.id, dir);
+    await sh(`${COMPOSE_BIN}${meta && meta.storageQuota ? ` -p ${meta.id}` : ''} up -d`, dir);
+  }); res.json({ ok: true }); }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 // Static env-need scan: which vars the repo code actually reads, so missing
@@ -2662,7 +2714,7 @@ app.post('/api/apps/:id/env/defaults', async (req, res) => {
 });
 function lifecycleError(message, status = 409) { return Object.assign(new Error(message), { status }); }
 async function siteLifecycle(id, action) {
-  if (lifecycleLocks.has(id) || deployQueues.has(id) || deployLocks.has(id)) throw lifecycleError('wait for the current site operation to finish');
+  if (creatingSites.has(id) || lifecycleLocks.has(id) || deployQueues.has(id) || deployLocks.has(id)) throw lifecycleError('wait for the current site operation to finish');
   lifecycleLocks.add(id);
   try { return await action(); } finally { lifecycleLocks.delete(id); }
 }
@@ -2721,6 +2773,8 @@ app.post('/api/trash/:id/restore', async (req, res) => {
     const record = db_.trash[idx];
     if (db_.trash.filter(t => t.id === record.id).length > 1) return res.status(409).json({ error: 'multiple Trash generations share this name - use Empty trash to clean them together' });
     if (record.cleanupStartedAt || Date.now() - record.deletedAt >= TRASH_HOLD_MS) return res.status(410).json({ error: 'retention expired or permanent cleanup started - retry destruction instead' });
+    await quotas.ensure(record);
+    Object.assign(db_, load()); // preserve unrelated site updates during host check
     const from = trashLib.trashPath(TRASH_DIR, record);
     if (!fs.existsSync(path.join(from, 'docker-compose.yml'))) return res.status(410).json({ error: 'trash contents are missing - cannot restore' });
     const dir = appDir(APPS_DIR, record.id);
@@ -2759,7 +2813,10 @@ app.post('/api/trash/:id/restore', async (req, res) => {
       } catch (e) { console.error(record.id, 'restore port rewrite:', e.message); }
     }
     let restarted = false, restartError = null;
-    try { await sh(`${COMPOSE_BIN} -p ${meta.id} up -d`, dir); restarted = true; }
+    try {
+      if (meta.storageQuota) await quotas.verifyDatabases(meta.id, dir);
+      await sh(`${COMPOSE_BIN} -p ${meta.id} up -d`, dir); restarted = true;
+    }
     catch (e) { restartError = e.message; }
     try { await markDirty(meta.id, 'restored from trash'); } catch {}
     res.json({ ok: true, restored: true, movedPorts: moved, restarted, restartError });
@@ -2810,6 +2867,7 @@ async function destroyTrashRecord(record, selected) {
       save(before);
       const cleanup = await trashLib.destroySite({ record, trashRoot: TRASH_DIR, images,
         protectedImages: [...Object.values(require('./lib/generator').DB_IMAGES), ...dbTools.IMAGES, 'minipass-panel:latest'], ...trashOptions() });
+      if (record.storageQuota) await quotas.release(record.id);
       const fresh = load();
       fresh.trash = (fresh.trash || []).filter(t => trashKey(t) !== trashKey(record));
       save(fresh);
@@ -2878,11 +2936,17 @@ app.post('/api/panel/scan', (req, res) => {
         nextPort = hostPort + 1;
       }
       used.add(hostPort);
+      let storageQuota;
+      const quotaFile = path.join(dir, '.storage-quota.json');
+      if (fs.existsSync(quotaFile)) {
+        storageQuota = JSON.parse(fs.readFileSync(quotaFile, 'utf8'));
+        if (!Number.isInteger(storageQuota.projectId) || !Number.isSafeInteger(storageQuota.limitBytes)) throw new Error('invalid recovered storage allowance for ' + name);
+      }
       db_.apps.push({
         id: name, type: env.APP_TYPE || 'static', repoUrl: '',
         db: dbLabel, domain: env.DOMAIN || '',
         token: crypto.randomBytes(16).toString('hex'),
-        hostPort, createdAt: new Date().toISOString(), recovered: true
+        hostPort, ...(storageQuota ? { storageQuota } : {}), createdAt: new Date().toISOString(), recovered: true
       });
       found.push(name + ' (recovered, new webhook token)');
     }

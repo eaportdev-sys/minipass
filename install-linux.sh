@@ -85,6 +85,11 @@ fi
 # NOTE: mongo-express ships with no login, and DB UI ports sit inside the app
 # range - keep APPS_CIDR private unless every exposed app is meant to be public.
 mkdir -p /srv/apps /srv/panel-data /opt/minipaas
+# Install/update the host quota bridge and prepare supported quota mounts.
+# Missing ext4 feature flags on a mounted root need ONE offline setup first.
+# Never tune/reformat a mounted device or reboot from the installer.
+INSTALL_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+bash "$INSTALL_DIR/host/install-storage.sh" || msg "storage quota setup pending - review installer output"
 PANEL_CIDR="${PANEL_CIDR:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16}"
 APPS_CIDR="${APPS_CIDR:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16}"
 if command -v ufw >/dev/null; then
@@ -124,7 +129,7 @@ if ! command -v crontab >/dev/null; then
   fi
 fi
 if command -v crontab >/dev/null; then
-  CRON="* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin cd /opt/minipass && [ -f .pending-restart ] && GIT_SHA=\$(cat .pending-restart) docker compose -p minipass up -d >> upgrade.log 2>&1 && rm -f .pending-restart .upgrade-lock"
+  CRON="* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin cd /opt/minipass && [ -f .pending-restart ] && bash host/apply-upgrade.sh >> upgrade.log 2>&1"
   # NOTE: every stage carries `|| true` - under `set -e`, a bare
   # `crontab -l | grep -v` on an empty crontab kills the subshell before echo runs,
   # installing a headers-only (empty) crontab. That exact bug shipped once.

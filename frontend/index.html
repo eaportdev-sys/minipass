@@ -87,9 +87,9 @@
           <div id="containerList"></div>
         </div>
         <div class="card">
-          <div class="sectionhead"><div><b>Storage</b><div class="meta">Aggregate sizes only. No content inspection or activity tracking.</div></div><button onclick="loadStorage()">refresh sizes</button></div>
+          <div class="sectionhead"><div><b>Storage allowance</b><div class="meta">Site files + managed database data. Aggregate usage only.</div></div><button onclick="loadStorage()">refresh usage</button></div>
           <div id="siteStorage" aria-live="polite"></div>
-          <div class="meta">Container filesystem sizes exclude volumes, bind mounts and container logs. Image layers can be shared; do not add them together as exclusive site usage. Build cache is host-wide. Site quotas are not enforced yet.</div>
+          <div class="meta">Container writable layers/logs, shared images and build cache use a separate host budget. Existing sites are not automatically migrated to quotas.</div>
         </div>
         <div class="card flowintro">
           <b>Deployment workflow</b>
@@ -360,6 +360,7 @@
         <label for="repo">Repository URL <span class="meta">optional</span></label>
         <input id="repo" placeholder="https://github.com/owner/repo" onchange="detectType()">
         <div class="meta">Paste a public URL. Leave blank to use a template.</div>
+        <div class="meta" id="createRepoSize" aria-live="polite">Repository size: choose a GitHub repository.</div>
         <details id="createGitDetails" class="create-details">
           <summary>Private repository / GitHub token</summary>
           <div class="meta" id="ghConnState">Paste a site-only token.</div>
@@ -405,6 +406,13 @@
         </div>
       </section>
     </div>
+    <section class="create-section create-storage">
+      <h3>Storage allowance</h3>
+      <div class="create-storage-row"><label for="createStorageGB">Limit (GB)<input id="createStorageGB" type="number" min="0.1" max="1000000" step="0.001" value="5" oninput="updateCreateStorageHint()"></label><div class="create-storage-presets"><button onclick="setCreateStorage(5)">5 GB</button><button onclick="setCreateStorage(20)">20 GB</button><button onclick="setCreateStorage(200)">200 GB</button></div></div>
+      <div class="meta">Type any size or use a preset. One hard limit for site files and managed databases; shared images/build cache stay outside it. 1 GB = 1 billion bytes.</div>
+      <div id="createStorageState" class="meta" role="status">Checking host quota setup…</div>
+      <div id="createStorageHint" class="meta" aria-live="polite"></div>
+    </section>
     <div id="createDockerAction" class="create-docker-action" style="display:none">
       <div class="create-docker-copy"><b>Dockerfile required</b><span>Add the standard Dockerfile and retry. Existing Dockerfiles stay unchanged.</span></div>
       <button class="btn primary" onclick="useCreateStandardDockerfile()">Use standard Dockerfile</button>

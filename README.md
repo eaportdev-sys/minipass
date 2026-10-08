@@ -52,7 +52,9 @@ node server.js
 # open http://localhost:3001
 ```
 
-Create a site in the UI (`+ Create`), or test the API on a throwaway port:
+Windows can exercise the UI and read-only API. Creating new sites with enforced
+storage allowances requires the Linux host quota bridge; unsupported hosts fail
+closed rather than saving an unenforced limit. To test the API on a throwaway port:
 
 ```powershell
 $env:PORT='31xx'
@@ -79,7 +81,12 @@ Site metadata lives on the `/srv/panel-data` volume — never inside the contain
 ### 1 · Create a site
 
 Websites → `+ Create` → name, type (or auto-detect), optional repo/branch/subfolder,
-optional database. The panel scaffolds `/srv/apps/<id>/` (`code/`, `.env`,
+optional database, and **storage allowance in GB** (5/20/200 presets or a manually
+typed amount, including decimals). GitHub detection shows an approximate source
+size for the selected branch; truncated trees are labeled as a lower bound. This
+excludes Git history, LFS downloads, dependencies, build output and database growth,
+so it is not a recommended quota or a predicted final disk requirement.
+The panel scaffolds `/srv/apps/<id>/` (`code/`, `.env`,
 `docker-compose.yml`) and builds in the background.
 
 Jekyll repositories (`Gemfile` + `_config.yml` and Jekyll markers) are detected as
@@ -95,14 +102,58 @@ Explicit `node-sass` CLI scripts require a repository migration first.
 Previously misclassified sites can use **Setup → Use Jekyll static build**, then
 redeploy. Plain HTML sites and the other standard templates are unchanged.
 
-**Overview → Storage** measures the free space on the filesystem holding site
-files, plus each site's container filesystem and writable-layer sizes (including
-stopped containers). This read-only, on-demand view uses aggregate filesystem
-and Docker metadata; it does not read file contents or retain usage history.
-Container sizes exclude database volumes, bind mounts, container logs, and build
-cache. Image layers may be shared, and Docker may use a different filesystem;
-these figures are not an exclusive per-site total. No disk quotas are enforced
-yet. Measurements are not included in the 100-site list/status polling loop.
+**Overview → Storage allowance** leads with the enforced limit, aggregate used
+space and remaining allowance. **Site files + managed database data share one
+ext4 project quota**. Managed database named volumes use local-driver binds into
+the site's `.dbdata/` directory. Quotas apply to root-owned/database writes too;
+full sites receive a disk-quota error, so choose sufficient room for DB operations.
+Container writable layers/logs, shared images, downloaded base images and build
+cache are **outside** that quota and need host-wide headroom. Existing sites and
+their volumes are not migrated automatically; they remain labeled as legacy with
+no enforced allowance. Renaming into Trash keeps the project assignment and
+budget until permanent cleanup removes all files/volumes and open inodes.
+
+Creation checks unallocated capacity after outstanding site/Trash allowances and
+a 2 GiB host reserve. Allowances are maximums and metadata reservations, not
+preallocated space; other host/Docker writes can still exhaust the filesystem.
+Only aggregate kernel quota/statfs/Docker metadata is measured, on demand; no
+file contents or usage history are collected, and no list/status polling is added.
+
+#### Linux quota setup (install + upgrades)
+
+`sudo bash install-linux.sh` installs the root-only **minipass-storage** systemd
+bridge and prepares supported ext4 quota mounts. New installs and the updated
+host upgrade cron rerun this setup idempotently. **Existing installations must
+rerun the installer once** to install the service and replace the old cron entry.
+The panel talks over `/srv/panel-data/storage-quotas.sock` (0600); it is not made
+privileged and never gets host block devices. Preserve/backup
+`/srv/panel-data/storage-quota-state.json` alongside panel metadata.
+
+If ext4 lacks `project`/`quota` features, the installer reports **offline setup
+required** rather than changing a mounted root filesystem. Take a backup/VM
+snapshot, copy `host/prepare-storage.py` into your rescue/live environment, and
+run it there with the actual ext4 device **unmounted**:
+
+```bash
+sudo python3 prepare-storage.py --offline /dev/your-ext4-device
+```
+
+This checks the device and filesystem before/after enabling features; it never
+formats, partitions, resizes or forces repairs, and refuses mounted devices.
+Boot normally, rerun the installer to add `prjquota` to the matching `/etc/fstab`
+entry (backup retained), and reboot during maintenance if requested. No automatic
+reboot or live root remount happens. Unsupported/unready hosts reject new quota
+site creation; an entered number is never advertised as enforcement by itself.
+
+On a prepared Ubuntu host, explicitly verify root and database-container hard
+limits, Trash retention and cleanup with synthetic temporary files:
+
+```bash
+sudo python3 host/quota-smoke.py
+```
+
+Requires 0.1 GB available allowance and cached `redis:7-alpine`; does not pull
+images or inspect customer data. Portable logic tests: `python host/storage-quotas.test.py`.
 
 Deleted sites remain in **Trash for 48 hours**. Destroy, Empty trash, and the
 expiry worker use the same awaited cleanup: original Compose project containers,
@@ -187,6 +238,10 @@ Upgrade page → **upgrade from git**: fetches `origin/main`, rebuilds the image
 the background, then a host cron job restarts from outside the container
 (self-restart would kill its own runner mid-job). Watch the build log there;
 running vs repo SHAs must match before trusting the UI version label.
+The updated host cron also installs/refreshes quota support before recreation.
+For a manual update, run `sudo bash host/install-storage.sh` from the updated
+checkout before `docker compose -p minipass up -d --build`. Rerun the full
+installer once on older installations to replace their legacy cron entry.
 
 ## Security
 
