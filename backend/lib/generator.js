@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
 const { appGitEnv } = require('./ssh');
+const { readBuildProfile, prepareStaticBuild } = require('./build-profile');
 
 const DB_IMAGES = {
   postgres: 'postgres:16-alpine',
@@ -23,7 +24,15 @@ function normDbs(db) {
 
 // Seed a Dockerfile only when the repo shape makes the choice unambiguous.
 // Anything else fails loud with exactly what's missing - never a bare build error.
-function ensureDockerfile(ctxDir, type, templatesDir) {
+function ensureDockerfile(ctxDir, type, templatesDir, options = {}) {
+  if (type === 'static' && readBuildProfile(ctxDir).kind === 'jekyll') {
+    const result = prepareStaticBuild(ctxDir, templatesDir, options);
+    if (result.prepared) {
+      const nginx = path.join(ctxDir, 'nginx.conf');
+      if (!fs.existsSync(nginx)) fs.writeFileSync(nginx, nginxConf(null));
+      return 'seeded-jekyll';
+    }
+  }
   try {
     const files = fs.readdirSync(ctxDir);
     if (files.some(f => /^dockerfile$/i.test(f))) return 'present';
@@ -60,6 +69,7 @@ function needsDockerfileOptIn(ctxDir, type) {
   let files = [];
   try { files = fs.readdirSync(ctxDir); } catch { return false; }
   if (files.some(f => /^dockerfile$/i.test(f))) return false;
+  if (type === 'static' && readBuildProfile(ctxDir).kind === 'jekyll') return false;
   const has = (...names) => names.some(n => {
     try { return fs.existsSync(path.join(ctxDir, n)); } catch { return false; }
   });
@@ -177,7 +187,7 @@ function dbService(db, name, svc, vol) {
   return { lines: [], compose: '', vol, url: null, info: null };
 }
 
-function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', port, domain, hostPort, gitToken, subdir, gitBranch, standardDockerfile = false }) {
+function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', port, domain, hostPort, gitToken, subdir, gitBranch, standardDockerfile = false, modernizeBuild = false }) {
   const dir = appDir(appsDir, name);
   // resume allowed when a previous create died before writing compose (keys preserved)
   const resume = fs.existsSync(dir) && !fs.existsSync(path.join(dir, 'docker-compose.yml'));
@@ -241,10 +251,13 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   let sub = wantSub;
   if (sub && !fs.existsSync(path.join(dir, 'code', sub))) sub = '';
   const buildDir = sub ? path.join(dir, 'code', sub) : path.join(dir, 'code');
+  // Only the selected context owns this profile; nested sites never retype APIs.
+  const profile = readBuildProfile(buildDir);
+  if (profile.kind === 'jekyll') type = 'static';
   // Explicit create-modal opt-in. Never replace a repository Dockerfile; this
   // only fills the missing file after the first validation explains why it is
   // needed. A failed first create remains resumable, so retry does not reclone.
-  if (standardDockerfile && !fs.existsSync(path.join(buildDir, 'Dockerfile'))) {
+  if (standardDockerfile && profile.kind !== 'jekyll' && !fs.existsSync(path.join(buildDir, 'Dockerfile'))) {
     const tpl = path.join(templatesDir, type);
     fs.copyFileSync(path.join(tpl, 'Dockerfile'), path.join(buildDir, 'Dockerfile'));
     if ((type === 'react' || type === 'static') && !fs.existsSync(path.join(buildDir, 'nginx.conf')) && fs.existsSync(path.join(tpl, 'nginx.conf')))
@@ -253,7 +266,7 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   // No Dockerfile anywhere is a loud, specific error - unless the repo shape makes
   // a template choice unambiguous (static index, spa build script, php entry, node index).
   // Never invent an entrypoint: node without index.js must bring its own Dockerfile.
-  ensureDockerfile(buildDir, type, templatesDir);
+  ensureDockerfile(buildDir, type, templatesDir, { modernize: modernizeBuild });
   let appPort = port || TYPE_PORT[type] || 3000;
   if (!port) appPort = inferPort(sub ? path.join(dir, 'code', sub) : path.join(dir, 'code'), appPort);
   // static/react always need our nginx.conf (SPA fallback; proxy added on link).
@@ -325,7 +338,7 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   const ctx = sub ? `./code/${sub}` : './code';
   const compose = `services:\n${serviceBlock({ svcName: 'app', ctx, port: appPort, host, portEnv: null })}${dbBlock}${volBlock}\n`;
   fs.writeFileSync(path.join(dir, 'docker-compose.yml'), compose);
-  return { dir, appPort, hostPort: host, subdir: sub };
+  return { dir, appPort, hostPort: host, subdir: sub, type };
 }
 
 // One app-service block. Primary ('app') renders exactly the legacy shape;

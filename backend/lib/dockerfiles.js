@@ -57,4 +57,19 @@ function refreshStandardDockerfile(ctxDir, type, templatesDir) {
   return 'updated';
 }
 
-module.exports = { refreshStandardDockerfile };
+function standardDockerfileType(ctxDir, templatesDir) {
+  let current;
+  try {
+    const file = path.join(ctxDir, 'Dockerfile');
+    if (!fs.lstatSync(file).isFile()) return null;
+    current = normalized(fs.readFileSync(file, 'utf8'));
+  } catch { return null; }
+  for (const type of ['static', 'node', 'react']) {
+    let template = '';
+    try { template = normalized(fs.readFileSync(path.join(templatesDir, type, 'Dockerfile'), 'utf8')); } catch {}
+    if ((template && current === template) || (LEGACY[type] || []).includes(current)) return type;
+  }
+  return null;
+}
+
+module.exports = { refreshStandardDockerfile, standardDockerfileType };

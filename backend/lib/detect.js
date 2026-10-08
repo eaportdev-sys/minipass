@@ -1,3 +1,4 @@
+const { isJekyll } = require('./build-profile');
 // Stack detection from a repo file listing. Pure function - unit-testable.
 // Returns { type|null, detected, reason, dbs[] }. Types match templates/*.
 function decideType(paths, pkg) {
@@ -22,6 +23,7 @@ function decideType(paths, pkg) {
   }
 
   const pkgPath = shallowest(/(^|\/)package\.json$/);
+  if (isJekyll(list, pkg)) return { type: 'static', detected: 'jekyll', dbs: [], reason: 'Jekyll static site - Ruby/Node build, nginx serves the generated output' };
   // Laravel/full-stack PHP apps ship a root package.json that is only the
   // Vite asset pipeline (laravel-vite-plugin, tailwind). The framework
   // markers win so the app is not misread as a standalone React frontend.
@@ -102,6 +104,7 @@ function findBackends(tree, pkgs, skip = []) {
   for (const d of dirs) {
     const pkg = pkgs[d];
     if (!pkg || typeof pkg !== 'object') continue;
+    if (isJekyll(tree.filter(p => p.startsWith(d + '/')).map(p => p.slice(d.length + 1)), pkg)) continue;
     const scripts = pkg.scripts || {};
     // dev-server start scripts (CRA, vite, ng, vue-cli, nuxt/next dev) are not
     // production backends - the panel builds + serves those as frontends.
@@ -143,6 +146,7 @@ function findFrontends(tree, pkgs = {}) {
   }
   for (const [d, files] of byDir) {
     const roots = files.filter(f => !f.includes('/'));
+    if (isJekyll(tree.filter(p => p.startsWith(d + '/')).map(p => p.slice(d.length + 1)), pkgs[d])) { found.push(d); continue; }
     if (roots.some(f => FRONTEND_CONFIG_MARKERS.some(re => re.test(f)))) { found.push(d); continue; }
     if (files.includes('package.json') && files.includes('public/index.html') &&
         CLIENT_ENTRIES.some(e => files.includes(e))) { found.push(d); continue; }

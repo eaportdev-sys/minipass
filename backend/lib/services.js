@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { serviceBlock, ensureDockerfile, nginxConf, inferPort, TYPE_PORT } = require('./generator');
 const { decideType } = require('./detect');
+const { readBuildProfile } = require('./build-profile');
 
 const isDbSvc = n => /^db(-|$)/.test(n || '');
 
@@ -19,6 +20,7 @@ function portEnvName(svcName) {
 // intentionally folder-scoped: a React workspace inside a Node monorepo must
 // not inherit the root API's type (or vice versa).
 function detectServiceType(ctxDir) {
+  if (readBuildProfile(ctxDir).kind === 'jekyll') return { type: 'static', detected: 'jekyll', dbs: [], reason: 'Jekyll static build with Ruby/Node' };
   const paths = [];
   const skip = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'vendor']);
   const walk = (dir, rel = '', depth = 0) => {
@@ -139,7 +141,7 @@ function renderProject({ dir, templatesDir, meta }) {
   const chunks = [];
   for (const s of enabled) {
     const ctxDir = path.join(dir, 'code', s.subdir || '');
-    ensureDockerfile(ctxDir, s.type, templatesDir);
+    ensureDockerfile(ctxDir, s.type, templatesDir, { modernize: !!((s.buildOptions || (s.name === 'app' && meta.buildOptions) || {}).modernize) });
     if (s.type === 'static' || s.type === 'react') {
       try {
         if (!fs.existsSync(path.join(ctxDir, 'nginx.conf'))) fs.writeFileSync(path.join(ctxDir, 'nginx.conf'), nginxConf(null));

@@ -122,6 +122,7 @@
               <button id="svcAddBtn" class="btn primary" onclick="addService()" disabled>add service</button>
             </div>
             <div class="meta" id="svcAddCheck">Enter a unique name and an existing repository subfolder.</div>
+            <label id="svcModernBuildRow" class="radiorow" style="display:none"><input id="svcModernBuild" type="checkbox" onchange="scheduleServiceCheck()"> Modernize legacy dependencies in this build only</label>
           </div>
           <div id="svcList"></div>
         </div>
@@ -392,6 +393,11 @@
         </div>
         <div class="meta">Check the suggestions. Add or remove databases as needed.</div>
         <div class="meta create-db-note" id="dbDetectNote" role="status" style="display:none"></div>
+        <div id="createBuildProfile" class="create-build-profile" style="display:none">
+          <div id="createBuildNote" class="meta"></div>
+          <label id="createModernBuildRow" class="radiorow" style="display:none"><input id="createModernBuild" type="checkbox"> Modernize legacy build dependencies</label>
+          <div class="meta">Build-only Sass / Webpack 5 updates and Ruby lockfile refresh within Gemfile constraints. Repository files stay unchanged.</div>
+        </div>
       </section>
     </div>
     <div id="createDockerAction" class="create-docker-action" style="display:none">

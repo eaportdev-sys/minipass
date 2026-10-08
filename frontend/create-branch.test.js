@@ -57,6 +57,22 @@ async function main() {
   assert.equal(element('branch').value, '');
   assert.equal(element('createBranches').innerHTML, '');
   assert.equal(element('branchDefault').textContent, '');
+  context.fetch = async () => ({ json: async () => ({ branch: 'main', defaultBranch: 'main', type: 'static', buildProfile: { kind: 'jekyll', output: '_site', needsModernization: true, warnings: ['Repository Node: v14.18.0'] } }) });
+  element('repo').value = 'https://github.com/owner/static-site';
+  await run('detectType()');
+  assert.equal(element('createBuildProfile').style.display, 'block');
+  assert.equal(element('createModernBuildRow').style.display, 'flex');
+  assert(element('createBuildNote').textContent.includes('Node 24'));
+  assert(element('createBuildNote').textContent.includes('_site'));
+  assert.equal(element('createModernBuild').checked, false, 'modernization is opt-in');
+  element('createModernBuild').checked = true;
+  run('resetCreateForm()');
+  assert.equal(element('createModernBuild').checked, false);
+  assert.equal(element('createBuildProfile').style.display, 'none');
+  context.fetch = async () => ({ json: async () => ({ branch: 'main', type: 'node' }) });
+  element('repo').value = 'https://github.com/owner/backend';
+  await run('detectType()');
+  assert.equal(element('createBuildProfile').style.display, 'none', 'ordinary Node apps do not inherit static build setup');
   console.log('create branch selection, branch-aware detection and reset guards: OK');
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

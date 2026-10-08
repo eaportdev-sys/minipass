@@ -16,7 +16,8 @@ const routes = require('./lib/routes');
 const envDefaults = require('./lib/env-defaults');
 const tokens = require('./lib/tokens');
 const portsLib = require('./lib/ports');
-const { refreshStandardDockerfile } = require('./lib/dockerfiles');
+const { refreshStandardDockerfile, standardDockerfileType } = require('./lib/dockerfiles');
+const { buildProfile, readBuildProfile, localBuildProfile, isJekyll } = require('./lib/build-profile');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -518,9 +519,9 @@ app.post('/api/apps', async (req, res) => {
     }
     const dbs = normDbs(req.body.dbs !== undefined ? req.body.dbs : db);
     const subdir = String(req.body.subdir || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '') || '';
-    const created = createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain: appDomain, hostPort, gitToken: siteToken, subdir, gitBranch: explicitBranch, standardDockerfile: req.body.standardDockerfile === true });
+    const created = createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain: appDomain, hostPort, gitToken: siteToken, subdir, gitBranch: explicitBranch, standardDockerfile: req.body.standardDockerfile === true, modernizeBuild: req.body.modernizeBuild === true });
     const db_ = load();
-    const meta = { id, type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: appDomain, token, hostPort, subdir: created.subdir || '', createdAt: new Date().toISOString() };
+    const meta = { id, type: created.type || type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: appDomain, token, hostPort, subdir: created.subdir || '', buildOptions: { modernize: req.body.modernizeBuild === true }, createdAt: new Date().toISOString() };
     // Capture repository env sources before the first deploy. Never fail an
     // otherwise valid create solely because the private snapshot could not be written.
     try { applyEnvDefaults(meta, created.dir, req.hostname, req.protocol); }
@@ -536,7 +537,8 @@ app.post('/api/apps', async (req, res) => {
   } catch (e) {
     const error = redactUrl(e.message);
     const needsDockerfile = /no Dockerfile in build context and type/i.test(error);
-    res.status(needsDockerfile ? 409 : 500).json({ error, needsDockerfile });
+    const needsModernization = /Jekyll static build needs modernization/i.test(error);
+    res.status(needsDockerfile || needsModernization ? 409 : 500).json({ error, needsDockerfile, needsModernization });
   }
 });
 // Canceling create removes only an unfinished checkout. Registered sites and
@@ -657,7 +659,7 @@ function createLocalPushStage(dir, meta, pushedSha, pushedBranch) {
     for (const s of enabled) {
       const ctxDir = path.join(stageCode, s.subdir || '');
       if (!fs.existsSync(ctxDir)) throw new Error(`service '${s.name}' build folder '${s.subdir || '.'}' is absent from pushed commit`);
-      ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+      ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR, { modernize: !!((s.buildOptions || (s.name === 'app' && meta.buildOptions) || {}).modernize) });
       // Upgrade only exact historical Node/React templates, including monorepo
       // services and detached local-push checkouts. Never rewrite custom files.
       refreshStandardDockerfile(ctxDir, s.type, TEMPLATES_DIR);
@@ -940,7 +942,11 @@ async function deployNow(id, opts = {}) {
           throw new Error(`service '${s.name}' is configured as '${s.type}' but '${s.subdir || '.'}' is detected as '${detected.type}' - change the service type`);
         }
       }
-      ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+      const profile = readBuildProfile(ctxDir);
+      if (profile.kind === 'jekyll' && s.type !== 'static' && standardDockerfileType(ctxDir, TEMPLATES_DIR)) {
+        throw new Error(`service '${s.name}' is a Jekyll static site, not ${s.type} - open Setup and choose Use Jekyll static build`);
+      }
+      ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR, { modernize: !!((s.buildOptions || (s.name === 'app' && meta.buildOptions) || {}).modernize) });
       // Native build prerequisites also apply to ordinary repo/local rebuilds.
       refreshStandardDockerfile(ctxDir, s.type, TEMPLATES_DIR);
       // Refresh panel-owned PHP images so existing sites gain standard Apache
@@ -1005,7 +1011,7 @@ async function deployNow(id, opts = {}) {
     for (const f of fronts) {
       const ctx = path.join(buildCodeDir, f.subdir || '');
       const df = path.join(ctx, 'Dockerfile');
-      if (f.type === 'static' && fs.existsSync(df)) {
+      if (f.type === 'static' && readBuildProfile(ctx).kind !== 'jekyll' && fs.existsSync(df)) {
         const first = (fs.readFileSync(df, 'utf8').split('\n')[0] || '');
         if (first.includes('minipass template') || first.includes('build stage + serve')) {
           const tplDf = path.join(TEMPLATES_DIR, f.type, 'Dockerfile');
@@ -1357,6 +1363,13 @@ async function detectRepo(repo, { login, token, branch } = {}) {
       return b && b.content ? Buffer.from(b.content, 'base64').toString('utf8') : null;
     } catch { return null; }
   };
+  const buildFiles = {};
+  await Promise.all(['Gemfile', 'Gemfile.lock', '_config.yml', '.nvmrc', '.node-version', '.ruby-version'].filter(p => tree.includes(p)).map(async p => { buildFiles[p] = await readText(p); }));
+  out.buildProfile = buildProfile(tree, pkgPath === 'package.json' ? pkg : null, buildFiles);
+  if (out.buildProfile.kind === 'jekyll') {
+    out.type = 'static'; out.detected = 'jekyll'; out.dbs = [];
+    out.reason = 'Jekyll static site - build with Ruby/Node, serve with nginx';
+  }
   for (const p of tree) {
     const fm = p.match(/^(.+)\/package\.json$/);
     if (fm && fm[1].split('/').length <= 2 &&
@@ -1388,6 +1401,7 @@ async function detectRepo(repo, { login, token, branch } = {}) {
   // Frontend markers beyond vite (CRA layout, Angular/Next/Nuxt/Vue configs,
   // UI deps + build script) classify first so they never pose as backends.
   out.backends = [];
+  const pkgs = {};
   try {
     // tree markers need no package reads - classify before the capped fetch so
     // CRA/Angular-style dirs are already excluded from pkgDirs below.
@@ -1395,7 +1409,6 @@ async function detectRepo(repo, { login, token, branch } = {}) {
     const pkgDirs = [...new Set(tree.filter(p => /(^|\/)package\.json$/.test(p))
       .map(p => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''))
       .filter(d => d && d.split('/').length <= 2 && !out.frontends.includes(d)))].slice(0, 8);
-    const pkgs = {};
     for (const d of pkgDirs) {
       try {
         const blob = await get(`/repos/${m[1]}/${m[2]}/contents/${d}/package.json?ref=${ref}`);
@@ -1410,6 +1423,8 @@ async function detectRepo(repo, { login, token, branch } = {}) {
       for (const db of decideType(['package.json'], pkg_).dbs || []) if (!out.dbs.includes(db)) out.dbs.push(db);
     }
   } catch {}
+  out.staticFrontends = out.frontends.filter(d => isJekyll(tree.filter(p => p.startsWith(d + '/')).map(p => p.slice(d.length + 1)), pkgs[d]));
+  out.frontends = out.frontends.filter(d => !out.staticFrontends.includes(d));
   // Prisma dependencies do not reveal the database engine. Read only the
   // bounded schema files and use their explicit datasource provider instead.
   const prismaCandidates = tree.filter(p => /(^|\/)schema\.prisma$/i.test(p)).slice(0, 4);
@@ -1583,13 +1598,52 @@ function serviceCandidate(meta, dir, input, requireSubdir = false) {
 app.get('/api/apps/:id/services', (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta) return res.status(404).json({ error: 'unknown app' });
-  res.json({ services: publicServices(meta, appDir(APPS_DIR, meta.id)), dirty: meta.dirty || null, homePath: pubApp(meta).homePath, homePathManual: !!meta.homePathManual });
+  const dir = appDir(APPS_DIR, meta.id);
+  const buildProfiles = {};
+  for (const s of svc.fullServices(meta, dir)) {
+    try { buildProfiles[s.name] = { ...localBuildProfile(path.join(dir, 'code', s.subdir || ''), TEMPLATES_DIR), modernize: !!((s.buildOptions || (s.name === 'app' && meta.buildOptions) || {}).modernize) }; }
+    catch (e) { buildProfiles[s.name] = { kind: null, warnings: [e.message] }; }
+  }
+  res.json({ services: publicServices(meta, dir), buildProfiles, dirty: meta.dirty || null, homePath: pubApp(meta).homePath, homePathManual: !!meta.homePathManual });
+});
+app.post('/api/apps/:id/services/:name/build-profile', async (req, res) => {
+  try {
+    if (deployQueues.has(req.params.id) || deployLocks.has(req.params.id)) return res.status(409).json({ error: 'wait for the current deployment to finish' });
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const dir = appDir(APPS_DIR, meta.id);
+    const services = svc.fullServices(meta, dir);
+    const service = services.find(s => s.name === req.params.name);
+    if (!service) return res.status(404).json({ error: 'unknown service' });
+    const ctx = path.join(dir, 'code', service.subdir || '');
+    const profile = localBuildProfile(ctx, TEMPLATES_DIR);
+    if (profile.kind !== 'jekyll') return res.status(400).json({ error: 'no Jekyll build detected in this service folder' });
+    if (profile.customDockerfile) return res.status(409).json({ error: 'custom Dockerfile preserved - configure the Jekyll build in that file instead' });
+    if (profile.blockedReason) return res.status(400).json({ error: profile.blockedReason });
+    const modernize = req.body.modernize === true;
+    if (profile.needsModernization && !modernize) return res.status(409).json({ error: 'enable build-only modernization for these legacy dependencies' });
+    ensureDockerfile(ctx, 'static', TEMPLATES_DIR, { modernize });
+    service.type = 'static'; service.port = 80; service.homePath = ''; service.openPaths = []; service.homePathManual = false;
+    service.buildOptions = { modernize };
+    meta.services = services;
+    if (service.name === 'app') {
+      meta.type = 'static'; meta.buildOptions = { modernize }; meta.homePath = ''; meta.homePathManual = false; meta.openPaths = [];
+      envSetManaged(dir, { APP_TYPE: 'static', PORT: '80' });
+    }
+    svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
+    save(db_);
+    await markDirty(meta.id, 'Jekyll static build configured');
+    res.json({ ok: true, saved: true, pending: true, type: 'static', modernize });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/apps/:id/services/check', (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta) return res.status(404).json({ error: 'unknown app' });
   const check = serviceCandidate(meta, appDir(APPS_DIR, meta.id), req.query, true);
   if (check.error) return res.status(400).json({ ok: false, error: check.error });
+  const profile = localBuildProfile(check.ctxDir, TEMPLATES_DIR);
+  if (profile.blockedReason && !profile.customDockerfile) return res.status(400).json({ ok: false, error: profile.blockedReason });
   res.json({
     ok: true,
     name: check.name,
@@ -1597,7 +1651,8 @@ app.get('/api/apps/:id/services/check', (req, res) => {
     type: check.type,
     detected: check.detected.detected,
     reason: check.detected.reason,
-    needsDockerfile: needsDockerfileOptIn(check.ctxDir, check.type)
+    needsDockerfile: needsDockerfileOptIn(check.ctxDir, check.type),
+    buildProfile: profile
   });
 });
 // One-click standard Dockerfile: the validator refuses to guess for node
@@ -1627,7 +1682,10 @@ app.post('/api/apps/:id/services/dockerfile', async (req, res) => {
         return res.status(409).json({ error: 'a Dockerfile is already there - edit it instead' });
     } catch (e) { return res.status(500).json({ error: e.message }); }
     const tpl = path.join(TEMPLATES_DIR, type, 'Dockerfile');
-    try { fs.copyFileSync(tpl, path.join(ctxDir, 'Dockerfile')); }
+    try {
+      if (type === 'static' && readBuildProfile(ctxDir).kind === 'jekyll') ensureDockerfile(ctxDir, type, TEMPLATES_DIR, { modernize: req.body.modernizeBuild === true });
+      else fs.copyFileSync(tpl, path.join(ctxDir, 'Dockerfile'));
+    }
     catch (e) { return res.status(500).json({ error: 'standard template missing: ' + e.message }); }
     const seeded = ['Dockerfile'];
     if ((type === 'react' || type === 'static') && !fs.existsSync(path.join(ctxDir, 'nginx.conf'))) {
@@ -1650,12 +1708,16 @@ app.post('/api/apps/:id/services', async (req, res) => {
     if (candidate.error) return res.status(400).json({ error: candidate.error });
     const { name, requestedType, subdir, detected, type, services } = candidate;
     const { inferPort, TYPE_PORT } = require('./lib/generator');
-    const port = inferPort(path.join(dir, 'code', subdir), TYPE_PORT[type] || 3000);
+    const profile = localBuildProfile(path.join(dir, 'code', subdir), TEMPLATES_DIR);
+    if (profile.blockedReason && !profile.customDockerfile) return res.status(400).json({ error: profile.blockedReason });
+    if (profile.needsModernization && req.body.modernizeBuild !== true) return res.status(409).json({ error: 'enable build-only modernization for this service' });
+    const port = type === 'static' && profile.kind === 'jekyll' && !profile.customDockerfile
+      ? 80 : inferPort(path.join(dir, 'code', subdir), TYPE_PORT[type] || 3000);
     const used = hostPortsInUse();
     let hostPort = 8000;
     while (used.has(hostPort) && hostPort < 9000) hostPort++;
     used.add(hostPort);
-    meta.services = [...services, { name, subdir, type, port, hostPort, enabled: true }];
+    meta.services = [...services, { name, subdir, type, port, hostPort, enabled: true, buildOptions: { modernize: req.body.modernizeBuild === true } }];
     const out = svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
     meta.services = out.normalized;
     // A new service contributes its .env/.env.example exactly once. This also
@@ -1717,10 +1779,11 @@ app.get('/api/apps/:id/suggest', async (req, res) => {
     if (!meta || !meta.repoUrl) return res.status(400).json({ error: 'no repo linked' });
     const m = String(meta.repoUrl).match(/github\.com[:/]([^/]+)\/([^/]+?)(\.git)?\/?$/i);
     if (!m) return res.json({ suggestions: [] });
-    const r = await detectRepo(`${m[1]}/${m[2]}`, { login: meta.github && meta.github.login, token: meta.github && meta.github.token });
+    const r = await detectRepo(`${m[1]}/${m[2]}`, { login: meta.github && meta.github.login, token: meta.github && meta.github.token, branch: meta.github && meta.github.branch });
     const have = new Set(svc.fullServices(meta, appDir(APPS_DIR, meta.id)).map(s => s.subdir || ''));
     res.json({
       suggestions: (r.frontends || []).filter(f => !have.has(f)),
+      staticSuggestions: (r.staticFrontends || []).filter(f => !have.has(f)),
       backends: (r.backends || []).filter(b => !have.has(b))
     });
   } catch (e) { res.status(500).json({ error: e.message }); }

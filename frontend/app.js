@@ -179,6 +179,8 @@ function openSite(id, tab = 'overview', remember = true) {
   document.getElementById('svcName').value = '';
   document.getElementById('svcSub').value = '';
   document.getElementById('svcType').value = 'auto';
+  document.getElementById('svcModernBuild').checked = false;
+  document.getElementById('svcModernBuildRow').style.display = 'none';
   document.getElementById('svcAddBtn').disabled = true;
   document.getElementById('svcAddCheck').textContent = 'Enter a unique name and an existing repository subfolder.';
   document.getElementById('migrateOut').textContent = '';
@@ -1044,7 +1046,8 @@ async function createApp() {
   const body = {
     name: v('name'), type: typeEl ? typeEl.value : 'static', dbs,
     repoUrl: v('repo'), domain: access === 'domain' ? v('domain') : '',
-    subdir: v('subdir'), standardDockerfile: createStandardDockerfile
+    subdir: v('subdir'), standardDockerfile: createStandardDockerfile,
+    modernizeBuild: document.getElementById('createModernBuild').checked
   };
   // site-owned connection: fresh token travels with this build only
   const ghSel = document.getElementById('ghrepo');
@@ -1069,6 +1072,11 @@ async function createApp() {
   if (session !== createModalSession) return;
   document.getElementById('out').textContent = JSON.stringify(r, null, 2);
   if (r.needsDockerfile) document.getElementById('createDockerAction').style.display = 'flex';
+  if (r.needsModernization) {
+    document.getElementById('createBuildProfile').style.display = 'block';
+    document.getElementById('createModernBuildRow').style.display = 'flex';
+    document.getElementById('createBuildNote').textContent = r.error;
+  }
   buildBtn.disabled = false;
   cancelBtn.disabled = false;
   refresh();
@@ -1084,6 +1092,9 @@ async function detectType() {
   dbNote.textContent = '';
   document.getElementById('subdirHint').style.display = 'none';
   state.title = '';
+  document.getElementById('createBuildProfile').style.display = 'none';
+  document.getElementById('createModernBuildRow').style.display = 'none';
+  document.getElementById('createModernBuild').checked = false;
   let repo = sel.value;
   // create flow prefers its own fresh token but never requires one: public
   // repos detect fine without it (shared unauthenticated quota, no account used)
@@ -1120,6 +1131,11 @@ async function detectType() {
       branchInput.title = `Default: ${r.defaultBranch || 'unknown'}. Choose a suggested branch or type a name.`;
       document.getElementById('createBranches').innerHTML = (r.branches || []).map(b => `<option value="${safeHtml(b)}">${b === r.defaultBranch ? 'default' : ''}</option>`).join('');
     }
+    if (r.buildProfile && r.buildProfile.kind === 'jekyll') {
+      document.getElementById('createBuildProfile').style.display = 'block';
+      document.getElementById('createBuildNote').textContent = `Jekyll → ${r.buildProfile.output}. Ruby 3.3 + Node 24 build; nginx serves the result. ` + (r.buildProfile.warnings || []).join(' ');
+      document.getElementById('createModernBuildRow').style.display = r.buildProfile.needsModernization ? 'flex' : 'none';
+    }
     if (r.type) {
       const radio = document.querySelector(`input[name=apptype][value=${r.type}]`);
       if (radio) radio.checked = true;
@@ -1136,9 +1152,10 @@ async function detectType() {
     const hint = document.getElementById('subdirHint');
     const fb = (r.frontends || []).map(f => `<button onclick="setSubdir('${f}', 'react')">${f} (web)</button>`).join(' ');
     const bb = (r.backends || []).map(b => `<button onclick="setSubdir('${b}', 'node')">${b} (api)</button>`).join(' ');
-    if (fb || bb) {
+    const sb = (r.staticFrontends || []).map(f => `<button onclick="setSubdir('${f}', 'static')">${f} (static)</button>`).join(' ');
+    if (fb || bb || sb) {
       hint.style.display = 'block';
-      hint.innerHTML = 'Choose a build folder: ' + fb + ' ' + bb;
+      hint.innerHTML = 'Choose a build folder: ' + fb + ' ' + sb + ' ' + bb;
     } else hint.style.display = 'none';
   } catch {
     if (session === createModalSession && request === createDetectRequest) state.textContent = 'Detection unavailable. Select the runtime manually.';
@@ -1146,6 +1163,9 @@ async function detectType() {
 }
 function setSubdir(f, type) {
   createStandardDockerfile = false;
+  document.getElementById('createModernBuild').checked = false;
+  document.getElementById('createBuildProfile').style.display = 'none';
+  document.getElementById('createModernBuildRow').style.display = 'none';
   document.getElementById('createDockerAction').style.display = 'none';
   document.getElementById('subdir').value = f;
   if (type) {
@@ -1289,6 +1309,10 @@ function resetCreateForm() {
   document.getElementById('branchDefault').textContent = '';
   document.getElementById('createBranches').innerHTML = '';
   createDetectRepo = '';
+  document.getElementById('createModernBuild').checked = false;
+  document.getElementById('createBuildProfile').style.display = 'none';
+  document.getElementById('createModernBuildRow').style.display = 'none';
+  document.getElementById('createBuildNote').textContent = '';
   document.getElementById('subdir').value = '';
   document.getElementById('subdirHint').style.display = 'none';
   document.getElementById('subdirHint').innerHTML = '';
@@ -1899,10 +1923,14 @@ async function loadServices() {
       const url = s.hostPort ? `http://${location.hostname}:${s.hostPort}${openPath}` : null;
       const label = s.hostPort ? `${location.hostname}:${s.hostPort}${openPath}` : '';
       const enabled = s.enabled !== false;
+      const profile = (r.buildProfiles || {})[s.name];
+      const buildCard = profile && profile.kind === 'jekyll'
+        ? `<div class="service-build-profile"><b>Jekyll static build</b><div class="meta">${profile.customDockerfile ? 'Custom Dockerfile preserved. Configure its build steps in that file.' : `Ruby + Node → ${safeHtml(profile.output)} → nginx${profile.modernize ? ' · build-only modernization enabled' : ''}`}</div>${profile.customDockerfile ? '' : `<div class="meta">${safeHtml((profile.warnings || []).filter(w => !profile.modernize || !w.includes('Enable the build-only')).join(' '))}</div><button onclick="configureStaticBuild('${s.name}', ${!!profile.needsModernization})">${s.type !== 'static' ? 'Use Jekyll static build' : profile.needsModernization && !profile.modernize ? 'Enable build modernization' : 'Configure build'}</button>`}</div>` : '';
       return `<div class="service-card" id="svc-${s.name}"><div class="service-card-head"><div><b>${safeHtml(s.name)}</b><span class="badge type">${safeHtml(s.type)}</span>` +
         `<div class="meta">${s.subdir ? `/${safeHtml(s.subdir)}` : 'repository root'}</div></div><span class="badge service-state ${enabled ? 'on' : 'off'}">${enabled ? 'enabled' : 'disabled'}</span></div>` +
         `<div class="service-facts"><div><span>Published port</span><b>${s.hostPort ? `:${s.hostPort} → ${s.port}` : 'not published'}</b></div>` +
         `<div><span>Local URL</span>${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${safeHtml(label)}</a>` : '<b>unavailable</b>'}</div></div>` +
+        buildCard +
         `<div class="service-card-actions"><button onclick="deploySvc('${s.name}')" ${dirty ? '' : 'disabled'}>redeploy</button>` +
         `<button onclick="toggleService('${s.name}', ${!enabled})">${enabled ? 'stop' : 'start'}</button>` +
         (s.name === 'app' ? '' : `<button class="btn danger" onclick="removeService('${s.name}')">remove</button>`) + `</div></div>`;
@@ -1918,14 +1946,31 @@ async function loadServices() {
       const candidate = (folder, type, role) => `<button class="service-suggestion" data-folder="${safeHtml(folder)}" data-type="${type}" onclick="fillService(this.dataset.folder, this.dataset.type)"><span><b>${safeHtml(folder)}</b><small>${role}</small></span><span class="badge">${type}</span></button>`;
       const fronts = (sug.suggestions || []).map(f => candidate(f, 'react', 'Web frontend')).join('');
       const backs = (sug.backends || []).map(b => candidate(b, 'node', 'API or worker')).join('');
-      document.getElementById('svcSuggest').innerHTML = (fronts || backs)
-        ? `<div class="service-suggestion-label">Detected runnable folders</div><div class="service-suggestion-list">${fronts}${backs}</div>`
+      const statics = (sug.staticSuggestions || []).map(f => candidate(f, 'static', 'Static site build')).join('');
+      document.getElementById('svcSuggest').innerHTML = (fronts || backs || statics)
+        ? `<div class="service-suggestion-label">Detected runnable folders</div><div class="service-suggestion-list">${fronts}${statics}${backs}</div>`
         : '<div class="service-suggestion-empty">No additional runnable folders detected.</div>';
     } catch {}
     scheduleServiceCheck();
   } catch {}
 }
+async function configureStaticBuild(name, needsModernization) {
+  const id = currentApp;
+  if (!id) return;
+  const ok = await uiConfirm({
+    title: 'Use Jekyll static build?',
+    body: 'Build with Ruby 3.3 and Node 24, then serve the generated site on nginx. ' + (needsModernization ? 'This opts into replacing node-sass with Sass, updating legacy Webpack 5, and refreshing Ruby gems within Gemfile constraints inside the build only. ' : '') + 'Repository manifests stay unchanged. Save now, redeploy to apply.',
+    confirmLabel: 'Save build setup'
+  });
+  if (!ok || currentApp !== id) return;
+  try {
+    const r = await (await fetch(`/api/apps/${id}/services/${name}/build-profile`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modernize: needsModernization }) })).json();
+    toast(r.ok ? 'Jekyll build saved — redeploy to apply' : (r.error || 'failed'), !!r.ok);
+    await refreshSiteData(id);
+  } catch (e) { toast('build setup failed: ' + e.message, false); }
+}
 function fillService(sub, type) {
+  document.getElementById('svcModernBuild').checked = false;
   document.getElementById('svcSub').value = sub;
   document.getElementById('svcName').value = sub.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'web';
   if (type) document.getElementById('svcType').value = type;
@@ -1963,10 +2008,12 @@ function scheduleServiceCheck() {
       const q = new URLSearchParams({ name, subdir, type: document.getElementById('svcType').value });
       const r = await (await fetch(`/api/apps/${appId}/services/check?${q}`)).json();
       if (seq !== serviceCheckSeq || appId !== currentApp) return;
-      btn.disabled = !r.ok || !!r.needsDockerfile;
+      const modern = r.buildProfile && r.buildProfile.needsModernization;
+      document.getElementById('svcModernBuildRow').style.display = modern ? 'flex' : 'none';
+      btn.disabled = !r.ok || !!r.needsDockerfile || (modern && !document.getElementById('svcModernBuild').checked);
       if (r.ok && r.needsDockerfile)
         showStandardDockerfile(out, `${r.subdir} was detected as ${r.type}, but it needs a Dockerfile.`);
-      else out.textContent = r.ok ? `Ready: ${r.subdir} will run as ${r.type}.` : (r.error || 'folder cannot be added');
+      else out.textContent = r.ok ? modern && !document.getElementById('svcModernBuild').checked ? 'Enable build-only modernization for this static site.' : `Ready: ${r.subdir} will run as ${r.type}.` : (r.error || 'folder cannot be added');
     } catch (e) {
       if (seq !== serviceCheckSeq || appId !== currentApp) return;
       out.textContent = 'could not validate folder';
@@ -1982,7 +2029,8 @@ async function addService() {
   const body = {
     name: document.getElementById('svcName').value.trim().toLowerCase(),
     subdir: document.getElementById('svcSub').value.trim(),
-    type: document.getElementById('svcType').value
+    type: document.getElementById('svcType').value,
+    modernizeBuild: document.getElementById('svcModernBuild').checked
   };
   const r = await (await fetch(`/api/apps/${currentApp}/services`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
   toast(r.ok ? (`service ${body.name} added as ${r.type || body.type}${r.correctedFrom ? ` (corrected from ${r.correctedFrom})` : ''} - redeploy to start it`) : (r.error || 'failed'), !!r.ok);
@@ -1990,6 +2038,8 @@ async function addService() {
     document.getElementById('svcName').value = '';
     document.getElementById('svcSub').value = '';
     document.getElementById('svcType').value = 'auto';
+    document.getElementById('svcModernBuild').checked = false;
+    document.getElementById('svcModernBuildRow').style.display = 'none';
     check.textContent = 'Enter a unique name and an existing repository subfolder.';
   } else {
     const msg = r.error || 'service could not be added';

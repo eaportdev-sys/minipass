@@ -82,6 +82,19 @@ Websites → `+ Create` → name, type (or auto-detect), optional repo/branch/su
 optional database. The panel scaffolds `/srv/apps/<id>/` (`code/`, `.env`,
 `docker-compose.yml`) and builds in the background.
 
+Jekyll repositories (`Gemfile` + `_config.yml` and Jekyll markers) are detected as
+**Static**, including those with a Webpack `package.json`. Their standard build
+uses Ruby 3.3 + Node 24, then nginx serves `_site/` (or the declared destination).
+Declared Node/Ruby versions are shown, not silently downgraded to obsolete runtimes.
+For legacy builds, **Modernize legacy build dependencies** explicitly replaces
+direct `node-sass` with Sass, updates old Webpack 5, and refreshes Ruby gems within
+Gemfile constraints **inside the build stage only**. Repository manifests and
+lockfiles remain unchanged; custom Dockerfiles are never replaced. This is a
+bounded compatibility adapter, not a guarantee for every old dependency or plugin.
+Explicit `node-sass` CLI scripts require a repository migration first.
+Previously misclassified sites can use **Setup → Use Jekyll static build**, then
+redeploy. Plain HTML sites and the other standard templates are unchanged.
+
 ### 2 · Push to deploy over SSH (no GitHub needed)
 
 On the site's **Deploy** tab → *Push from your machine* → **enable local git push**.

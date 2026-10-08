@@ -506,6 +506,9 @@ a { color: var(--accent); }
 .create-dialog .typepill:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .create-dialog .create-databases { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 8px; }
 .create-db-note { padding: 9px 10px; border-left: 3px solid var(--warn); background: var(--input); border-radius: 4px; overflow-wrap: anywhere; }
+.create-build-profile { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 8px; }
+.create-dialog #createModernBuild { width: auto; margin: 0; }
+.service-build-profile { margin-bottom: 12px; padding: 9px; border: 1px solid var(--border); border-radius: 8px; }
 .create-dialog .create-docker-action { padding: 10px; font-size: 12px; }
 .create-footer { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 22px; border-top: 1px solid var(--border); }
 .create-footer .modalbtns { margin: 0; flex-shrink: 0; }
