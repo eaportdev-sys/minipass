@@ -41,7 +41,7 @@ const reserve = (id, bytes) => request('POST', siteRoute(id), { limitBytes: byte
 const usage = id => request('GET', siteRoute(id));
 const release = id => request('DELETE', siteRoute(id));
 async function ensure(meta) {
-  if (!meta.storageQuota) return;
+  if (!meta.storageQuota || !meta.storageQuota.projectId) return; // legacy or recorded-but-unenforced: nothing to verify
   const current = await usage(meta.id);
   if (!current.enforced || current.projectId !== meta.storageQuota.projectId || current.limitBytes !== meta.storageQuota.limitBytes) throw Object.assign(new Error('site storage quota is not enforced or differs from its saved allowance; repair host quota setup before continuing'), { status: 503 });
 }

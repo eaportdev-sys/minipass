@@ -142,8 +142,10 @@ This checks the device and filesystem before/after enabling features; it never
 formats, partitions, resizes or forces repairs, and refuses mounted devices.
 Boot normally, rerun the installer to add `prjquota` to the matching `/etc/fstab`
 entry (backup retained), and reboot during maintenance if requested. No automatic
-reboot or live root remount happens. Unsupported/unready hosts reject new quota
-site creation; an entered number is never advertised as enforcement by itself.
+reboot or live root remount happens. Unsupported/unready hosts still allow site
+creation, but the requested allowance is recorded as NOT enforced (Overview
+says so plainly) until quota setup completes; an entered number is never
+advertised as enforcement by itself.
 
 On a prepared Ubuntu host, explicitly verify root and database-container hard
 limits, Trash retention and cleanup with synthetic temporary files:

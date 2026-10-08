@@ -1116,7 +1116,10 @@ async function createApp() {
   buildBtn.disabled = false;
   cancelBtn.disabled = false;
   refresh();
-  if (!r.error) closeCreate(true);
+  if (!r.error) {
+    if (r.storageWarning) toast('Site created, but the storage allowance is NOT enforced on this host: ' + r.storageWarning, false);
+    closeCreate(true);
+  }
 }
 async function detectType() {
   const session = createModalSession;
@@ -1349,10 +1352,10 @@ async function loadCreateStorage() {
     const r = await (await fetch('/api/panel/storage')).json();
     if (session !== createModalSession) return;
     createStorageAvailable = r.ready && Number.isFinite(r.availableBytes) ? r.availableBytes : null;
-    state.textContent = r.ready ? `${storageSize(r.availableBytes)} available for new allowances, after existing allocations, Trash and host headroom.` : (r.error || 'Host quota setup is not ready. Run the Linux installer.');
+    state.textContent = r.ready ? `${storageSize(r.availableBytes)} available for new allowances, after existing allocations, Trash and host headroom.` : ((r.error || 'Host quota setup is not ready.') + ' The allowance will be recorded but NOT enforced until quota setup completes.');
     updateCreateStorageHint();
   } catch {
-    if (session === createModalSession) state.textContent = 'Host quota setup unavailable. Run the Linux installer before creating a quota-managed site.';
+    if (session === createModalSession) state.textContent = 'Host quota setup unavailable. The allowance will be recorded but NOT enforced until the Linux installer completes quota setup.';
   }
 }
 function resetCreateForm() {

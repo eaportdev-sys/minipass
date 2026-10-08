@@ -544,14 +544,26 @@ app.post('/api/apps', async (req, res) => {
     }
     const dbs = normDbs(req.body.dbs !== undefined ? req.body.dbs : db);
     const subdir = String(req.body.subdir || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '') || '';
-    const storageQuota = await quotas.reserve(id, storageBytes);
-    if (!storageQuota.enforced) throw Object.assign(new Error('host did not confirm an enforced storage allowance'), { status: 503 });
-    fs.writeFileSync(path.join(appDir(APPS_DIR, id), '.storage-quota.json'), JSON.stringify({ projectId: storageQuota.projectId, limitBytes: storageBytes }), { mode: 0o600 });
+    // Requested allowance is always validated and recorded. When the host
+    // quota bridge is unavailable, creation proceeds unenforced rather than
+    // bricking site creation - the UI labels it honestly as not enforced.
+    // Only validation (400) and capacity (409) failures stay hard.
+    let storageQuota = null, storageWarning = null;
+    try {
+      const reserved = await quotas.reserve(id, storageBytes);
+      if (!reserved.enforced) throw Object.assign(new Error('host did not confirm an enforced storage allowance'), { status: 503 });
+      storageQuota = { projectId: reserved.projectId, limitBytes: storageBytes, enforced: true };
+    } catch (e) {
+      if (e && (e.status === 400 || e.status === 409)) throw e;
+      storageWarning = e.message;
+      storageQuota = { projectId: null, limitBytes: storageBytes, enforced: false };
+    }
     const created = createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain: appDomain, hostPort, gitToken: siteToken, subdir, gitBranch: explicitBranch, standardDockerfile: req.body.standardDockerfile === true, modernizeBuild: req.body.modernizeBuild === true });
+    fs.writeFileSync(path.join(created.dir, '.storage-quota.json'), JSON.stringify({ projectId: storageQuota.projectId, limitBytes: storageBytes }), { mode: 0o600 });
     quotas.bindDatabases(created.dir);
     envSetManaged(created.dir, { COMPOSE_PROJECT_NAME: id });
     const db_ = load();
-    const meta = { id, type: created.type || type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: appDomain, token, hostPort, subdir: created.subdir || '', storageQuota: { projectId: storageQuota.projectId, limitBytes: storageBytes }, buildOptions: { modernize: req.body.modernizeBuild === true }, createdAt: new Date().toISOString() };
+    const meta = { id, type: created.type || type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: appDomain, token, hostPort, subdir: created.subdir || '', storageQuota, buildOptions: { modernize: req.body.modernizeBuild === true }, createdAt: new Date().toISOString() };
     // Capture repository env sources before the first deploy. Never fail an
     // otherwise valid create solely because the private snapshot could not be written.
     try { applyEnvDefaults(meta, created.dir, req.hostname, req.protocol); }
@@ -563,7 +575,7 @@ app.post('/api/apps', async (req, res) => {
     const webhookNote = ghLink ? 'github linked - automation disabled' : 'no github automation';
     // build async so UI returns fast (goes through deploy() so it lands in deploy.log)
     deploy(id).catch(e => console.error(id, e.message));
-    res.json({ ...pubApp(meta), localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote });
+    res.json({ ...pubApp(meta), localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote, storageEnforced: storageQuota.enforced === true, ...(storageWarning ? { storageWarning } : {}) });
   } catch (e) {
     const error = redactUrl(e.message);
     const needsDockerfile = /no Dockerfile in build context and type/i.test(error);
@@ -1181,8 +1193,12 @@ app.get('/api/apps/:id/storage', async (req, res) => {
     pending = (async () => {
       const report = await storage.measureStorage({ id: meta.id, dir: appDir(APPS_DIR, meta.id) });
       if (meta.storageQuota) {
-        try { report.quota = await quotas.usage(meta.id); }
-        catch (e) { report.quota = { ...meta.storageQuota, enforced: false, error: e.message }; }
+        if (!meta.storageQuota.projectId) {
+          report.quota = { ...meta.storageQuota, enforced: false, error: 'Recorded allowance is not enforced on this host yet - complete quota setup to enforce it.' };
+        } else {
+          try { report.quota = await quotas.usage(meta.id); }
+          catch (e) { report.quota = { ...meta.storageQuota, enforced: false, error: e.message }; }
+        }
       }
       return report;
     })();
@@ -2867,7 +2883,7 @@ async function destroyTrashRecord(record, selected) {
       save(before);
       const cleanup = await trashLib.destroySite({ record, trashRoot: TRASH_DIR, images,
         protectedImages: [...Object.values(require('./lib/generator').DB_IMAGES), ...dbTools.IMAGES, 'minipass-panel:latest'], ...trashOptions() });
-      if (record.storageQuota) await quotas.release(record.id);
+      if (record.storageQuota && record.storageQuota.projectId) await quotas.release(record.id);
       const fresh = load();
       fresh.trash = (fresh.trash || []).filter(t => trashKey(t) !== trashKey(record));
       save(fresh);
@@ -2940,7 +2956,9 @@ app.post('/api/panel/scan', (req, res) => {
       const quotaFile = path.join(dir, '.storage-quota.json');
       if (fs.existsSync(quotaFile)) {
         storageQuota = JSON.parse(fs.readFileSync(quotaFile, 'utf8'));
-        if (!Number.isInteger(storageQuota.projectId) || !Number.isSafeInteger(storageQuota.limitBytes)) throw new Error('invalid recovered storage allowance for ' + name);
+        if (!Number.isSafeInteger(storageQuota.limitBytes)) throw new Error('invalid recovered storage allowance for ' + name);
+        if (storageQuota.projectId !== null && storageQuota.projectId !== undefined && !Number.isInteger(storageQuota.projectId)) throw new Error('invalid recovered storage allowance for ' + name);
+        storageQuota = { projectId: storageQuota.projectId || null, limitBytes: storageQuota.limitBytes, enforced: !!storageQuota.projectId };
       }
       db_.apps.push({
         id: name, type: env.APP_TYPE || 'static', repoUrl: '',
