@@ -148,11 +148,58 @@ class Tests(unittest.TestCase):
         self.assertEqual(prepare.fstab_with_quota(updated, '/'), (updated, False))
 
     def test_installer_does_not_modify_mounted_feature_flags(self):
-        with patch.object(prepare, 'run', side_effect=[json.dumps({'filesystems': [{**self.mount, 'options': 'rw'}]}), 'Filesystem features: has_journal extent\n']) as run:
+        def fake_run(args):
+            if args[0] == 'findmnt':
+                return json.dumps({'filesystems': [{**self.mount, 'target': '/', 'options': 'rw'}]})
+            if args[0] == 'tune2fs':
+                return 'Filesystem features: has_journal extent\n'
+            if args[0] == 'vgs':
+                return ''
+            if args[0] == 'pvs':
+                return ''
+            if args[0] == 'lsblk':
+                return json.dumps({'blockdevices': []})
+            raise AssertionError('unexpected host command: ' + ' '.join(args))
+        with patch.object(prepare, 'run', side_effect=fake_run) as run:
             item = prepare.setup(str(self.apps), str(self.root))
             self.assertFalse(item['ready'])
-            self.assertIn('offline setup', item['message'])
+            self.assertIn('unallocated', item['message'])
+            self.assertIn('unenforced', item['message'])
             self.assertFalse(any('-O' in call.args[0] for call in run.call_args_list))
+
+    def test_provision_source_prefers_vg_free_then_spares(self):
+        self.assertEqual(prepare.choose_source({'ubuntu-vg': 60000000000}, ['/dev/sdb']), ('vg', 'ubuntu-vg'))
+        self.assertEqual(prepare.choose_source({}, ['/dev/sdb']), ('device', '/dev/sdb'))
+        self.assertEqual(prepare.choose_source({'ubuntu-vg': 1000}, []), (None, None))
+
+    def test_fstab_mount_entry_idempotent(self):
+        text = 'UUID=root / ext4 defaults 0 1\n'
+        updated, changed = prepare.fstab_set_mount(text, 'UUID=abc', '/srv/apps')
+        self.assertTrue(changed)
+        self.assertIn('UUID=abc /srv/apps ext4 defaults,prjquota 0 2', updated)
+        self.assertEqual(prepare.fstab_set_mount(updated, 'UUID=abc', '/srv/apps'), (updated, False))
+        replaced, changed = prepare.fstab_set_mount(updated, 'UUID=xyz', '/srv/apps')
+        self.assertTrue(changed)
+        self.assertIn('UUID=xyz /srv/apps', replaced)
+        self.assertNotIn('UUID=abc /srv/apps', replaced)
+
+    def test_unused_devices_skips_mounted_and_pv(self):
+        listing = {'blockdevices': [
+            {'name': 'sda', 'type': 'disk', 'fstype': None, 'mountpoint': None, 'size': 100000000000, 'children': [
+                {'name': 'sda1', 'type': 'part', 'fstype': 'ext4', 'mountpoint': '/', 'size': 50000000000},
+                {'name': 'sda2', 'type': 'part', 'fstype': None, 'mountpoint': None, 'size': 50000000000}]},
+            {'name': 'sdb', 'type': 'disk', 'fstype': None, 'mountpoint': None, 'size': 20000000000, 'children': []}]}
+        with patch.object(prepare, 'run', side_effect=[json.dumps(listing), '  /dev/sda1 ubuntu-vg\n']):
+            spares = prepare.unused_devices()
+        self.assertEqual(spares, ['/dev/sda2', '/dev/sdb'])
+
+    def test_migration_gate_blocks_running_containers(self):
+        (self.apps / 'site').mkdir()
+        (self.apps / 'site' / 'code').mkdir()
+        with patch.object(prepare.subprocess, 'check_output', return_value='abc123\n'):
+            allowed, reason = prepare.migration_allowed(str(self.apps))
+        self.assertFalse(allowed)
+        self.assertIn('Stop', reason)
 
     def test_offline_setup_refuses_mounted_devices_before_commands(self):
         device = types.SimpleNamespace(st_mode=stat.S_IFBLK, st_rdev=2051)

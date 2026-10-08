@@ -129,10 +129,36 @@ The panel talks over `/srv/panel-data/storage-quotas.sock` (0600); it is not mad
 privileged and never gets host block devices. Preserve/backup
 `/srv/panel-data/storage-quota-state.json` alongside panel metadata.
 
-If ext4 lacks `project`/`quota` features, the installer reports **offline setup
-required** rather than changing a mounted root filesystem. Take a backup/VM
-snapshot, copy `host/prepare-storage.py` into your rescue/live environment, and
-run it there with the actual ext4 device **unmounted**:
+#### Disk sizing (system vs storage)
+
+Minipass is designed for a dedicated VM/standalone host with one disk split in two:
+
+| Disk | System — root LV | Site storage (`/srv/apps`) | Example fit |
+| --- | --- | --- | --- |
+| 40 GB min | 30 GB | ~10 GB | one small site + Trash |
+| 100 GB | 50 GB | ~50 GB | e.g. four 10 GB sites |
+| 200 GB+ | 50 GB | rest | scale site count/size to taste |
+
+System covers Ubuntu, Docker, the panel image, all container images, build
+cache and logs — container images and build cache stay on the system disk by
+design. Site storage covers per-site files + managed database data under one
+enforced allowance each, plus 48-hour Trash retention and a 2 GiB host reserve.
+
+Fresh-install recipe (single disk): in the Ubuntu installer's custom storage
+layout, give root a fixed LV (e.g. 50 GB of 100 GB) and **leave the rest
+unallocated in the VG**. The minipass installer then creates the storage volume
+from the free extents with quota features baked in at format time, mounts
+`/srv/apps` (fstab backup retained), migrates any existing site files, and
+enables enforcement — no rescue session, no reboot dance. A spare
+partition or whole disk works the same way if one is attached later. If
+containers are running and site files exist, the installer stops short and says
+so instead of moving data under live containers — stop sites/panel and rerun.
+
+If the whole disk went to root with no free space, the installer reports the
+shortfall and changes nothing: sites keep working with honestly-unenforced
+allowances until space is provided. Last resort on a fully-allocated single
+disk is enabling quota features from a rescue environment with the root device
+**unmounted**:
 
 ```bash
 sudo python3 prepare-storage.py --offline /dev/your-ext4-device
