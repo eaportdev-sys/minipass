@@ -1025,44 +1025,51 @@ async function detectType() {
   const session = createModalSession;
   const request = ++createDetectRequest;
   const sel = document.getElementById('ghrepo');
-  const opt = sel.selectedOptions.length ? sel.selectedOptions[0] : null;
+  const state = document.getElementById('createDetectState');
+  const dbNote = document.getElementById('dbDetectNote');
+  dbNote.style.display = 'none';
+  dbNote.textContent = '';
+  document.getElementById('subdirHint').style.display = 'none';
+  state.title = '';
   let repo = sel.value;
   // create flow prefers its own fresh token but never requires one: public
   // repos detect fine without it (shared unauthenticated quota, no account used)
   const token = document.getElementById('ghModalToken').value.trim();
   if (!repo) {
     const m = document.getElementById('repo').value.trim().match(/github\.com[:/]([^/]+)\/([^/]+?)(\.git)?\/?$/i);
-    if (!m) return;
+    if (!m) {
+      state.textContent = 'Auto-detect from GitHub, or select manually.';
+      return;
+    }
     repo = m[1] + '/' + m[2];
   }
+  state.textContent = 'Detecting runtime and databases…';
   try {
     const r = await (await fetch('/api/github/detect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(token ? { repo, token } : { repo }) })).json();
     if (session !== createModalSession || request !== createDetectRequest) return;
     if (r.type) {
       const radio = document.querySelector(`input[name=apptype][value=${r.type}]`);
       if (radio) radio.checked = true;
-      let msg = 'detected ' + r.type + ' (' + r.reason + ')';
-      if (r.dbs && r.dbs.length) {
-        document.querySelectorAll('input[name=appdb]').forEach(c => { c.checked = r.dbs.includes(c.value); });
-        msg += ' + db: ' + r.dbs.join('+');
-      }
-      const dbNote = document.getElementById('dbDetectNote');
-      if (dbNote) {
-        if (r.dbNote) { dbNote.style.display = 'block'; dbNote.textContent = r.dbNote; }
-        else { dbNote.style.display = 'none'; dbNote.textContent = ''; }
-      }
-      toast(msg);
+      const dbs = r.dbs || [];
+      document.querySelectorAll('input[name=appdb]').forEach(c => { c.checked = dbs.includes(c.value); });
+      const types = { static: 'Static', react: 'React', node: 'Node.js', php: 'PHP' };
+      state.textContent = `Detected ${types[r.type] || r.type}${dbs.length ? ' + ' + dbs.join(', ') : ''}. Check the selections below.`;
+      state.title = r.reason || '';
+      if (r.dbNote) { dbNote.style.display = 'block'; dbNote.textContent = r.dbNote; }
     } else {
-      toast((r.detected ? r.detected + ' has no template yet. ' : 'could not detect type. ') + (r.reason || r.error || ''), false);
+      state.textContent = r.error || (r.detected ? `No template for ${r.detected}.` : 'Detection unavailable. Select the runtime manually.');
+      state.title = r.reason || '';
     }
     const hint = document.getElementById('subdirHint');
     const fb = (r.frontends || []).map(f => `<button onclick="setSubdir('${f}', 'react')">${f} (web)</button>`).join(' ');
     const bb = (r.backends || []).map(b => `<button onclick="setSubdir('${b}', 'node')">${b} (api)</button>`).join(' ');
     if (fb || bb) {
       hint.style.display = 'block';
-      hint.innerHTML = 'repo folders: ' + fb + ' ' + bb;
+      hint.innerHTML = 'Choose a build folder: ' + fb + ' ' + bb;
     } else hint.style.display = 'none';
-  } catch {}
+  } catch {
+    if (session === createModalSession && request === createDetectRequest) state.textContent = 'Detection unavailable. Select the runtime manually.';
+  }
 }
 function setSubdir(f, type) {
   createStandardDockerfile = false;
@@ -1137,14 +1144,14 @@ async function modalListRepos() {
   if (!token) { toast('paste a token first', false); return; }
   const button = document.getElementById('ghModalConnect');
   button.disabled = true;
-  button.textContent = 'connecting…';
+  button.textContent = 'Loading…';
   let r;
   try {
     r = await (await fetch('/api/github/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })).json();
   } catch (e) { r = { error: e.message }; }
   if (session !== createModalSession || request !== createConnectRequest) return;
   button.disabled = false;
-  button.textContent = 'connect';
+  button.textContent = 'List repos';
   if (r.error) { toast(r.error, false); return; }
   modalLogin = r.login;
   const sel = document.getElementById('ghrepo');
@@ -1152,7 +1159,8 @@ async function modalListRepos() {
     `<option value="${x.full_name}" data-login="${r.login}">${x.full_name}${x.private ? ' (private)' : ''}</option>`).join('');
   document.getElementById('ghRepoRow').style.display = 'block';
   const nm = document.getElementById('name').value.trim() || 'the new site';
-  document.getElementById('ghStoreNote').textContent = `Stored on "${nm}" only — never shared, never pooled.`;
+  document.getElementById('ghStoreNote').textContent = `Saved to ${nm} only.`;
+  document.getElementById('ghConnState').textContent = `Connected as ${r.login}. Choose a repository.`;
   toast('token ok as ' + r.login + ' - pick a repo');
 }
 async function ghDisconnect(login) {
@@ -1176,6 +1184,7 @@ function accessChanged() {
   const accessEl = document.querySelector('input[name=access]:checked');
   const isDomain = accessEl && accessEl.value === 'domain';
   document.getElementById('domain').style.display = isDomain ? 'block' : 'none';
+  document.getElementById('createAccessNote').textContent = isDomain ? 'Configure DNS and a reverse proxy or tunnel.' : 'Use the assigned port on this host.';
   // OAuth redirect only exists on the public path - hide it on localhost
   const ob = document.getElementById('oauthBtnRow');
   if (ob) ob.style.display = isDomain ? 'block' : 'none';
@@ -1183,6 +1192,8 @@ function accessChanged() {
 function openCreate() {
   resetCreateForm();
   document.getElementById('modal').classList.add('open');
+  document.getElementById('modal').querySelector('.create-body').scrollTop = 0;
+  document.getElementById('name').focus();
 }
 function resetCreateForm() {
   createModalSession++;
@@ -1208,10 +1219,13 @@ function resetCreateForm() {
   if (dbNote) { dbNote.style.display = 'none'; dbNote.textContent = ''; }
   document.getElementById('ghRepoRow').style.display = 'none';
   document.getElementById('ghConnectRow').style.display = 'block';
-  document.getElementById('ghConnState').textContent = 'paste a fresh token for this site';
-  document.getElementById('ghStoreNote').textContent = 'This token will be stored on the new site only — never shared, never pooled.';
+  document.getElementById('createGitDetails').open = false;
+  document.getElementById('createDetectState').textContent = 'Auto-detect from GitHub, or select manually.';
+  document.getElementById('createDetectState').title = '';
+  document.getElementById('ghConnState').textContent = 'Paste a site-only token.';
+  document.getElementById('ghStoreNote').textContent = 'Saved to this site only.';
   document.getElementById('ghModalConnect').disabled = false;
-  document.getElementById('ghModalConnect').textContent = 'connect';
+  document.getElementById('ghModalConnect').textContent = 'List repos';
   document.getElementById('createBuildBtn').disabled = false;
   document.getElementById('createCancelBtn').disabled = false;
   document.getElementById('createDockerAction').style.display = 'none';

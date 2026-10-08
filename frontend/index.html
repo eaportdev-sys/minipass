@@ -323,59 +323,74 @@
     </section>
   </main>
 </div>
-<div id="modal" class="modal"><div class="modalbox">
-  <h2>New website</h2>
-  <div class="msec"><div class="mlabel">1 · Name</div><input id="name" placeholder="knex-demo (not the repository URL)"></div>
-  <div class="msec"><div class="mlabel">2 · Access</div>
-  <div class="meta">Decides how git connects: localhost → token or SSH key. Custom domain (public via DNS + tunnel) → those plus OAuth redirect.</div>
-  <label class="radiorow"><input type="radio" name="access" value="local" checked onchange="accessChanged()"> <b>Localhost</b> <span class="meta">auto port 8000+, works immediately</span></label>
-  <label class="radiorow"><input type="radio" name="access" value="domain" onchange="accessChanged()"> <b>Custom domain</b> <span class="meta">needs DNS + tunnel</span></label>
-  <input id="domain" placeholder="app.example.com" style="display:none">
+<div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="createTitle"><div class="modalbox create-dialog">
+  <header class="create-header"><h2 id="createTitle">New website</h2><div class="meta">Choose a source. Check the runtime and databases. Build.</div></header>
+  <div class="create-body">
+    <section class="create-identity">
+      <label for="name">Website name<input id="name" placeholder="my-site" autocomplete="off"></label>
+      <div>
+        <div class="mlabel">Access</div>
+        <div class="create-access">
+          <label class="radiorow"><input type="radio" name="access" value="local" checked onchange="accessChanged()"> Local / LAN</label>
+          <label class="radiorow"><input type="radio" name="access" value="domain" onchange="accessChanged()"> Custom domain</label>
+        </div>
+        <input id="domain" aria-label="Custom domain" placeholder="app.example.com" style="display:none">
+        <div id="createAccessNote" class="meta">Use the assigned port on this host.</div>
+      </div>
+    </section>
+    <div class="create-grid">
+      <section class="create-section">
+        <h3>Source</h3>
+        <label for="repo">Repository URL <span class="meta">optional</span></label>
+        <input id="repo" placeholder="https://github.com/owner/repo" onchange="detectType()">
+        <div class="meta">Paste a public URL. Leave blank to use a template.</div>
+        <details id="createGitDetails" class="create-details">
+          <summary>Private repository / GitHub token</summary>
+          <div class="meta" id="ghConnState">Paste a site-only token.</div>
+          <div id="ghConnectRow" style="display:none">
+            <div class="create-token-row"><input id="ghModalToken" type="password" aria-label="Site GitHub token" placeholder="github_pat_…" autocomplete="new-password"><button id="ghModalConnect" onclick="modalListRepos()">List repos</button></div>
+            <div class="meta"><a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener noreferrer">Create a token</a>: Contents read; Webhooks read/write for automation.</div>
+            <div class="meta" id="ghStoreNote">Saved to this site only.</div>
+            <div id="oauthBtnRow" style="display:none"><button onclick="ghConnect()">Connect with OAuth</button><div class="meta">Configure an HTTPS callback first.</div></div>
+          </div>
+          <div class="meta">For SSH, add this site's deploy key to the repository.</div>
+        </details>
+        <div id="ghRepoRow" style="display:none"><label for="ghrepo">GitHub repository</label><select id="ghrepo" onchange="detectType()"><option value="">GitHub repo…</option></select></div>
+        <div class="create-source-options">
+          <label for="branch">Branch<input id="branch" placeholder="default branch"></label>
+          <label for="subdir">Build folder<input id="subdir" placeholder="repo root"></label>
+        </div>
+        <div class="meta" id="subdirHint" style="display:none"></div>
+      </section>
+      <section class="create-section">
+        <h3>Runtime &amp; data</h3>
+        <div id="createDetectState" class="meta" role="status">Auto-detect from GitHub, or select manually.</div>
+        <div class="mlabel">Runtime</div>
+        <div class="typerow">
+          <label class="typepill"><input type="radio" name="apptype" value="static" checked><b>Static</b></label>
+          <label class="typepill"><input type="radio" name="apptype" value="react"><b>React</b></label>
+          <label class="typepill"><input type="radio" name="apptype" value="node"><b>Node.js</b></label>
+          <label class="typepill"><input type="radio" name="apptype" value="php"><b>PHP</b></label>
+        </div>
+        <div class="mlabel">Managed databases <span class="meta">optional</span></div>
+        <div class="typerow create-databases">
+          <label class="typepill"><input type="checkbox" name="appdb" value="postgres"><b>Postgres</b></label>
+          <label class="typepill"><input type="checkbox" name="appdb" value="mysql"><b>MySQL</b></label>
+          <label class="typepill"><input type="checkbox" name="appdb" value="mariadb"><b>MariaDB</b></label>
+          <label class="typepill"><input type="checkbox" name="appdb" value="mongo"><b>MongoDB</b></label>
+          <label class="typepill"><input type="checkbox" name="appdb" value="redis"><b>Redis</b></label>
+        </div>
+        <div class="meta">Check the suggestions. Add or remove databases as needed.</div>
+        <div class="meta create-db-note" id="dbDetectNote" role="status" style="display:none"></div>
+      </section>
+    </div>
+    <div id="createDockerAction" class="create-docker-action" style="display:none">
+      <div class="create-docker-copy"><b>Dockerfile required</b><span>Add the standard Dockerfile and retry. Existing Dockerfiles stay unchanged.</span></div>
+      <button class="btn primary" onclick="useCreateStandardDockerfile()">Use standard Dockerfile</button>
+    </div>
+    <pre id="out" class="compact-output"></pre>
   </div>
-  <div class="msec"><div class="mlabel">3 · Connect to git</div>
-  <div class="meta" id="ghConnState">checking…</div>
-  <div id="ghConnectRow" style="display:none">
-    <div id="oauthBtnRow" style="display:none"><button onclick="ghConnect()">connect via oauth redirect</button>
-    <div class="meta">Only works on the custom-domain path (GitHub rejects plain-http callbacks).</div></div>
-    <button onclick="window.open('https://github.com/settings/tokens?type=beta','_blank')">connect github</button>
-    <div class="meta">Sign in if asked → Generate new token (fine-grained) → Contents <b>read-only</b> + Webhooks <b>read+write</b> → copy, paste here:</div>
-    <input id="ghModalToken" type="password" placeholder="github_pat_…" autocomplete="new-password" style="width:220px">
-    <button id="ghModalConnect" onclick="modalListRepos()">connect</button>
-    <div class="meta" id="ghStoreNote">This token will be stored on the new site only — never shared, never pooled.</div></div>
-  </div>
-  <div class="msec"><div class="mlabel">4 · Code source</div>
-  <div id="ghRepoRow" style="display:none">
-  <div class="meta">Pick a repo — type + databases below set themselves:</div>
-  <select id="ghrepo" onchange="detectType()"><option value="">GitHub repo…</option></select>
-  </div>
-  <input id="repo" placeholder="…or paste git url (public repos need no token; private: SSH + repo key, or HTTPS with token)" onchange="detectType()">
-  <input id="branch" placeholder="branch (default repo branch)" style="width:220px">
-  <div class="meta" id="subdirHint" style="display:none"></div>
-  <input id="subdir" placeholder="subfolder for monorepos (e.g. eaport-web)">
-  <div class="meta">Leave everything empty to start from a template and upload files later.</div>
-  </div>
-  <div class="msec"><div class="mlabel">5 · Type</div>
-  <div class="typerow">
-    <label class="typepill"><input type="radio" name="apptype" value="static" checked><b>Static</b>html / files</label>
-    <label class="typepill"><input type="radio" name="apptype" value="react"><b>React</b>build + serve</label>
-    <label class="typepill"><input type="radio" name="apptype" value="node"><b>Node.js</b>server app</label>
-    <label class="typepill"><input type="radio" name="apptype" value="php"><b>PHP</b>apache app</label>
-  </div></div>
-  <div class="msec"><div class="mlabel">6 · Databases (auto-suggested, adjust freely)</div>
-  <div class="typerow">
-    <label class="typepill"><input type="checkbox" name="appdb" value="postgres"><b>Postgres</b>sql db</label>
-    <label class="typepill"><input type="checkbox" name="appdb" value="mysql"><b>MySQL</b>sql db</label>
-    <label class="typepill"><input type="checkbox" name="appdb" value="mariadb"><b>MariaDB</b>mysql-compatible</label>
-    <label class="typepill"><input type="checkbox" name="appdb" value="mongo"><b>Mongo</b>nosql db</label>
-    <label class="typepill"><input type="checkbox" name="appdb" value="redis"><b>Redis</b>cache / kv</label>
-  </div>
-  <div class="meta" id="dbDetectNote" style="display:none"></div></div>
-  <div id="createDockerAction" class="create-docker-action" style="display:none">
-    <div class="create-docker-copy"><b>Dockerfile required</b><span>This repository needs a container recipe for the selected app type. Minipass can add its standard one and retry the build.</span><small>Explicit opt-in — an existing repository Dockerfile is never replaced.</small></div>
-    <button class="btn primary" onclick="useCreateStandardDockerfile()">Use standard Dockerfile</button>
-  </div>
-  <div class="modalbtns"><button id="createBuildBtn" class="btn primary" onclick="createApp()">Build</button><button id="createCancelBtn" onclick="closeCreate()">Cancel</button></div>
-  <pre id="out"></pre>
+  <footer class="create-footer"><span class="meta">Enable auto-deploy later in Deploy.</span><div class="modalbtns"><button id="createCancelBtn" onclick="closeCreate()">Cancel</button><button id="createBuildBtn" class="btn primary" onclick="createApp()">Build website</button></div></footer>
 </div></div>
 <div id="toasts"></div>
 <div id="confirmModal" class="modal"><div class="modalbox">
