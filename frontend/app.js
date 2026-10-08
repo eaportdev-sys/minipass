@@ -1528,7 +1528,7 @@ async function toggleSitePower() {
 async function rmApp(id) {
   const ok = await uiConfirm({
     title: 'Delete ' + id + '?',
-    body: 'Containers stop and the site moves to Trash for 48 hours (files and data kept). Permanent destruction happens in Trash or by expiry.',
+    body: 'Containers stop and the site moves to Trash for 48 hours (files and data kept). Destroy or expiry removes its files, database volumes and built images, and clears all unused Docker build cache. Shared images stay.',
     requireText: id, confirmLabel: 'Move to trash', danger: true
   });
   if (!ok) return;
@@ -1538,6 +1538,7 @@ async function rmApp(id) {
   toast('moving ' + id + ' to trash…');
   try {
     const r = await (await fetch('/api/apps/' + id, { method: 'DELETE' })).json();
+    if (!r.ok) throw new Error(r.error || 'site could not be stopped and moved to Trash');
     toast(r.trashed ? (id + ' in trash — restorable for 48h') : (id + ' deleted'), true);
     if (id === currentApp) backToSites(); else refresh();
     loadTrash();
@@ -1559,8 +1560,8 @@ async function loadTrash() {
       const when = (t.deletedAt ? new Date(t.deletedAt).toISOString().replace('T', ' ').slice(0, 19) : '?');
       return `<div class="card appcard"><div class="appcard-layout"><div class="appcard-main">` +
         `<div class="appcard-title"><div><h3>${safeHtml(t.id)}</h3><div class="badges"><span class="badge type">${safeHtml(t.type || '?')}</span><span class="badge">db: ${safeHtml(dbLabel(t))}</span><span class="badge">${safeHtml(trashLeft(t.msLeft))}</span></div></div></div>` +
-        `<div class="meta">deleted ${safeHtml(when)} · destroys itself ${safeHtml((t.restoreBy || '?').replace('T', ' ').slice(0, 19))}</div></div>` +
-        `<div class="appcard-actions"><button class="btn primary" onclick="restoreTrash('${safeHtml(t.id)}')">restore</button><button class="btn danger" onclick="destroyTrash('${safeHtml(t.id)}')">delete forever</button></div>` +
+        `<div class="meta">deleted ${safeHtml(when)} · cleanup due ${safeHtml((t.restoreBy || '?').replace('T', ' ').slice(0, 19))}</div>${t.cleanupError ? `<div class="meta trash-cleanup-error">Cleanup incomplete: ${safeHtml(t.cleanupError)}</div>` : ''}</div>` +
+        `<div class="appcard-actions"><button class="btn primary" onclick="restoreTrash('${safeHtml(t.id)}')" ${t.cleanupStartedAt || t.msLeft === 0 ? 'disabled' : ''}>restore</button><button class="btn danger" onclick="destroyTrash('${safeHtml(t.id)}')">${t.cleanupStartedAt || t.cleanupError ? 'retry cleanup' : 'delete forever'}</button></div>` +
         `</div></div>`;
     }).join('') : '<div class="card">Trash is empty.</div>';
   } catch { if (box) box.innerHTML = '<div class="card">trash unreachable</div>'; }
@@ -1581,20 +1582,20 @@ async function emptyTrash() {
   if (!count) { toast('trash is already empty'); return; }
   const ok = await uiConfirm({
     title: `Empty trash (${count} site${count === 1 ? '' : 's'})?`,
-    body: 'Every trashed site is permanently destroyed with its data. This cannot be undone.',
+    body: 'Permanently remove every trashed site’s files, database volumes and built images. Also clear all unused Docker build cache; other builds may take longer afterward. Shared images needed elsewhere are kept. This cannot be undone.',
     requireText: 'empty', confirmLabel: 'Empty trash', danger: true
   });
   if (!ok) return;
   try {
     const r = await (await fetch('/api/trash', { method: 'DELETE' })).json();
-    toast(r.ok ? `trash emptied (${(r.destroyed || []).length} destroyed)` : (r.error || 'failed'), !!r.ok);
+    toast(r.ok ? `trash emptied (${(r.destroyed || []).length} destroyed)` : `${(r.destroyed || []).length} destroyed; ${r.error || 'cleanup failed'}`, !!r.ok);
     loadTrash(); refresh();
   } catch (e) { toast('empty failed: ' + e.message, false); }
 }
 async function destroyTrash(id) {
   const ok = await uiConfirm({
     title: 'Destroy ' + id + ' forever?',
-    body: 'Containers, volumes, files and data are removed. This cannot be undone.',
+    body: 'Remove this site’s containers, database volumes, files and built images. Also clear all unused Docker build cache; other builds may take longer afterward. Shared images needed elsewhere are kept. This cannot be undone.',
     requireText: id, confirmLabel: 'Destroy forever', danger: true
   });
   if (!ok) return;

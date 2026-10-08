@@ -104,6 +104,20 @@ cache. Image layers may be shared, and Docker may use a different filesystem;
 these figures are not an exclusive per-site total. No disk quotas are enforced
 yet. Measurements are not included in the 100-site list/status polling loop.
 
+Deleted sites remain in **Trash for 48 hours**. Destroy, Empty trash, and the
+expiry worker use the same awaited cleanup: original Compose project containers,
+managed database volumes/networks, site-built images (including recorded older
+versions), and the site directory. Permanent cleanup also prunes **all unused
+Docker build cache**, so other sites may rebuild more slowly. Shared/tagged
+images still needed elsewhere, the panel image, and cached database/admin images
+are preserved; shared layers are not exclusive site data. No system/image/volume
+prune runs. The expiry worker checks every minute while the panel is running;
+startup retries expired entries. Docker/filesystem failures keep the entry with
+a visible error and retry action instead of reporting success. Once destructive
+cleanup starts, Restore is disabled. A name held in Trash cannot be reused.
+Images orphaned by older releases whose Trash records were already erased are
+not automatically guessed/deleted; those need separately scoped manual cleanup.
+
 ### 2 · Push to deploy over SSH (no GitHub needed)
 
 On the site's **Deploy** tab → *Push from your machine* → **enable local git push**.

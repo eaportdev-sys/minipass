@@ -17,6 +17,7 @@ const envDefaults = require('./lib/env-defaults');
 const tokens = require('./lib/tokens');
 const portsLib = require('./lib/ports');
 const storage = require('./lib/storage');
+const trashLib = require('./lib/trash');
 const { refreshStandardDockerfile, standardDockerfileType } = require('./lib/dockerfiles');
 const { buildProfile, readBuildProfile, localBuildProfile, isJekyll } = require('./lib/build-profile');
 
@@ -33,6 +34,8 @@ try { fs.mkdirSync(TRASH_DIR, { recursive: true }); } catch {}
 fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
 
 const app = express();
+const lifecycleLocks = new Set();
+let trashBusy = false;
 app.use(cors());
 // GitHub push webhook FIRST with a raw body: HMAC verification needs exact bytes,
 // and the global json parser would already have consumed them.
@@ -135,6 +138,10 @@ app.use((req, res, next) => {
   if (PUBLIC_API.has(req.path)) return next();
   if (panelAuthed(req)) return next();
   return res.status(401).json({ error: 'panel login required' });
+});
+app.use('/api/apps/:id', (req, res, next) => {
+  if (!['GET', 'HEAD'].includes(req.method) && lifecycleLocks.has(req.params.id)) return res.status(409).json({ error: 'site lifecycle operation in progress - retry when it finishes' });
+  next();
 });
 app.get('/api/panel/auth-status', (req, res) => {
   const a = loadAuth();
@@ -464,6 +471,8 @@ app.post('/api/apps', async (req, res) => {
     if (/:\/\/|[\\/]/.test(rawName)) return res.status(400).json({ error: 'site name must be short, for example knex-demo; put the repository URL in Code source' });
     const id = rawName.toLowerCase().replace(/[^a-z0-9-]/g, '-');
     if (!id || id.length > 32) return res.status(400).json({ error: 'site name must produce 1–32 letters, numbers, or hyphens' });
+    if (!trashLib.validId(id)) return res.status(400).json({ error: 'site name must start with a letter or number; minipass is reserved for the panel' });
+    if (lifecycleLocks.has(id) || (load().trash || []).some(t => t.id === id)) return res.status(409).json({ error: 'site name is held in Trash - restore it or permanently destroy it before reusing the name' });
     let appDomain;
     try { appDomain = cleanDomain(domain); }
     catch (e) { return res.status(400).json({ error: e.message }); }
@@ -810,6 +819,7 @@ async function autodetectHome(id) {
   } catch (e) { console.error(id, 'autodetect:', e.message); }
 }
 function deploy(id, opts = {}) {
+  if (lifecycleLocks.has(id)) return Promise.reject(new Error('site lifecycle operation in progress'));
   const previous = deployQueues.get(id) || Promise.resolve();
   const run = previous.catch(() => {}).then(() => deployNow(id, opts));
   deployQueues.set(id, run);
@@ -1098,6 +1108,10 @@ async function deployNow(id, opts = {}) {
   autodetectHome(id).catch(e => console.error(id, 'home detection:', e.message));
   return true;
   } finally {
+    try {
+      const retained = load().apps.find(a => a.id === id);
+      if (retained) await trashLib.rememberImages({ id, dir: appDir(APPS_DIR, id), record: retained, docker: DOCKER_BIN, compose: composeArgv() });
+    } catch (e) { console.error(id, 'image inventory unavailable:', e.message); }
     if (localStage) localStage.cleanup();
     deployLocks.delete(id);
     deployOps.delete(id);
@@ -2394,12 +2408,12 @@ app.post('/api/apps/:id/sync-github', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/stop', async (req, res) => {
-  try { dbTools.stopAll(req.params.id); await sh(`${COMPOSE_BIN} stop`, appDir(APPS_DIR, req.params.id)); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  try { await siteLifecycle(req.params.id, async () => { dbTools.stopAll(req.params.id); await sh(`${COMPOSE_BIN} stop`, appDir(APPS_DIR, req.params.id)); }); res.json({ ok: true }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/start', async (req, res) => {
-  try { await sh(`${COMPOSE_BIN} up -d`, appDir(APPS_DIR, req.params.id)); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  try { await siteLifecycle(req.params.id, () => sh(`${COMPOSE_BIN} up -d`, appDir(APPS_DIR, req.params.id))); res.json({ ok: true }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 // Static env-need scan: which vars the repo code actually reads, so missing
 // declarations in .env/.env.example surface before runtime. Read-only, key
@@ -2646,27 +2660,43 @@ app.post('/api/apps/:id/env/defaults', async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+function lifecycleError(message, status = 409) { return Object.assign(new Error(message), { status }); }
+async function siteLifecycle(id, action) {
+  if (lifecycleLocks.has(id) || deployQueues.has(id) || deployLocks.has(id)) throw lifecycleError('wait for the current site operation to finish');
+  lifecycleLocks.add(id);
+  try { return await action(); } finally { lifecycleLocks.delete(id); }
+}
+async function trashOperation(action) {
+  if (trashBusy) throw lifecycleError('another Trash operation is running - retry when it finishes');
+  trashBusy = true;
+  try { return await action(); } finally { trashBusy = false; }
+}
+const trashKey = record => record.trashDir || record.id;
+const trashOptions = () => ({ docker: DOCKER_BIN, compose: composeArgv() });
 app.delete('/api/apps/:id', async (req, res) => {
   // soft delete: containers stop, but volumes and files move to the 48-hour
   // trash hold so an accidental delete is restorable. Permanent destruction
-  // is DELETE /api/trash/:id (typed confirm) or the hourly purge.
+  // is DELETE /api/trash/:id (typed confirm) or the expiry worker.
   try {
-    const db_ = load();
-    if (!Array.isArray(db_.trash)) db_.trash = [];
-    const meta = db_.apps.find(a => a.id === req.params.id);
-    if (!meta) return res.status(404).json({ error: 'unknown app' });
-    const dir = appDir(APPS_DIR, meta.id);
-    dbTools.stopAll(meta.id);
-    await sh(`${COMPOSE_BIN} down`, dir).catch(() => {});
-    let name = meta.id, n = 0;
-    while (fs.existsSync(path.join(TRASH_DIR, name))) { n++; name = `${meta.id}-${Date.now()}-${n}`; }
-    try { fs.renameSync(dir, path.join(TRASH_DIR, name)); }
-    catch (e) { return res.status(500).json({ error: 'could not move site to trash: ' + e.message }); }
-    db_.apps = db_.apps.filter(a => a.id !== meta.id);
-    db_.trash.push({ ...meta, deletedAt: Date.now(), trashDir: name });
-    save(db_);
-    res.json({ ok: true, trashed: true, restoreBy: new Date(Date.now() + TRASH_HOLD_MS).toISOString() });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    await trashOperation(() => siteLifecycle(req.params.id, async () => {
+      const meta = load().apps.find(a => a.id === req.params.id);
+      if (!meta) throw lifecycleError('unknown app', 404);
+      const dir = appDir(APPS_DIR, meta.id);
+      const images = await trashLib.rememberImages({ id: meta.id, dir, record: meta, ...trashOptions() });
+      await trashLib.stopSiteTools({ id: meta.id, ...trashOptions() });
+      await sh(`${COMPOSE_BIN} -p ${meta.id} down`, dir);
+      let name = meta.id, n = 0;
+      while (fs.existsSync(path.join(TRASH_DIR, name))) { n++; name = `${meta.id}-${Date.now()}-${n}`; }
+      fs.renameSync(dir, path.join(TRASH_DIR, name));
+      // Reload after Docker awaits so unrelated deploy/create changes survive.
+      const fresh = load();
+      const latest = fresh.apps.find(a => a.id === meta.id) || meta;
+      fresh.apps = fresh.apps.filter(a => a.id !== meta.id);
+      fresh.trash = [...(fresh.trash || []), { ...latest, deletedAt: Date.now(), trashDir: name, trashImages: images }];
+      save(fresh);
+      res.json({ ok: true, trashed: true, restoreBy: new Date(Date.now() + TRASH_HOLD_MS).toISOString() });
+    }));
+  } catch (e) { res.status(e.status || 500).json({ error: redactUrl(e.message) }); }
 });
 app.get('/api/trash', (req, res) => {
   try {
@@ -2682,18 +2712,21 @@ app.get('/api/trash', (req, res) => {
 });
 app.post('/api/trash/:id/restore', async (req, res) => {
   try {
+    await trashOperation(() => siteLifecycle(req.params.id, async () => {
     const db_ = load();
     if (!Array.isArray(db_.trash)) db_.trash = [];
     const idx = db_.trash.map(t => t.id).lastIndexOf(req.params.id);
     if (idx < 0) return res.status(404).json({ error: 'nothing in trash for ' + req.params.id });
     if (db_.apps.some(a => a.id === req.params.id)) return res.status(409).json({ error: 'a live site already uses this name - delete or rename it first' });
     const record = db_.trash[idx];
-    const from = path.join(TRASH_DIR, record.trashDir || record.id);
+    if (db_.trash.filter(t => t.id === record.id).length > 1) return res.status(409).json({ error: 'multiple Trash generations share this name - use Empty trash to clean them together' });
+    if (record.cleanupStartedAt || Date.now() - record.deletedAt >= TRASH_HOLD_MS) return res.status(410).json({ error: 'retention expired or permanent cleanup started - retry destruction instead' });
+    const from = trashLib.trashPath(TRASH_DIR, record);
     if (!fs.existsSync(path.join(from, 'docker-compose.yml'))) return res.status(410).json({ error: 'trash contents are missing - cannot restore' });
     const dir = appDir(APPS_DIR, record.id);
     try { fs.renameSync(from, dir); }
     catch (e) { return res.status(500).json({ error: 'could not restore site files: ' + e.message }); }
-    const { deletedAt, trashDir, ...meta } = record;
+    const { deletedAt, trashDir, trashImages, cleanupError, cleanupStartedAt, cleanupAttemptAt, ...meta } = record;
     // ports may have been claimed by sites created after the delete - bump
     // them like create does, then rewrite .env + compose before starting.
     const used = hostPortsInUse();
@@ -2711,6 +2744,7 @@ app.post('/api/trash/:id/restore', async (req, res) => {
     }
     for (const s of (meta.services || [])) {
       if (!s.hostPort) continue;
+      if (s.name === 'app' && meta.hostPort) { s.hostPort = meta.hostPort; continue; }
       const p = claim(s.hostPort);
       if (p !== parseInt(s.hostPort, 10)) moved.push({ service: s.name, from: s.hostPort, to: p });
       s.hostPort = p;
@@ -2725,62 +2759,83 @@ app.post('/api/trash/:id/restore', async (req, res) => {
       } catch (e) { console.error(record.id, 'restore port rewrite:', e.message); }
     }
     let restarted = false, restartError = null;
-    try { await sh(`${COMPOSE_BIN} up -d`, dir); restarted = true; }
+    try { await sh(`${COMPOSE_BIN} -p ${meta.id} up -d`, dir); restarted = true; }
     catch (e) { restartError = e.message; }
     try { await markDirty(meta.id, 'restored from trash'); } catch {}
     res.json({ ok: true, restored: true, movedPorts: moved, restarted, restartError });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    }));
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 app.delete('/api/trash/:id', async (req, res) => {
-  // permanent: volumes destroyed, files removed, record dropped.
+  // One shared cleanup pipeline for individual, bulk and expiry destruction.
   try {
-    const db_ = load();
-    if (!Array.isArray(db_.trash)) db_.trash = [];
-    const idx = db_.trash.map(t => t.id).lastIndexOf(req.params.id);
-    if (idx < 0) return res.status(404).json({ error: 'nothing in trash for ' + req.params.id });
-    await destroyTrashRecord(db_.trash[idx]);
-    db_.trash.splice(idx, 1);
-    save(db_);
-    res.json({ ok: true, destroyed: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    await trashOperation(async () => {
+      const records = load().trash || [];
+      const record = records.filter(t => t.id === req.params.id).pop();
+      if (!record) throw lifecycleError('nothing in trash for ' + req.params.id, 404);
+      const cleanup = await destroyTrashRecord(record, new Set([trashKey(record)]));
+      res.json({ ok: true, destroyed: true, cleanup });
+    });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 app.delete('/api/trash', async (req, res) => {
   // empty trash: permanently destroy everything held, oldest first.
   try {
-    const db_ = load();
-    if (!Array.isArray(db_.trash)) db_.trash = [];
-    const ids = db_.trash.map(t => t.id);
-    for (const record of db_.trash) await destroyTrashRecord(record);
-    db_.trash = [];
-    save(db_);
-    res.json({ ok: true, destroyed: ids });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-async function destroyTrashRecord(record) {
-  const dir = path.join(TRASH_DIR, record.trashDir || record.id);
-  dbTools.stopAll(record.id);
-  if (fs.existsSync(path.join(dir, 'docker-compose.yml'))) await sh(`${COMPOSE_BIN} down -v`, dir).catch(() => {});
-  try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
-}
-function purgeTrash() {
-  try {
-    const db_ = load();
-    if (!Array.isArray(db_.trash) || !db_.trash.length) return;
-    const now = Date.now();
-    let changed = false;
-    db_.trash = db_.trash.filter(t => {
-      if (!t || !t.deletedAt || now - t.deletedAt < TRASH_HOLD_MS) return true;
-      const dir = path.join(TRASH_DIR, t.trashDir || t.id);
-      if (fs.existsSync(path.join(dir, 'docker-compose.yml'))) sh(`${COMPOSE_BIN} down -v`, dir).catch(() => {});
-      try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
-      changed = true;
-      console.log('trash expired:', t.id);
-      return false;
+    await trashOperation(async () => {
+      const records = load().trash || [];
+      const selected = new Set(records.map(trashKey));
+      const destroyed = [], failed = [];
+      for (const record of records) {
+        try { await destroyTrashRecord(record, selected); destroyed.push(record.id); }
+        catch (e) { failed.push({ id: record.id, error: e.message }); }
+      }
+      res.json({ ok: !failed.length, destroyed, failed, ...(failed.length ? { error: `${failed.length} site(s) could not be fully cleaned; kept in Trash. Open Trash for the error and retry.` } : {}) });
     });
-    if (changed) save(db_);
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+async function destroyTrashRecord(record, selected) {
+  return siteLifecycle(record.id, async () => {
+    try {
+      const db_ = load();
+      if (db_.apps.some(a => a.id === record.id)) throw lifecycleError('a live site reuses this Compose project - cleanup blocked to protect it');
+      const siblings = (db_.trash || []).filter(t => t.id === record.id);
+      if (siblings.some(t => !selected.has(trashKey(t)))) throw lifecycleError('multiple Trash generations share this name - use Empty trash to destroy them together');
+      const dir = trashLib.trashPath(TRASH_DIR, record);
+      const images = await trashLib.collectImages({ id: record.id, dir, record, ...trashOptions() });
+      const before = load();
+      for (const item of before.trash || []) {
+        if (item.id === record.id && selected.has(trashKey(item))) item.cleanupStartedAt = item.cleanupStartedAt || Date.now();
+        if (trashKey(item) === trashKey(record)) { item.trashImages = images; item.cleanupAttemptAt = Date.now(); delete item.cleanupError; }
+      }
+      save(before);
+      const cleanup = await trashLib.destroySite({ record, trashRoot: TRASH_DIR, images,
+        protectedImages: [...Object.values(require('./lib/generator').DB_IMAGES), ...dbTools.IMAGES, 'minipass-panel:latest'], ...trashOptions() });
+      const fresh = load();
+      fresh.trash = (fresh.trash || []).filter(t => trashKey(t) !== trashKey(record));
+      save(fresh);
+      return cleanup;
+    } catch (e) {
+      const fresh = load();
+      const retained = (fresh.trash || []).find(t => trashKey(t) === trashKey(record));
+      if (retained) { retained.cleanupError = redactUrl(e.message).slice(-600); retained.cleanupAttemptAt = Date.now(); save(fresh); }
+      throw e;
+    }
+  });
+}
+async function purgeTrash() {
+  if (trashBusy) return;
+  try {
+    await trashOperation(async () => {
+      const records = (load().trash || []).filter(t => t && t.deletedAt && Date.now() - t.deletedAt >= TRASH_HOLD_MS);
+      const selected = new Set(records.map(trashKey));
+      for (const record of records) {
+        try { await destroyTrashRecord(record, selected); console.log('trash expired:', record.id); }
+        catch (e) { console.error('trash cleanup retained:', record.id, e.message); }
+      }
+    });
   } catch (e) { console.error('trash purge:', e.message); }
 }
-setInterval(purgeTrash, 60 * 60 * 1000).unref();
+setInterval(purgeTrash, 60 * 1000).unref();
 purgeTrash();
 
 function parseEnvFile(p) {
