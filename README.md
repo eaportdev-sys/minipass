@@ -95,6 +95,15 @@ Explicit `node-sass` CLI scripts require a repository migration first.
 Previously misclassified sites can use **Setup → Use Jekyll static build**, then
 redeploy. Plain HTML sites and the other standard templates are unchanged.
 
+**Overview → Storage** measures the free space on the filesystem holding site
+files, plus each site's container filesystem and writable-layer sizes (including
+stopped containers). This read-only, on-demand view uses aggregate filesystem
+and Docker metadata; it does not read file contents or retain usage history.
+Container sizes exclude database volumes, bind mounts, container logs, and build
+cache. Image layers may be shared, and Docker may use a different filesystem;
+these figures are not an exclusive per-site total. No disk quotas are enforced
+yet. Measurements are not included in the 100-site list/status polling loop.
+
 ### 2 · Push to deploy over SSH (no GitHub needed)
 
 On the site's **Deploy** tab → *Push from your machine* → **enable local git push**.

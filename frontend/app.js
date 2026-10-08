@@ -379,6 +379,37 @@ function deployLastMarkup(label, h) {
   return `<div class="source-last-head"><span>${safeHtml(label)}</span><span class="deploy-result ${p.ok ? 'is-ok' : 'is-failed'}">${p.ok ? 'success' : 'failed'}</span></div>` +
     `<div class="source-last-detail"><span>${safeHtml(p.when)}</span>${p.sha ? `<code>${safeHtml(p.sha)}</code>` : ''}${p.duration ? `<span>${safeHtml(p.duration)}</span>` : ''}</div>`;
 }
+function storageSize(value) {
+  if (!Number.isFinite(value) || value < 0) return 'unavailable';
+  if (value < 1024) return `${value} B`;
+  const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+  let size = value / 1024, unit = 0;
+  while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit++; }
+  return `${size.toFixed(1)} ${units[unit]}`;
+}
+function storageMarkup(report) {
+  const disk = report.disk;
+  return (disk ? `<div class="storage-disk${disk.low ? ' is-low' : ''}"><b>${storageSize(disk.freeBytes)} free</b> of ${storageSize(disk.totalBytes)} · ${Number(disk.usedPercent)}% used${disk.low ? ' · low disk space' : ''}<div class="meta">Filesystem holding site files. Docker build storage may use a different filesystem.</div></div>` : '') +
+    (report.containers || []).map(c => `<div class="storage-row"><b>${safeHtml(c.service || c.name)} · ${safeHtml(c.state)}</b><span>Filesystem: ${storageSize(c.rootFsBytes)} · writable layer: ${storageSize(c.writableBytes)}</span></div>`).join('') +
+    (report.dockerAvailable && !(report.containers || []).length ? '<div class="meta">No containers present. Site files or retained images may still use disk space.</div>' : '') +
+    (report.warnings || []).map(w => `<div class="meta">${safeHtml(w)}</div>`).join('');
+}
+let storageRequestSeq = 0;
+async function loadStorage() {
+  const id = currentApp;
+  if (!id) return;
+  const seq = ++storageRequestSeq;
+  const box = document.getElementById('siteStorage');
+  box.innerHTML = '<div class="meta">Measuring storage…</div>';
+  try {
+    const response = await fetch(`/api/apps/${id}/storage`);
+    const report = await response.json();
+    if (seq !== storageRequestSeq || id !== currentApp) return;
+    box.innerHTML = response.ok ? storageMarkup(report) : `<div class="meta">${safeHtml(report.error || 'Storage unavailable.')}</div>`;
+  } catch {
+    if (seq === storageRequestSeq && id === currentApp) box.innerHTML = '<div class="meta">Storage unavailable. Try refresh sizes.</div>';
+  }
+}
 function runtimeKind(container, service) {
   if (service) return ({ node: 'Node.js service', react: 'React web app', static: 'Static website', php: 'PHP web app' })[service.type] || `${service.type || 'app'} service`;
   const hint = `${container.service || ''} ${container.image || ''}`.toLowerCase();
@@ -1029,6 +1060,7 @@ function showSiteTab(t, remember = true) {
   });
   if (!currentApp) return;
   if (remember) rememberSiteRoute(currentApp, t);
+  if (t === 'overview') loadStorage();
   if (t === 'database') { loadDatabases(); loadMigrateSuggest(); }
   if (t === 'environment') loadEnv();
   if (t === 'files') listFiles('');

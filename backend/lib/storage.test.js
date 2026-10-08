@@ -1,0 +1,47 @@
+const assert = require('assert');
+const { diskUsage, containerUsage, measureStorage } = require('./storage');
+const stat = { bsize: 1024, blocks: 10000000, bfree: 3000000, bavail: 2500000 };
+const disk = diskUsage(stat);
+assert.equal(disk.totalBytes, 10240000000);
+assert.equal(disk.freeBytes, 2560000000, 'available space excludes filesystem reserves');
+assert.equal(disk.usedBytes, 7168000000);
+assert.equal(disk.usedPercent, 74);
+assert.equal(disk.low, false);
+assert(diskUsage({ ...stat, bavail: 0 }).low);
+assert.equal(diskUsage({ bsize: 0, blocks: 0 }), null);
+const sample = { project: 'testsite', service: 'app', name: '/testsite-app-1', state: 'running', writableBytes: 0, rootFsBytes: 123456, hasMounts: true, env: ['SECRET=not-public'], mountPath: '/private/path' };
+const rows = containerUsage([sample, { ...sample, project: 'other' }].map(c => JSON.stringify(c)).join('\n'), 'testsite');
+assert.equal(rows.length, 1, 'foreign projects never enter site results');
+assert.equal(rows[0].name, 'testsite-app-1');
+assert.equal(rows[0].writableBytes, 0, 'zero is distinct from unavailable');
+assert(!JSON.stringify(rows).includes('not-public'));
+assert(!JSON.stringify(rows).includes('/private/path'));
+assert.equal(containerUsage(JSON.stringify({ ...sample, writableBytes: null, rootFsBytes: -1 }), 'testsite')[0].writableBytes, null);
+async function main() {
+  const commands = [];
+  const run = async args => {
+    commands.push(args);
+    if (args[0] === 'ps') return { stdout: 'abcdef123456\n' };
+    assert(args.includes('--size'));
+    const format = args[args.indexOf('--format') + 1];
+    assert(!format.includes('.Config.Env') && !format.includes('.Mounts.Source'));
+    return { stdout: JSON.stringify(sample) };
+  };
+  const report = await measureStorage({ id: 'testsite', dir: '/unused', run, statfs: async () => stat });
+  assert(report.dockerAvailable);
+  assert.equal(report.containers.length, 1);
+  assert(commands[0].includes('label=com.docker.compose.project=testsite'));
+  assert(commands.every(args => !args.includes('exec') && !args.includes('logs') && !args.includes('prune')));
+  const missing = await measureStorage({ id: 'testsite', dir: '/unused', run: async () => { throw new Error('sensitive CLI detail'); }, statfs: async () => stat });
+  assert(missing.disk && !missing.dockerAvailable);
+  assert(!JSON.stringify(missing).includes('sensitive CLI detail'));
+  assert(missing.warnings.length);
+  const empty = await measureStorage({ id: 'testsite', dir: '/unused', run: async args => { assert.equal(args[0], 'ps'); return { stdout: '' }; }, statfs: async () => { throw new Error('missing'); } });
+  assert(empty.dockerAvailable && empty.disk === null);
+  assert.equal(empty.containers.length, 0);
+  const badIds = await measureStorage({ id: 'testsite', dir: '/unused', run: async () => ({ stdout: 'x;rm -r' }), statfs: async () => stat });
+  assert(!badIds.dockerAvailable);
+  await assert.rejects(() => measureStorage({ id: '../bad', dir: '/unused', run, statfs: async () => stat }), /invalid site/);
+  console.log('storage: aggregate disk/container metadata, reserves, project isolation and unavailable measurements: OK');
+}
+main().catch(e => { console.error(e); process.exitCode = 1; });

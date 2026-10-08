@@ -16,6 +16,7 @@ const routes = require('./lib/routes');
 const envDefaults = require('./lib/env-defaults');
 const tokens = require('./lib/tokens');
 const portsLib = require('./lib/ports');
+const storage = require('./lib/storage');
 const { refreshStandardDockerfile, standardDockerfileType } = require('./lib/dockerfiles');
 const { buildProfile, readBuildProfile, localBuildProfile, isJekyll } = require('./lib/build-profile');
 
@@ -1124,6 +1125,20 @@ app.get('/api/apps/:id/status', async (req, res) => {
   const history = meta.deployHistory || [];
   const liveDeploy = meta.lastGoodDeploy || history.find(h => h.status === 'ok') || (meta.lastDeploy && meta.lastDeploy.status === 'ok' ? meta.lastDeploy : null);
   res.json({ app: pubApp(meta), services: publicServices(meta, appDir(APPS_DIR, meta.id)), lastDeploy: meta.lastDeploy || null, liveDeploy, history: history.slice(0, 5), containers, deploying: deployLocks.has(meta.id), deployOp: deployOps.get(meta.id) || null, pushEvent: pushEvents.get(meta.id) || null });
+});
+// Size inspection is on-demand, never part of the list/status polling loop.
+const storageRequests = new Map();
+app.get('/api/apps/:id/storage', async (req, res) => {
+  const meta = load().apps.find(a => a.id === req.params.id);
+  if (!meta) return res.status(404).json({ error: 'unknown app' });
+  let pending = storageRequests.get(meta.id);
+  if (!pending) {
+    pending = storage.measureStorage({ id: meta.id, dir: appDir(APPS_DIR, meta.id) });
+    storageRequests.set(meta.id, pending);
+  }
+  try { res.json(await pending); }
+  catch { res.status(500).json({ error: 'storage measurement unavailable' }); }
+  finally { if (storageRequests.get(meta.id) === pending) storageRequests.delete(meta.id); }
 });
 async function appContainers(id) {
   let containers = [];
