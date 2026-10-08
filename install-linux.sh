@@ -122,9 +122,9 @@ if command -v ufw >/dev/null; then
   ufw delete allow 3001/tcp || true
   ufw delete allow 8000:9000/tcp || true
   # shellcheck disable=SC2086
-  for net in $PANEL_CIDR; do ufw allow from "$net" to any port 3001 || true; done
+  for net in $PANEL_CIDR; do ufw allow from "$net" to any port 3001 proto tcp || true; done
   # shellcheck disable=SC2086
-  for net in $APPS_CIDR; do ufw allow from "$net" to any port 8000:9000 || true; done
+  for net in $APPS_CIDR; do ufw allow from "$net" to any port 8000:9000 proto tcp || true; done
   yes | ufw enable || true
 elif command -v firewall-cmd >/dev/null; then
   firewall-cmd --permanent --remove-port=3001/tcp || true; firewall-cmd --permanent --remove-port=8000-9000/tcp || true
