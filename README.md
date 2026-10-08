@@ -36,7 +36,7 @@ minipass/
   templates/          # Dockerfile starters per type
   frontend/           # wizard UI (no build step)
   docker-compose.yml  # panel service (project name pinned: minipass)
-  install-linux.sh    # idempotent Linux provisioner (docker, firewall, cron)
+  install-linux.sh    # idempotent Linux provisioner (docker, firewall, cron, quotas; DB admin images pull in background)
 ```
 
 ## Quickstart — localhost (Windows dev box)

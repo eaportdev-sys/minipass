@@ -50,16 +50,40 @@ else
 fi
 
 # 3b. database admin UI images (keep in sync with backend/lib/db-tools.js TOOLS).
-# Install once into the host Docker cache. Reruns never contact the registry for
-# images already present; upgrades are an explicit action in the panel.
+# Backgrounded by design: the installer must return fast so the panel can
+# launch. A fresh/small server should not pull gigabytes synchronously.
+# Reruns never contact the registry for images already present; upgrades
+# are an explicit action in the panel.
+mkdir -p /usr/local/lib/minipass
+cat > /usr/local/lib/minipass/pull-db-images.sh <<'SCRIPT'
+#!/usr/bin/env bash
+# Single-flight background pull: skip when another pull is already running.
+if command -v flock >/dev/null 2>&1; then
+  exec 9> /tmp/minipass-db-images.lock
+  flock -n 9 || exit 0
+fi
 for img in 'dpage/pgadmin4:9.18.0' 'phpmyadmin:5.2.3-apache' 'mongo-express:1.0.2-20-alpine3.19' 'rediscommander/redis-commander:latest'; do
   if docker image inspect "$img" >/dev/null 2>&1; then
-    msg "database admin image already installed: $img"
+    echo "already installed: $img"
   else
-    msg "installing database admin image: $img"
-    docker pull "$img" || true
+    echo "installing database admin image: $img"
+    docker pull "$img" || echo "failed (will retry on next install/upgrade): $img"
   fi
 done
+SCRIPT
+chmod +x /usr/local/lib/minipass/pull-db-images.sh
+DBIMG_LOG="/var/log/minipass-db-images.log"
+if ! touch "$DBIMG_LOG" 2>/dev/null; then
+  mkdir -p /srv/panel-data
+  DBIMG_LOG="/srv/panel-data/db-images.log"
+  touch "$DBIMG_LOG" 2>/dev/null || DBIMG_LOG="/tmp/minipass-db-images.log"
+fi
+if command -v pgrep >/dev/null 2>&1 && pgrep -f pull-db-images.sh >/dev/null 2>&1; then
+  msg "database admin image download already running in background (log: $DBIMG_LOG)"
+else
+  nohup /usr/local/lib/minipass/pull-db-images.sh >>"$DBIMG_LOG" 2>&1 &
+  msg "basic install continues now; database admin images download in background (log: $DBIMG_LOG)"
+fi
 
 # 4. optional host Node (only for running backend without docker). Pass --with-node.
 if [ "$1" = "--with-node" ]; then
