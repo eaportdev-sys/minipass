@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node lib/generator.test.js && node lib/services.test.js && node lib/migrations.test.js && node lib/routes.test.js && node lib/env-defaults.test.js && node lib/tokens.test.js && node lib/ports.test.js && node lib/detect.test.js && node lib/dockerfiles.test.js && node lib/build-profile.test.js && node lib/repo-source.test.js && node ../frontend/websites.test.js && node ../frontend/create-branch.test.js"
+    "test": "node lib/generator.test.js && node lib/services.test.js && node lib/migrations.test.js && node lib/routes.test.js && node lib/env-defaults.test.js && node lib/tokens.test.js && node lib/ports.test.js && node lib/detect.test.js && node lib/dockerfiles.test.js && node lib/build-profile.test.js && node lib/repo-source.test.js && node ../frontend/websites.test.js && node ../frontend/create-branch.test.js && node ../frontend/logs.test.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

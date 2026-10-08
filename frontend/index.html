@@ -276,7 +276,7 @@
         </div>
       </div>
       <div id="tab-logs" class="sitetab" style="display:none">
-        <div class="card"><select id="logSvc"></select> <button onclick="showLogs()">runtime logs</button> <button onclick="showBuildLog()">build log</button> <button onclick="showBuildLog(true)">full</button><pre id="logs"></pre></div>
+        <div class="card"><div class="logs-toolbar"><select id="logSvc" aria-label="Log service"></select><button onclick="showLogs()">runtime logs</button><button onclick="showBuildLog()">build log</button><button onclick="showBuildLog(true)">full</button><button onclick="copyLogs()" title="Copy the displayed log text">copy logs</button></div><pre id="logs"></pre></div>
       </div>
       <div id="tab-terminal" class="sitetab" style="display:none">
         <div class="card"><select id="termSvc"></select> <button onclick="openTerm()">connect ssh/terminal</button><div id="term"></div></div>

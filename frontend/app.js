@@ -1583,6 +1583,15 @@ async function showBuildLog(full) {
   logsEl.textContent = 'loading…';
   logsEl.textContent = await (await fetch(`/api/apps/${currentApp}/build-log${full ? '?tail=500' : ''}`)).text();
 }
+async function copyLogs() {
+  const text = document.getElementById('logs').textContent;
+  if (!text.trim() || text === 'loading…' || text === 'open a website first') {
+    toast('load logs before copying', false);
+    return;
+  }
+  const ok = await copyText(text);
+  toast(ok ? 'logs copied' : 'copy failed - select and copy manually', ok);
+}
 async function version() {
   try {
     const v = await (await fetch('/api/panel/version')).json();
