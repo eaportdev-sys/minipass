@@ -30,6 +30,48 @@ else
   echo "unknown package manager - install git/curl manually"; 
 fi
 
+# 1b. SSH access without console key editing: pass your public key and the
+# installer places it (appends only when absent, fixes ownership/perms).
+# Example (paste your id_minipass.pub line once, no nano needed):
+#   SSH_PUBKEY="ssh-ed25519 AAAA..." sudo -E bash install-linux.sh
+# An invalid-looking value is ignored, never written.
+if [ -n "${SSH_PUBKEY:-}" ]; then
+  SSH_USER="${SSH_USER:-${SUDO_USER:-root}}"
+  case "$SSH_PUBKEY" in
+    ssh-ed25519*|ssh-rsa*|ecdsa-sha2-*|sk-ssh-ed25519*|sk-ecdsa-sha2-*)
+      SSH_HOME=$(getent passwd "$SSH_USER" | cut -d: -f6)
+      if [ -n "$SSH_HOME" ] && [ -d "$SSH_HOME" ]; then
+        mkdir -p "$SSH_HOME/.ssh"
+        touch "$SSH_HOME/.ssh/authorized_keys"
+        grep -qxF "$SSH_PUBKEY" "$SSH_HOME/.ssh/authorized_keys" 2>/dev/null \
+          || echo "$SSH_PUBKEY" >> "$SSH_HOME/.ssh/authorized_keys"
+        chown -R "$SSH_USER:$SSH_USER" "$SSH_HOME/.ssh" 2>/dev/null \
+          || chown -R "$SSH_USER" "$SSH_HOME/.ssh" || true
+        chmod 700 "$SSH_HOME/.ssh"
+        chmod 600 "$SSH_HOME/.ssh/authorized_keys"
+        msg "installed SSH key for $SSH_USER"
+      else
+        msg "WARNING: user $SSH_USER has no home directory - SSH key not installed"
+      fi
+      ;;
+    *) msg "WARNING: SSH_PUBKEY does not look like a public key - ignored" ;;
+  esac
+fi
+# SSH server itself: fresh Ubuntu Server images sometimes omit it.
+if ! command -v sshd >/dev/null; then
+  msg "installing openssh-server"
+  if command -v apt-get >/dev/null; then apt-get install -y openssh-server || true
+  elif command -v dnf >/dev/null; then dnf install -y openssh-server || true
+  elif command -v yum >/dev/null; then yum install -y openssh-server || true
+  elif command -v pacman >/dev/null; then pacman -S --noconfirm openssh || true
+  elif command -v zypper >/dev/null; then zypper install -y openssh || true
+  elif command -v apk >/dev/null; then apk add openssh-server || true
+  fi
+fi
+if command -v systemctl >/dev/null; then systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true
+elif command -v service >/dev/null; then service ssh start 2>/dev/null || service sshd start 2>/dev/null || true
+fi
+
 # 2. Docker (works on any distro incl. Ubuntu 26)
 if ! command -v docker >/dev/null; then
   msg "installing docker via get.docker.com"

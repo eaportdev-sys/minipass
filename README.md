@@ -78,6 +78,12 @@ sudo bash install-linux.sh
 # if docker says permission denied: log out/in once (or: newgrp docker)
 # open http://SERVER_IP:3001 and set the admin password
 ```
+No console key editing needed: paste your public key once via the installer and
+it is appended to your login (existing keys untouched, perms fixed, sshd
+installed/enabled when missing):
+```bash
+SSH_PUBKEY="ssh-ed25519 AAAA..." sudo -E bash install-linux.sh
+```
 
 Per-app: `cd /srv/apps/<id> && docker compose ps | docker compose logs --tail=30`.
 Panel logs: `docker logs minipass-panel-1 --tail=30`.
