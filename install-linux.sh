@@ -244,6 +244,23 @@ if [ -f "$INSTALL_DIR/docker-compose.yml" ]; then
   fi
 fi
 echo "done. UI on http://SERVER_IP:3001, apps in /srv/apps"
+# 8b. prove self-upgrade works: the panel needs its /repo mount, and a
+# container created by hand or from the wrong directory silently lacks it -
+# stranding the panel on "upgrade unavailable" with no further error. Detect
+# and repair by recreating from this checkout's compose file.
+if docker inspect minipass-panel-1 --format '{{range .Mounts}}{{.Destination}} {{end}}' 2>/dev/null | grep -qw '/repo'; then
+  msg "panel has /repo - self-upgrade available"
+elif [ -f "$INSTALL_DIR/docker-compose.yml" ]; then
+  msg "/repo mount missing on panel container - recreating from $INSTALL_DIR"
+  (cd "$INSTALL_DIR" && GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo dev) docker compose -p minipass up -d --force-recreate) || true
+  if docker inspect minipass-panel-1 --format '{{range .Mounts}}{{.Destination}} {{end}}' 2>/dev/null | grep -qw '/repo'; then
+    msg "panel recreated with /repo - self-upgrade available"
+  else
+    msg "WARNING: panel still lacks /repo - recreate manually: cd $INSTALL_DIR && docker compose -p minipass up -d --force-recreate"
+  fi
+else
+  msg "WARNING: no docker-compose.yml in $INSTALL_DIR - cannot verify panel mounts"
+fi
 if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
   echo "NOTE: $SUDO_USER has docker access - if 'docker' says permission denied, log out and back in (or run 'newgrp docker') once."
 fi
