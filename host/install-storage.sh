@@ -2,13 +2,13 @@
 set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ "$(id -u)" -ne 0 ]; then echo 'Storage setup needs root on the host.'; exit 1; fi
-if ! command -v python3 >/dev/null || ! command -v tune2fs >/dev/null || ! command -v findmnt >/dev/null; then
-  if command -v apt-get >/dev/null; then apt-get install -y python3 e2fsprogs util-linux
-  elif command -v dnf >/dev/null; then dnf install -y python3 e2fsprogs util-linux
-  elif command -v yum >/dev/null; then yum install -y python3 e2fsprogs util-linux
-  elif command -v pacman >/dev/null; then pacman -S --needed --noconfirm python e2fsprogs util-linux
-  elif command -v zypper >/dev/null; then zypper install -y python3 e2fsprogs util-linux
-  elif command -v apk >/dev/null; then apk add python3 e2fsprogs util-linux
+if ! command -v python3 >/dev/null || ! command -v tune2fs >/dev/null || ! command -v findmnt >/dev/null || ! command -v parted >/dev/null; then
+  if command -v apt-get >/dev/null; then apt-get install -y python3 e2fsprogs util-linux parted
+  elif command -v dnf >/dev/null; then dnf install -y python3 e2fsprogs util-linux parted
+  elif command -v yum >/dev/null; then yum install -y python3 e2fsprogs util-linux parted
+  elif command -v pacman >/dev/null; then pacman -S --needed --noconfirm python e2fsprogs util-linux parted
+  elif command -v zypper >/dev/null; then zypper install -y python3 e2fsprogs util-linux parted
+  elif command -v apk >/dev/null; then apk add python3 e2fsprogs util-linux parted
   fi
 fi
 if ! command -v python3 >/dev/null || ! command -v systemctl >/dev/null; then

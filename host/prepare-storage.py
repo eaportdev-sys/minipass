@@ -157,6 +157,64 @@ def choose_source(vg_free, spares):
     return (None, None)
 
 
+def free_regions():
+    """Unpartitioned free space on partitioned disks: [(disk, startB, endB)].
+
+    Uses parted's machine output. Only ADDING a partition in reported-free
+    space is ever attempted; existing partitions are never touched.
+    """
+    try:
+        info = json.loads(run(['lsblk', '-J', '-b', '-d', '-o', 'NAME,TYPE,SIZE']))
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return []
+    regions = []
+    for node in info.get('blockdevices', []):
+        if node.get('type') != 'disk' or (node.get('size') or 0) < MIN_STORAGE_BYTES:
+            continue
+        disk = '/dev/' + node['name']
+        try:
+            out = run(['parted', '-m', disk, 'unit', 'B', 'print', 'free'])
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+        for line in out.splitlines():
+            m = re.match(r'^(\d+):(\d+)B:(\d+)B:(\d+)B:([^:]*):([^:]*):', line)
+            if m and m.group(6) == 'Free Space':
+                regions.append((disk, int(m.group(2)), int(m.group(3))))
+    return regions
+
+
+def biggest_region(regions):
+    roomy = [(end - start, disk, start, end) for disk, start, end in regions if end - start >= MIN_STORAGE_BYTES]
+    if not roomy:
+        return None
+    roomy.sort(reverse=True)
+    return roomy[0][1], roomy[0][2], roomy[0][3]
+
+
+def partition_region(disk, start, end):
+    """Carve one partition from free space. Returns the new /dev path or None."""
+    mib = 1024 * 1024
+    aligned = ((start + mib - 1) // mib) * mib
+    bounded = end - mib  # keep clear of the GPT backup table
+    if bounded - aligned < MIN_STORAGE_BYTES:
+        return None
+    try:
+        before = {p['name'] for p in json.loads(run(['lsblk', '-J', '-o', 'NAME,TYPE', disk]))['blockdevices'][0].get('children', [])}
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    if shell(['parted', '-s', '-m', disk, 'unit', 'B', 'mkpart', 'primary', 'ext4', str(aligned), str(bounded)]) != 0:
+        return None
+    shell(['partprobe', disk])
+    try:
+        after = {p['name'] for p in json.loads(run(['lsblk', '-J', '-o', 'NAME,TYPE', disk]))['blockdevices'][0].get('children', [])}
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    fresh = after - before
+    if len(fresh) != 1:
+        return None
+    return '/dev/' + fresh.pop()
+
+
 def migration_allowed(apps):
     """Only migrate /srv/apps content when nothing can hold it open."""
     try:
@@ -235,6 +293,12 @@ def confirm_active(apps):
             pass
 
 
+def finish_provision(result, success):
+    if result['ready'] and confirm_active(''):
+        return (True, success)
+    return (False, result['message'] or 'Storage volume created; rerun the installer to finish activation.')
+
+
 def setup(apps='/srv/apps', data='/srv/panel-data'):
     info = mount_info(apps)
     status = {'ready': False, 'filesystem': info['fstype'], 'message': ''}
@@ -292,26 +356,46 @@ def setup(apps='/srv/apps', data='/srv/panel-data'):
         elif not features:
             kind, source = choose_source(vg_free_bytes(), unused_devices())
             if kind is None:
-                status['message'] = ('Site storage still lives on the system disk without quota support, and no free space was found. '
-                                     'Fresh-install recipe: give root a fixed LV (e.g. 50GB of 100GB) and leave the rest unallocated, or attach a spare disk/partition, then rerun the installer. '
-                                     'Last resort on a single fully-allocated disk: enable quota features from a rescue environment with host/prepare-storage.py --offline. '
-                                     'Sites keep working; allowances stay honestly unenforced until then.')
+                region = biggest_region(free_regions())
+                if region is None:
+                    status['message'] = ('Site storage still lives on the system disk without quota support, and no free space was found. '
+                                         'Fresh-install recipe: give root a fixed LV (e.g. 50GB of 100GB) and leave the rest unallocated, or attach a spare disk/partition, then rerun the installer. '
+                                         'Last resort on a single fully-allocated disk: enable quota features from a rescue environment with host/prepare-storage.py --offline. '
+                                         'Sites keep working; allowances stay honestly unenforced until then.')
+                else:
+                    allowed, reason = migration_allowed(apps)
+                    if not allowed:
+                        status['message'] = reason + ' Then rerun the installer to carve site storage from the free disk space.'
+                    else:
+                        newpart = partition_region(*region)
+                        if not newpart:
+                            status['message'] = ('Free disk space exists but partitioning it failed (parted/partprobe unavailable, or the kernel would not re-read the table - reboot and rerun). '
+                                                 'No existing partitions were touched; sites keep working unenforced.')
+                        else:
+                            ok, message = finish_provision(make_ready_storage(newpart, apps),
+                                'Site storage carved from free disk space; ext4 project quotas are active.')
+                            if ok:
+                                status.update(ready=True, message=message)
+                            else:
+                                status['message'] = message
             else:
                 if kind == 'vg':
                     if shell(['lvcreate', '-n', STORAGE_LV, '-l', '100%FREE', source]) != 0:
                         status['message'] = 'Could not create the storage volume from free VG space; rerun the installer.'
                     else:
-                        result = make_ready_storage('/dev/' + source + '/' + STORAGE_LV, apps)
-                        if result['ready'] and confirm_active(apps):
-                            status.update(ready=True, message='Site storage provisioned from free VG space; ext4 project quotas are active.')
+                        ok, message = finish_provision(make_ready_storage('/dev/' + source + '/' + STORAGE_LV, apps),
+                            'Site storage provisioned from free VG space; ext4 project quotas are active.')
+                        if ok:
+                            status.update(ready=True, message=message)
                         else:
-                            status['message'] = result['message'] or 'Storage volume created; rerun the installer to finish activation.'
+                            status['message'] = message
                 else:
-                    result = make_ready_storage(source, apps)
-                    if result['ready'] and confirm_active(apps):
-                        status.update(ready=True, message='Site storage provisioned on the spare disk/partition; ext4 project quotas are active.')
+                    ok, message = finish_provision(make_ready_storage(source, apps),
+                        'Site storage provisioned on the spare disk/partition; ext4 project quotas are active.')
+                    if ok:
+                        status.update(ready=True, message=message)
                     else:
-                        status['message'] = result['message'] or 'Storage volume created; rerun the installer to finish activation.'
+                        status['message'] = message
         else:
             status.update(ready=True, message='ext4 project quotas are active.')
     else:

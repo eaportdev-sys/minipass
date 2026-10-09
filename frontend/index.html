@@ -323,6 +323,10 @@
           <div class="sectionhead"><div><b>Build and restart activity</b><div class="meta">Live output from the current upgrade.</div></div><span id="upgradeCountdown" class="badge"></span></div>
           <pre id="upOut" class="upgrade-log">No upgrade activity yet.</pre>
         </div>
+        <div class="card upgrade-log-card">
+          <div class="sectionhead"><div><b>Panel error log</b><div class="meta">Persistent. Toasts vanish; errors stay here with timestamps.</div></div><div class="actions"><button onclick="loadPanelErrors()">refresh</button><button onclick="copyPanelErrors()">copy</button></div></div>
+          <pre id="panelErrors" class="upgrade-log" aria-live="polite">Open this view to load.</pre>
+        </div>
       </div>
       <div class="card github-settings-card">
         <div class="sectionhead"><div><b>Shared GitHub accounts</b><div class="meta">Optional account pool. A site-specific token still takes priority.</div></div><span id="ghStatus" class="panel-state is-checking">checking</span></div>

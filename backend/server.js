@@ -19,6 +19,7 @@ const portsLib = require('./lib/ports');
 const storage = require('./lib/storage');
 const trashLib = require('./lib/trash');
 const quotas = require('./lib/quotas');
+const panelLog = require('./lib/panel-log');
 const { refreshStandardDockerfile, standardDockerfileType } = require('./lib/dockerfiles');
 const { buildProfile, readBuildProfile, localBuildProfile, isJekyll } = require('./lib/build-profile');
 
@@ -471,6 +472,11 @@ app.get('/api/panel/storage', async (req, res) => {
   try { res.json(await quotas.status()); }
   catch (e) { res.status(e.status || 503).json({ ready: false, error: e.message }); }
 });
+// Persistent panel error log: toasts vanish, this does not. Newest first.
+app.get('/api/panel/errors', (req, res) => {
+  try { res.json(panelLog.readEvents(req.query.limit)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 app.post('/api/apps', async (req, res) => {
   let creatingId = null;
@@ -575,9 +581,11 @@ app.post('/api/apps', async (req, res) => {
     const webhookNote = ghLink ? 'github linked - automation disabled' : 'no github automation';
     // build async so UI returns fast (goes through deploy() so it lands in deploy.log)
     deploy(id).catch(e => console.error(id, e.message));
+    if (storageWarning) panelLog.logEvent({ level: 'warn', area: 'create', site: id, message: 'storage allowance recorded but not enforced: ' + storageWarning });
     res.json({ ...pubApp(meta), localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote, storageEnforced: storageQuota.enforced === true, ...(storageWarning ? { storageWarning } : {}) });
   } catch (e) {
     const error = redactUrl(e.message);
+    try { panelLog.logEvent({ level: 'error', area: 'create', site: String((req.body && req.body.name) || '').toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 32) || null, message: error }); } catch {}
     const needsDockerfile = /no Dockerfile in build context and type/i.test(error);
     const needsModernization = /Jekyll static build needs modernization/i.test(error);
     res.status(needsDockerfile || needsModernization ? 409 : (e.status || 500)).json({ error, needsDockerfile, needsModernization });
@@ -2892,6 +2900,7 @@ async function destroyTrashRecord(record, selected) {
       const fresh = load();
       const retained = (fresh.trash || []).find(t => trashKey(t) === trashKey(record));
       if (retained) { retained.cleanupError = redactUrl(e.message).slice(-600); retained.cleanupAttemptAt = Date.now(); save(fresh); }
+      try { panelLog.logEvent({ level: 'error', area: 'trash-destroy', site: record.id, message: e.message }); } catch {}
       throw e;
     }
   });

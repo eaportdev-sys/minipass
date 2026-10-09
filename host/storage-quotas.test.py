@@ -201,6 +201,38 @@ class Tests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn('Stop', reason)
 
+    def test_free_regions_parses_parted_machine_output(self):
+        disks = {'blockdevices': [{'name': 'sda', 'type': 'disk', 'size': 107374182400}]}
+        parted = ('BYT;\n/dev/sda:107374182400:scsi:512:512:gpt:ATA VBOX HARDDISK:;\n'
+                  '1:1048576B:52428800000B:52427751424B:ext4::boot, esp;\n'
+                  '1:52428800000B:107374182400B:54945382400B::Free Space::;\n')
+        with patch.object(prepare, 'run', side_effect=[json.dumps(disks), parted]):
+            regions = prepare.free_regions()
+        self.assertEqual(regions, [('/dev/sda', 52428800000, 107374182400)])
+
+    def test_biggest_region_prefers_largest_and_enforces_minimum(self):
+        regions = [('/dev/sda', 0, 100000000000), ('/dev/sdb', 0, 20000000000)]
+        self.assertEqual(prepare.biggest_region(regions), ('/dev/sda', 0, 100000000000))
+        self.assertIsNone(prepare.biggest_region([('/dev/sda', 0, 1000)]))
+        self.assertIsNone(prepare.biggest_region([]))
+
+    def test_partition_region_never_runs_commands_when_too_small(self):
+        with patch.object(prepare, 'run') as run, patch.object(prepare, 'shell') as shell:
+            self.assertIsNone(prepare.partition_region('/dev/sda', 0, 1000))
+            run.assert_not_called()
+            shell.assert_not_called()
+
+    def test_partition_region_returns_only_the_new_partition(self):
+        before = json.dumps({'blockdevices': [{'name': 'sda', 'children': [{'name': 'sda1'}]}]})
+        after = json.dumps({'blockdevices': [{'name': 'sda', 'children': [{'name': 'sda1'}, {'name': 'sda2'}]}]})
+        with patch.object(prepare, 'run', side_effect=[before, after]) as run, patch.object(prepare, 'shell', return_value=0) as shell:
+            self.assertEqual(prepare.partition_region('/dev/sda', 50000000000, 100000000000), '/dev/sda2')
+            mkpart = [c.args[0] for c in shell.call_args_list if c.args[0][:3] == ['parted', '-s', '-m']][0]
+            self.assertEqual(mkpart[3], '/dev/sda')
+            self.assertNotIn('sda1', ' '.join(mkpart), 'existing partitions are never named in partitioning commands')
+        with patch.object(prepare, 'run', side_effect=[before, before]), patch.object(prepare, 'shell', return_value=0):
+            self.assertIsNone(prepare.partition_region('/dev/sda', 50000000000, 100000000000))
+
     def test_offline_setup_refuses_mounted_devices_before_commands(self):
         device = types.SimpleNamespace(st_mode=stat.S_IFBLK, st_rdev=2051)
         with patch.object(prepare.os, 'stat', return_value=device), patch.object(prepare.os, 'major', return_value=8, create=True), patch.object(prepare.os, 'minor', return_value=3, create=True), patch.object(prepare.Path, 'read_text', return_value='1 2 8:3 / / rw - ext4 /dev/test rw\n'), patch.object(prepare, 'run') as run:

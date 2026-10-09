@@ -1318,6 +1318,29 @@ function showView(view) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + view));
   document.querySelectorAll('.navitem').forEach(n => n.classList.toggle('active', n.dataset.view === view));
   if (view === 'trash') loadTrash();
+  if (view === 'panel') loadPanelErrors();
+}
+function panelErrorText(e) {
+  return `${String(e.at || '').replace('T', ' ').slice(0, 19)} [${e.level || 'error'}] ${e.area || 'panel'}${e.site ? ' (' + e.site + ')' : ''}: ${e.message || ''}`;
+}
+async function loadPanelErrors() {
+  const box = document.getElementById('panelErrors');
+  if (!box) return;
+  box.textContent = 'loading…';
+  try {
+    const r = await (await fetch('/api/panel/errors?limit=100')).json();
+    const list = Array.isArray(r) ? r : [];
+    box.textContent = list.length ? list.map(panelErrorText).join('\n') : 'No recorded errors. Site creation, Trash cleanup and quota problems land here with timestamps.';
+  } catch { box.textContent = 'Could not load the error log.'; }
+}
+async function copyPanelErrors() {
+  const text = document.getElementById('panelErrors').textContent;
+  if (!text.trim() || text === 'loading…' || text.startsWith('No recorded errors') || text.startsWith('Could not load')) {
+    toast('load the error log before copying', false);
+    return;
+  }
+  const ok = await copyText(text);
+  toast(ok ? 'errors copied' : 'copy failed - select and copy manually', ok);
 }
 function accessChanged() {
   const accessEl = document.querySelector('input[name=access]:checked');

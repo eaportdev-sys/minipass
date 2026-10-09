@@ -163,8 +163,10 @@ unallocated in the VG**. The minipass installer then creates the storage volume
 from the free extents with quota features baked in at format time, mounts
 `/srv/apps` (fstab backup retained), migrates any existing site files, and
 enables enforcement — no rescue session, no reboot dance. A spare
-partition or whole disk works the same way if one is attached later. If
-containers are running and site files exist, the installer stops short and says
+partition or whole disk works the same way if one is attached later, and
+**unpartitioned free space on the same disk is carved into a new partition**
+(aligned, GPT-guard kept, existing partitions never touched — only adding).
+If containers are running and site files exist, the installer stops short and says
 so instead of moving data under live containers — stop sites/panel and rerun.
 
 If the whole disk went to root with no free space, the installer reports the
@@ -185,6 +187,12 @@ reboot or live root remount happens. Unsupported/unready hosts still allow site
 creation, but the requested allowance is recorded as NOT enforced (Overview
 says so plainly) until quota setup completes; an entered number is never
 advertised as enforcement by itself.
+
+Site creation failures, Trash cleanup failures and unenforced-allowance
+warnings are also written to a persistent panel error log
+(`/srv/panel-data/panel-errors.log`, capped at 512 KiB, tokens redacted).
+Upgrade → **Panel error log** shows it newest-first with refresh and copy, so
+a vanished toast is never the last trace of an error.
 
 On a prepared Ubuntu host, explicitly verify root and database-container hard
 limits, Trash retention and cleanup with synthetic temporary files:
