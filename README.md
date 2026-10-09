@@ -159,10 +159,14 @@ enforced allowance each, plus 48-hour Trash retention and a 2 GiB host reserve.
 
 Fresh-install recipe (single disk): in the Ubuntu installer's custom storage
 layout, give root a fixed LV (e.g. 50 GB of 100 GB) and **leave the rest
-unallocated in the VG**. The minipass installer then creates the storage volume
+unallocated in the VG**. On first installer run it reports the free space and
+asks to use it (TTY prompt); approve non-interactively with
+`sudo MINIPASS_USE_FREE_SPACE=1 bash install-linux.sh` or
+`bash install-linux.sh --use-free-space`. Once approved it creates the storage volume
 from the free extents with quota features baked in at format time, mounts
 `/srv/apps` (fstab backup retained), migrates any existing site files, and
-enables enforcement — no rescue session, no reboot dance. A spare
+enables enforcement — no rescue session, no reboot dance. Nothing is consumed
+without that yes. A spare
 partition or whole disk works the same way if one is attached later, and
 **unpartitioned free space on the same disk is carved into a new partition**
 (aligned, GPT-guard kept, existing partitions never touched — only adding).

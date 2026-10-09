@@ -6,6 +6,16 @@ if [ "$EUID" -ne 0 ]; then echo "run as root (sudo)"; exit 1; fi
 
 msg() { echo "==> $*"; }
 
+WITH_NODE=0
+USE_FREE_SPACE=0
+for arg in "$@"; do
+  case "$arg" in
+    --with-node) WITH_NODE=1 ;;
+    --use-free-space) USE_FREE_SPACE=1 ;;
+  esac
+done
+if [ "$USE_FREE_SPACE" = 1 ]; then export MINIPASS_USE_FREE_SPACE=1; fi
+
 # 1. base tools per distro
 if command -v apt-get >/dev/null; then
   msg "apt detected"
@@ -128,7 +138,7 @@ else
 fi
 
 # 4. optional host Node (only for running backend without docker). Pass --with-node.
-if [ "$1" = "--with-node" ]; then
+if [ "$WITH_NODE" = 1 ]; then
   if ! command -v node >/dev/null; then
     msg "installing node 20"
     if command -v apt-get >/dev/null; then

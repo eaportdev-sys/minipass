@@ -299,7 +299,24 @@ def finish_provision(result, success):
     return (False, result['message'] or 'Storage volume created; rerun the installer to finish activation.')
 
 
-def setup(apps='/srv/apps', data='/srv/panel-data'):
+APPROVAL_HINT = 'Approve with: sudo MINIPASS_USE_FREE_SPACE=1 bash install-linux.sh (or: python3 host/prepare-storage.py --use-free-space).'
+
+
+def approved_use(description, approve):
+    """Destructive-adjacent provisioning needs a yes. TTY gets asked, automation
+    passes approval explicitly; anything else only reports what was found."""
+    if approve:
+        return True
+    try:
+        if sys.stdin.isatty():
+            answer = input(description + ' Use it for site storage? [y/N] ').strip().lower()
+            return answer in ('y', 'yes')
+    except (OSError, EOFError):
+        pass
+    return False
+
+
+def setup(apps='/srv/apps', data='/srv/panel-data', approve=False):
     info = mount_info(apps)
     status = {'ready': False, 'filesystem': info['fstype'], 'message': ''}
     own_mount = info['target'] == apps
@@ -366,6 +383,8 @@ def setup(apps='/srv/apps', data='/srv/panel-data'):
                     allowed, reason = migration_allowed(apps)
                     if not allowed:
                         status['message'] = reason + ' Then rerun the installer to carve site storage from the free disk space.'
+                    elif not approved_use(f'Found {int((region[2] - region[1]) / 1000000000)} GB of free space on {region[0]}. Carving only adds a partition; existing data is untouched.', approve):
+                        status['message'] = f'Found free disk space on {region[0]} but carving was not approved. {APPROVAL_HINT} Sites keep working unenforced.'
                     else:
                         newpart = partition_region(*region)
                         if not newpart:
@@ -380,7 +399,9 @@ def setup(apps='/srv/apps', data='/srv/panel-data'):
                                 status['message'] = message
             else:
                 if kind == 'vg':
-                    if shell(['lvcreate', '-n', STORAGE_LV, '-l', '100%FREE', source]) != 0:
+                    if not approved_use(f'Found free VG space in {source} for a {STORAGE_LABEL} volume.', approve):
+                        status['message'] = f'Found free VG space in {source} but it was not approved for use. {APPROVAL_HINT} Sites keep working unenforced.'
+                    elif shell(['lvcreate', '-n', STORAGE_LV, '-l', '100%FREE', source]) != 0:
                         status['message'] = 'Could not create the storage volume from free VG space; rerun the installer.'
                     else:
                         ok, message = finish_provision(make_ready_storage('/dev/' + source + '/' + STORAGE_LV, apps),
@@ -390,12 +411,15 @@ def setup(apps='/srv/apps', data='/srv/panel-data'):
                         else:
                             status['message'] = message
                 else:
-                    ok, message = finish_provision(make_ready_storage(source, apps),
-                        'Site storage provisioned on the spare disk/partition; ext4 project quotas are active.')
-                    if ok:
-                        status.update(ready=True, message=message)
+                    if not approved_use(f'Found spare disk/partition {source}. Formatting destroys anything on it.', approve):
+                        status['message'] = f'Found spare disk/partition {source} but it was not approved for use. {APPROVAL_HINT} Sites keep working unenforced.'
                     else:
-                        status['message'] = message
+                        ok, message = finish_provision(make_ready_storage(source, apps),
+                            'Site storage provisioned on the spare disk/partition; ext4 project quotas are active.')
+                        if ok:
+                            status.update(ready=True, message=message)
+                        else:
+                            status['message'] = message
         else:
             status.update(ready=True, message='ext4 project quotas are active.')
     else:
@@ -429,9 +453,11 @@ def offline(device):
 if __name__ == '__main__':
     if os.geteuid() != 0:
         raise SystemExit('Run storage setup as root.')
-    if len(sys.argv) == 3 and sys.argv[1] == '--offline':
-        offline(sys.argv[2])
-    elif len(sys.argv) == 1:
-        setup()
+    flag = '--use-free-space' in sys.argv or os.environ.get('MINIPASS_USE_FREE_SPACE', '').lower() in ('1', 'yes', 'true')
+    args = [a for a in sys.argv[1:] if a != '--use-free-space']
+    if len(args) == 2 and args[0] == '--offline':
+        offline(args[1])
+    elif not args:
+        setup(approve=flag)
     else:
-        raise SystemExit('Usage: prepare-storage.py [--offline /dev/device]')
+        raise SystemExit('Usage: prepare-storage.py [--use-free-space] [--offline /dev/device]')

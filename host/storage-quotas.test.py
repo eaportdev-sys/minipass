@@ -1,5 +1,6 @@
 """Portable logic tests. Kernel enforcement is verified by quota-smoke.py on Linux."""
 import importlib.util
+import io
 import json
 from pathlib import Path
 import shutil
@@ -232,6 +233,54 @@ class Tests(unittest.TestCase):
             self.assertNotIn('sda1', ' '.join(mkpart), 'existing partitions are never named in partitioning commands')
         with patch.object(prepare, 'run', side_effect=[before, before]), patch.object(prepare, 'shell', return_value=0):
             self.assertIsNone(prepare.partition_region('/dev/sda', 50000000000, 100000000000))
+
+    def test_free_space_needs_approval(self):
+        def fake_run(args):
+            if args[0] == 'findmnt':
+                return json.dumps({'filesystems': [{**self.mount, 'target': '/', 'options': 'rw'}]})
+            if args[0] == 'tune2fs':
+                return 'Filesystem features: has_journal extent\n'
+            if args[0] == 'vgs':
+                return '  ubuntu-vg 50000000000\n'
+            if args[0] == 'pvs':
+                return ''
+            if args[0] == 'lsblk':
+                return json.dumps({'blockdevices': []})
+            raise AssertionError('unexpected host command: ' + ' '.join(args))
+
+        class TtyStdin(io.StringIO):
+            def isatty(self):
+                return True
+
+        # No approval, no TTY: report the find, change nothing.
+        with patch.object(prepare, 'run', side_effect=fake_run), patch.object(prepare, 'shell') as shell, patch.object(sys, 'stdin', io.StringIO()):
+            item = prepare.setup(str(self.apps), str(self.root))
+        self.assertFalse(item['ready'])
+        self.assertIn('not approved', item['message'])
+        shell.assert_not_called()
+
+        # Explicit approval: provision from the free VG space.
+        with patch.object(prepare, 'run', side_effect=fake_run), patch.object(prepare, 'shell', return_value=0) as shell, \
+                patch.object(prepare, 'make_ready_storage', return_value={'ready': True, 'message': ''}) as mrs, \
+                patch.object(prepare, 'confirm_active', return_value=True), patch.object(sys, 'stdin', io.StringIO()):
+            item = prepare.setup(str(self.apps), str(self.root), approve=True)
+        self.assertTrue(item['ready'])
+        self.assertIn('free VG space', item['message'])
+        self.assertTrue(any(c.args[0][0] == 'lvcreate' for c in shell.call_args_list))
+        self.assertEqual(mrs.call_args.args[0], '/dev/ubuntu-vg/minipass-apps')
+
+        # TTY yes: interactive approval provisions too.
+        with patch.object(prepare, 'run', side_effect=fake_run), patch.object(prepare, 'shell', return_value=0), \
+                patch.object(prepare, 'make_ready_storage', return_value={'ready': True, 'message': ''}), \
+                patch.object(prepare, 'confirm_active', return_value=True), patch.object(sys, 'stdin', TtyStdin('y\n')):
+            item = prepare.setup(str(self.apps), str(self.root))
+        self.assertTrue(item['ready'])
+
+        # TTY no: nothing changes.
+        with patch.object(prepare, 'run', side_effect=fake_run), patch.object(prepare, 'shell') as shell, patch.object(sys, 'stdin', TtyStdin('n\n')):
+            item = prepare.setup(str(self.apps), str(self.root))
+        self.assertFalse(item['ready'])
+        shell.assert_not_called()
 
     def test_offline_setup_refuses_mounted_devices_before_commands(self):
         device = types.SimpleNamespace(st_mode=stat.S_IFBLK, st_rdev=2051)
