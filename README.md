@@ -17,6 +17,10 @@ minipass turns a folder or git repo into a running site with one flow:
 - Deploy by pushing git **directly to the box over SSH** (works with no GitHub),
   or connect GitHub (webhook or polling) when available
 - Atomic deploys: build first, swap only on success, health-check, auto-rollback.
+  When a repo-owned Dockerfile expects compiled output (`dist/`, `build/`,
+  `out/`) without compiling it, the repo's own `build` script runs first in a
+  disposable container (lockfile picks npm/pnpm/yarn) — the Dockerfile itself
+  is never modified. Dockerfiles that build themselves are untouched.
   A taken host port is automatically rebound to the next free one before the build.
   **Redeploy** pulls the repo first (recovery path for broken box edits);
   **local rebuild** skips the pull and builds the box files as-is.

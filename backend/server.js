@@ -20,6 +20,7 @@ const storage = require('./lib/storage');
 const trashLib = require('./lib/trash');
 const quotas = require('./lib/quotas');
 const panelLog = require('./lib/panel-log');
+const prebuild = require('./lib/prebuild');
 const { refreshStandardDockerfile, standardDockerfileType } = require('./lib/dockerfiles');
 const { buildProfile, readBuildProfile, localBuildProfile, isJekyll } = require('./lib/build-profile');
 
@@ -1033,6 +1034,27 @@ async function deployNow(id, opts = {}) {
   } catch (e) {
     const shaSe = sourceSha || await currentSha(dir);
     await recordDeploy(id, { sha: shaSe, at: new Date().toISOString(), status: 'error', error: ('missing build file - running containers untouched: ' + e.message).slice(-500) });
+    throw e;
+  }
+  // automatic pre-build: a repo-owned Dockerfile that expects compiled output
+  // (dist/) without compiling it gets the repo's own build script run first in
+  // a disposable builder container. The Dockerfile itself is never modified;
+  // services that build themselves, lack a build script, or already have the
+  // output behave exactly as before.
+  try {
+    for (const s of svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false)) {
+      if (/^db(-|$)/.test(s.name || '')) continue;
+      const ctxDir = path.join(buildCodeDir, s.subdir || '');
+      const item = prebuild.plan(ctxDir);
+      if (!item) continue;
+      if (item.blocked) throw new Error(`service '${s.name}' pre-build blocked - running containers untouched: ${item.blocked}`);
+      await prebuild.ensureBuilderImage(args => runOut(DOCKER_BIN, args, { cwd: dir }));
+      try { fs.appendFileSync(path.join(dir, 'deploy.log'), `--- pre-building '${s.subdir || '.'}' (${item.manager} run build) for missing '${item.outputDir}/' ---\n`); } catch {}
+      await runOut(DOCKER_BIN, prebuild.argv(ctxDir, item), { cwd: dir, captureStderr: true });
+    }
+  } catch (e) {
+    const shaPb = sourceSha || await currentSha(dir);
+    await recordDeploy(id, { sha: shaPb, at: new Date().toISOString(), status: 'error', error: ('pre-build failed - running containers untouched: ' + e.message).slice(-500) });
     throw e;
   }
   // every build streams to deploy.log (host-persisted, per app) so the UI can show
