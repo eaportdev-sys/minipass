@@ -17,7 +17,11 @@ if ! command -v python3 >/dev/null || ! command -v systemctl >/dev/null; then
 fi
 mkdir -p /usr/local/lib/minipass /srv/panel-data /srv/apps
 install -m 0644 "$HERE/storage-quotas.py" /usr/local/lib/minipass/storage-quotas.py
-python3 "$HERE/prepare-storage.py" || echo 'Storage setup pending: review host filesystem configuration.'
+if [ "${MINIPASS_BASIC:-0}" = 1 ]; then
+  python3 "$HERE/prepare-storage.py" --basic || echo 'Storage check recorded - provisioning deferred to the Storage panel.'
+else
+  python3 "$HERE/prepare-storage.py" ${MINIPASS_STORAGE_TARGET:+--target="$MINIPASS_STORAGE_TARGET"} || echo 'Storage setup pending: review host filesystem configuration.'
+fi
 cat > /etc/systemd/system/minipass-storage.service <<'UNIT'
 [Unit]
 Description=Minipass root-only site storage quota bridge

@@ -8,13 +8,42 @@ msg() { echo "==> $*"; }
 
 WITH_NODE=0
 USE_FREE_SPACE=0
+BASIC_INSTALL=0
+PROVISION_TARGET=""
 for arg in "$@"; do
   case "$arg" in
     --with-node) WITH_NODE=1 ;;
     --use-free-space) USE_FREE_SPACE=1 ;;
+    --basic|--minimal) BASIC_INSTALL=1 ;;
+    --provision-storage=*) PROVISION_TARGET="${arg#--provision-storage=}" ;;
   esac
 done
 if [ "$USE_FREE_SPACE" = 1 ]; then export MINIPASS_USE_FREE_SPACE=1; fi
+if [ -n "$PROVISION_TARGET" ]; then export MINIPASS_STORAGE_TARGET="$PROVISION_TARGET"; export MINIPASS_USE_FREE_SPACE=1; fi
+if [ "$BASIC_INSTALL" = 1 ]; then export MINIPASS_BASIC=1; fi
+if [ -n "$PROVISION_TARGET" ]; then export MINIPASS_STORAGE_TARGET="$PROVISION_TARGET"; fi
+
+# 0. minimum free space: 50 GB warning (never a hard failure).
+# Basic installs check but continue so small test boxes stay usable.
+check_min_space() {
+  local target="${1:-/srv/apps}"
+  mkdir -p "$target" 2>/dev/null || true
+  local avail_kb=""
+  avail_kb=$(df -k --output=avail "$target" 2>/dev/null | tail -1 | tr -d ' ') || avail_kb=""
+  if [ -z "$avail_kb" ]; then
+    avail_kb=$(df -kP "$target" 2>/dev/null | tail -1 | awk '{print $4}') || avail_kb=""
+  fi
+  if [ -z "$avail_kb" ] || ! [ "$avail_kb" -eq "$avail_kb" ] 2>/dev/null; then
+    msg "WARNING: could not measure free space on $target - continuing anyway"
+    return 0
+  fi
+  local avail_gb=$((avail_kb / 1000000))
+  if [ "$avail_kb" -lt 50000000 ]; then
+    msg "WARNING: only ~${avail_gb} GB free on $target (50 GB recommended) - continuing; add storage later from the Storage panel"
+  else
+    msg "disk check ok: ~${avail_gb} GB free on $target"
+  fi
+}
 
 # 1. base tools per distro
 if command -v apt-get >/dev/null; then
@@ -102,8 +131,8 @@ else
 fi
 
 # 3b. database admin UI images (keep in sync with backend/lib/db-tools.js TOOLS).
-# Backgrounded by design: the installer must return fast so the panel can
-# launch. A fresh/small server should not pull gigabytes synchronously.
+# Basic install: images are NEVER pulled synchronously. They download in the
+# background after the panel is up so install stays fast on small servers.
 # Reruns never contact the registry for images already present; upgrades
 # are an explicit action in the panel.
 mkdir -p /usr/local/lib/minipass
@@ -161,10 +190,17 @@ fi
 # NOTE: mongo-express ships with no login, and DB UI ports sit inside the app
 # range - keep APPS_CIDR private unless every exposed app is meant to be public.
 mkdir -p /srv/apps /srv/panel-data /opt/minipaas
+check_min_space /srv/apps
 # Install/update the host quota bridge and prepare supported quota mounts.
+# Basic installs deliberately skip partition scanning/provisioning: only the
+# free-space check above runs, and expansion happens later from Storage.
 # Missing ext4 feature flags on a mounted root need ONE offline setup first.
 # Never tune/reformat a mounted device or reboot from the installer.
 INSTALL_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ "$BASIC_INSTALL" = 1 ]; then
+  msg "basic install: skipping storage partition scan - quotas unenforced until approved in Storage"
+  export MINIPASS_BASIC=1
+fi
 bash "$INSTALL_DIR/host/install-storage.sh" || msg "storage quota setup pending - review installer output"
 PANEL_CIDR="${PANEL_CIDR:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16}"
 APPS_CIDR="${APPS_CIDR:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16}"

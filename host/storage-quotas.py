@@ -202,12 +202,50 @@ def release(name, state, mount):
     return {'ok': True, 'released': True}
 
 
+def discovery_report(state, mount):
+    """Read-only host inventory. No formatting, partitioning or mounting."""
+    report = {'mount': mount, 'state': {'sites': len(state.get('sites', {})), 'nextProject': state.get('nextProject')},
+              'appsFreeBytes': None, 'appsTotalBytes': None, 'vgFree': {}, 'spares': [], 'freeRegions': []}
+    try:
+        stat = os.statvfs(str(APPS))
+        report['appsFreeBytes'] = stat.f_bavail * stat.f_frsize
+        report['appsTotalBytes'] = stat.f_blocks * stat.f_frsize
+    except OSError:
+        pass
+    try:
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location('minipass_prepare_storage', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prepare-storage.py'))
+        prepare = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(prepare)
+        report['vgFree'] = prepare.vg_free_bytes()
+        report['spares'] = prepare.unused_devices()
+        report['freeRegions'] = [{'disk': d, 'start': s, 'end': e, 'bytes': e - s} for d, s, e in prepare.free_regions()]
+    except Exception:
+        pass
+    # Bounds: never return unbounded host device lists.
+    report['spares'] = report['spares'][:20]
+    report['freeRegions'] = report['freeRegions'][:20]
+    return report
+
+
 def dispatch(method, route, body):
+    if method == 'GET' and route == '/discovery':
+        try:
+            mount = mount_info()
+        except QuotaError as e:
+            mount = {'error': str(e)}
+        try:
+            state = load()
+        except QuotaError as e:
+            state = {'sites': {}, 'error': str(e)}
+        return discovery_report(state, mount if isinstance(mount, dict) and 'source' in mount else {'source': None, 'target': None, 'fstype': None, 'options': '', **({'error': mount.get('error')} if isinstance(mount, dict) else {})})
     mount = mount_info()
     state = load()
     if method == 'GET' and route == '/status':
         quota(mount['source'], 0)  # fail closed if the kernel rejects quotas
         return {'ready': True, 'availableBytes': capacity(state, mount['source']), 'hostReserveBytes': RESERVE, 'scope': 'site files and managed database data'}
+    if method == 'GET' and route == '/discovery':
+        return discovery_report(state, mount)
     match = re.fullmatch(r'/sites/([a-z0-9-]+)', route)
     if not match:
         raise QuotaError('Unknown quota operation.', 404)

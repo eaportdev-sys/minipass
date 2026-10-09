@@ -1425,6 +1425,67 @@ function showView(view) {
   document.querySelectorAll('.navitem').forEach(n => n.classList.toggle('active', n.dataset.view === view));
   if (view === 'trash') loadTrash();
   if (view === 'errors') loadPanelErrors();
+  if (view === 'storage') loadHostStorage();
+}
+function hostCandidateRows(bridge) {
+  if (!bridge || bridge.error) return `<div class="meta">${safeHtml(bridge && bridge.error ? bridge.error : 'Discovery unavailable — complete host quota setup and retry.')}</div>`;
+  const vgs = Object.entries(bridge.vgFree || {}).map(([vg, free]) => `<div class="storage-row"><b>VG free: ${safeHtml(vg)}</b><span>${storageSize(free)} — approve as <code>vg:${safeHtml(vg)}</code></span></div>`).join('');
+  const spares = (bridge.spares || []).map(d => `<div class="storage-row"><b>Spare: ${safeHtml(d)}</b><span>formatting destroys data — approve as <code>device:${safeHtml(d)}</code></span></div>`).join('');
+  const regions = (bridge.freeRegions || []).map(r => `<div class="storage-row"><b>Free space: ${safeHtml(r.disk)}</b><span>${storageSize(r.bytes)} — approve as <code>region:${safeHtml(r.disk)}:${r.start}:${r.end}</code></span></div>`).join('');
+  return vgs + spares + regions || '<div class="meta">No unallocated VG space, spare disks or free regions found. Attach storage, then refresh.</div>';
+}
+async function loadHostStorage() {
+  const box = document.getElementById('hostStorageBox');
+  const list = document.getElementById('hostCandidates');
+  const state = document.getElementById('hostQuotaState');
+  if (box) box.textContent = 'loading…';
+  if (list) list.innerHTML = '';
+  try {
+    const d = await (await fetch('/api/panel/storage/discovery')).json();
+    const q = d.quota || {};
+    if (state) { state.textContent = q.ready ? 'quotas active' : 'unenforced'; state.className = 'panel-state ' + (q.ready ? 'is-ok' : 'is-busy'); }
+    if (box) box.innerHTML = q.ready
+      ? `Quotas active. ${storageSize(q.availableBytes)} available for new allowances (Trash and host headroom reserved).`
+      : `${safeHtml(q.error || (d.setup && d.setup.message) || 'Quotas are not enforced yet.')}<div class="meta">Basic install is intentional — approve expansion below, then run the shown host command.</div>`;
+    if (list) list.innerHTML = hostCandidateRows(d.bridge);
+    const p = await (await fetch('/api/panel/storage/provision')).json();
+    if (p && p.approval) document.getElementById('provisionOut').textContent = `Pending host approval: ${p.approval.target} — run: sudo MINIPASS_USE_FREE_SPACE=1 bash install-linux.sh --provision-storage=${p.approval.target}`;
+    loadRemotes();
+  } catch { if (box) box.textContent = 'Storage discovery unavailable.'; }
+}
+async function loadRemotes() {
+  const box = document.getElementById('remoteList');
+  if (!box) return;
+  try {
+    const remotes = await (await fetch('/api/panel/storage/remotes')).json();
+    box.innerHTML = remotes.length ? remotes.map(r => `<div class="storage-row"><b>${safeHtml(r.type)} · ${safeHtml(r.address)}</b><span>${r.hasPassword ? 'password stored · ' : ''}backup-only, never quota-capable <button onclick="removeRemote('${r.id}')">remove</button></span></div>`).join('') : '<div class="meta">No remotes registered.</div>';
+  } catch { box.textContent = 'Remotes unavailable.'; }
+}
+async function addRemote() {
+  const body = { type: document.getElementById('remoteType').value, address: document.getElementById('remoteAddress').value.trim(), username: document.getElementById('remoteUser').value.trim(), password: document.getElementById('remotePass').value, mount: document.getElementById('remoteMount').value.trim() };
+  try {
+    const r = await (await fetch('/api/panel/storage/remotes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+    toast(r.error || `remote added (${r.id}) — backup-class only`, !r.error);
+    document.getElementById('remotePass').value = '';
+    loadRemotes();
+  } catch (e) { toast('add remote failed: ' + e.message, false); }
+}
+async function removeRemote(id) {
+  const ok = await uiConfirm({ title: 'Remove remote?', body: 'Removes the registry entry only. Mounted storage is left untouched.', confirmLabel: 'Remove' });
+  if (!ok) return;
+  await fetch('/api/panel/storage/remotes/' + encodeURIComponent(id), { method: 'DELETE' });
+  loadRemotes();
+}
+async function requestProvision() {
+  const target = document.getElementById('provisionTarget').value.trim();
+  const out = document.getElementById('provisionOut');
+  const ok = await uiConfirm({ title: 'Approve host storage setup?', body: `This records approval to format/use ${target} on the host. Formatting destroys anything on it. The host installer still performs the change — nothing is formatted from this browser.`, requireText: target, confirmLabel: 'Approve', danger: true });
+  if (!ok) return;
+  try {
+    const r = await (await fetch('/api/panel/storage/provision', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target, confirm: target }) })).json();
+    out.textContent = r.error || `Approved. On the host run: ${r.hostCommand}`;
+    toast(r.error || 'approval recorded — run the host command', !r.error);
+  } catch (e) { out.textContent = 'approval failed: ' + e.message; }
 }
 function panelErrorText(e) {
   return `${String(e.at || '').replace('T', ' ').slice(0, 19)} [${e.level || 'error'}] ${e.area || 'panel'}${e.site ? ' (' + e.site + ')' : ''}: ${e.message || ''}`;

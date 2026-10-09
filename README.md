@@ -184,13 +184,33 @@ privileged and never gets host block devices. Preserve/backup
 
 #### Disk sizing (system vs storage)
 
-Minipass is designed for a dedicated VM/standalone host with one disk split in two:
+Minipass is designed for a dedicated VM/standalone host with one disk split in two.
+The installer checks for **50 GB free** and warns (never fails) when below it:
 
 | Disk | System — root LV | Site storage (`/srv/apps`) | Example fit |
 | --- | --- | --- | --- |
 | 40 GB min | 30 GB | ~10 GB | one small site + Trash |
 | 100 GB | 50 GB | ~50 GB | e.g. four 10 GB sites |
 | 200 GB+ | 50 GB | rest | scale site count/size to taste |
+
+#### Basic install vs storage expansion
+
+`sudo bash install-linux.sh --basic` installs the basics only: it runs the
+50 GB free-space warning, sets up Docker/firewall/cron/dirs, starts the panel,
+and pulls database admin UI images **in the background after install** — it
+never scans partitions or provisions storage. Full installs keep the previous
+behavior (report free space, ask before using it).
+
+After a basic install, open the sidebar **Storage** view: it shows quota
+status, unallocated VG space, spare disks/partitions and free disk regions
+(read-only discovery through the root-only bridge), plus a typed approval that
+records the exact target and prints the host command
+(`sudo MINIPASS_USE_FREE_SPACE=1 bash install-linux.sh --provision-storage=<target>`).
+Formatting still happens on the host only — the browser never formats disks.
+Additional/remote storage (NFS, SMB, SSHFS, Google Drive, OneDrive, other) can
+be registered there for backups/archives; remotes are **never quota-capable**
+because project quotas require local ext4 block storage, and stored passwords
+are 0600 with API responses redacted.
 
 System covers Ubuntu, Docker, the panel image, all container images, build
 cache and logs — container images and build cache stay on the system disk by

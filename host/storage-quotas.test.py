@@ -282,6 +282,29 @@ class Tests(unittest.TestCase):
         self.assertFalse(item['ready'])
         shell.assert_not_called()
 
+    def test_basic_and_check_only_never_scan_or_provision(self):
+        def fake_run(args):
+            if args[0] == 'findmnt':
+                return json.dumps({'filesystems': [{**self.mount, 'target': '/', 'options': 'rw'}]})
+            raise AssertionError('basic install must not scan partitions: ' + ' '.join(args))
+        with patch.object(prepare, 'run', side_effect=fake_run), patch.object(prepare, 'shell') as shell:
+            item = prepare.setup(str(self.apps), str(self.root), basic=True)
+        self.assertFalse(item['ready'])
+        self.assertIn('deferred', item['message'])
+        shell.assert_not_called()
+        with patch.object(prepare, 'run', side_effect=fake_run):
+            found = prepare.discovery(str(self.apps))
+        self.assertIn('mount', found)
+        self.assertIn('freeRegions', found)
+
+    def test_discovery_route_tolerates_missing_quotas(self):
+        with patch.object(bridge, 'mount_info', side_effect=bridge.QuotaError('not active')), \
+                patch.object(bridge, 'load', return_value={'sites': {}, 'nextProject': 100000}), \
+                patch.object(bridge, 'discovery_report', return_value={'mount': {}}) as report:
+            out = bridge.dispatch('GET', '/discovery', {})
+        self.assertEqual(out, {'mount': {}})
+        report.assert_called_once()
+
     def test_offline_setup_refuses_mounted_devices_before_commands(self):
         device = types.SimpleNamespace(st_mode=stat.S_IFBLK, st_rdev=2051)
         with patch.object(prepare.os, 'stat', return_value=device), patch.object(prepare.os, 'major', return_value=8, create=True), patch.object(prepare.os, 'minor', return_value=3, create=True), patch.object(prepare.Path, 'read_text', return_value='1 2 8:3 / / rw - ext4 /dev/test rw\n'), patch.object(prepare, 'run') as run:

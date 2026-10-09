@@ -17,6 +17,7 @@ const envDefaults = require('./lib/env-defaults');
 const tokens = require('./lib/tokens');
 const portsLib = require('./lib/ports');
 const storage = require('./lib/storage');
+const hostStorage = require('./lib/host-storage');
 const trashLib = require('./lib/trash');
 const quotas = require('./lib/quotas');
 const panelLog = require('./lib/panel-log');
@@ -476,6 +477,30 @@ app.get('/api/apps', (req, res) => res.json(load().apps.map(meta => ({
 app.get('/api/panel/storage', async (req, res) => {
   try { res.json(await quotas.status()); }
   catch (e) { res.status(e.status || 503).json({ ready: false, error: e.message }); }
+});
+app.get('/api/panel/storage/discovery', async (req, res) => {
+  try { res.json(await hostStorage.discovery()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/panel/storage/remotes', (req, res) => {
+  try { res.json(hostStorage.loadRemotes().map(hostStorage.publicRemote)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/panel/storage/remotes', (req, res) => {
+  try { res.json(hostStorage.addRemote(req.body || {})); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.delete('/api/panel/storage/remotes/:id', (req, res) => {
+  try { res.json(hostStorage.removeRemote(req.params.id)); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.get('/api/panel/storage/provision', (req, res) => {
+  try { res.json({ approval: hostStorage.provisionStatus() }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/panel/storage/provision', (req, res) => {
+  try { res.json(hostStorage.requestProvision(req.body || {})); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 // Persistent panel error log: toasts vanish, this does not. Newest first.
 app.get('/api/panel/errors', (req, res) => {

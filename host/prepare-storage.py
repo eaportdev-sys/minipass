@@ -23,6 +23,7 @@ import subprocess
 import sys
 
 MIN_STORAGE_BYTES = 5 * 1000 ** 3  # below this, provisioning is not worthwhile
+MIN_INSTALL_BYTES = 50 * 1000 ** 3  # basic-install free-space warning threshold
 STORAGE_LABEL = 'minipass-apps'
 STORAGE_LV = 'minipass-apps'
 
@@ -316,7 +317,58 @@ def approved_use(description, approve):
     return False
 
 
-def setup(apps='/srv/apps', data='/srv/panel-data', approve=False):
+def discovery(apps='/srv/apps'):
+    """Read-only inventory for the panel. Never formats, partitions or mounts."""
+    out = {'mount': None, 'vgFree': {}, 'spares': [], 'freeRegions': [], 'appsFreeBytes': None, 'appsTotalBytes': None}
+    try:
+        out['mount'] = mount_info(apps)
+    except Exception as e:
+        out['mountError'] = str(e)[:200]
+    try:
+        out['vgFree'] = vg_free_bytes()
+    except Exception:
+        out['vgFree'] = {}
+    try:
+        out['spares'] = unused_devices()
+    except Exception:
+        out['spares'] = []
+    try:
+        regions = free_regions()
+        out['freeRegions'] = [{'disk': d, 'start': s, 'end': e, 'bytes': e - s} for d, s, e in regions]
+    except Exception:
+        out['freeRegions'] = []
+    try:
+        import shutil as _shutil
+        usage = _shutil.disk_usage(apps)
+        out['appsFreeBytes'] = usage.free
+        out['appsTotalBytes'] = usage.total
+    except Exception:
+        pass
+    return out
+
+
+def check_only(apps='/srv/apps', data='/srv/panel-data'):
+    """Basic-install path: report current state, never scan partitions or provision."""
+    try:
+        info = mount_info(apps)
+    except Exception as e:
+        status = {'ready': False, 'filesystem': None, 'message': 'Storage check only: ' + str(e)[:200] + '. Basic install continues; quotas stay unenforced.'}
+        Path(data).mkdir(parents=True, exist_ok=True)
+        Path(data, 'storage-quota-setup.json').write_text(json.dumps(status))
+        print(status['message'])
+        return status
+    status = {'ready': False, 'filesystem': info['fstype'], 'message': 'Basic install: storage provisioning deferred. Quotas stay unenforced until the Storage panel approves expansion.'}
+    if info['target'] == apps and info['fstype'] == 'ext4' and 'prjquota' in info['options'].split(',') and confirm_active(apps):
+        status.update(ready=True, message='ext4 project quotas are active.')
+    Path(data).mkdir(parents=True, exist_ok=True)
+    Path(data, 'storage-quota-setup.json').write_text(json.dumps(status))
+    print(status['message'])
+    return status
+
+
+def setup(apps='/srv/apps', data='/srv/panel-data', approve=False, basic=False, target=None):
+    if basic:
+        return check_only(apps, data)
     info = mount_info(apps)
     status = {'ready': False, 'filesystem': info['fstype'], 'message': ''}
     own_mount = info['target'] == apps
@@ -372,7 +424,9 @@ def setup(apps='/srv/apps', data='/srv/panel-data', approve=False):
             status['message'] = 'Project quota mount option prepared in /etc/fstab. Reboot during maintenance, then rerun the installer. No live root remount attempted.'
         elif not features:
             kind, source = choose_source(vg_free_bytes(), unused_devices())
-            if kind is None:
+            if target and kind and source != target and not (kind == 'vg' and ('/dev/' + source + '/' + STORAGE_LV) == target):
+                status['message'] = ('Approved target ' + target + ' does not match discovered source ' + str(source) + '. No storage changes made.')
+            elif kind is None:
                 region = biggest_region(free_regions())
                 if region is None:
                     status['message'] = ('Site storage still lives on the system disk without quota support, and no free space was found. '
@@ -454,10 +508,19 @@ if __name__ == '__main__':
     if os.geteuid() != 0:
         raise SystemExit('Run storage setup as root.')
     flag = '--use-free-space' in sys.argv or os.environ.get('MINIPASS_USE_FREE_SPACE', '').lower() in ('1', 'yes', 'true')
-    args = [a for a in sys.argv[1:] if a != '--use-free-space']
-    if len(args) == 2 and args[0] == '--offline':
-        offline(args[1])
-    elif not args:
-        setup(approve=flag)
+    basic = '--basic' in sys.argv or '--check-only' in sys.argv or os.environ.get('MINIPASS_BASIC', '').lower() in ('1', 'yes', 'true')
+    target = None
+    rest = []
+    for a in sys.argv[1:]:
+        if a in ('--use-free-space', '--basic', '--check-only'):
+            continue
+        if a.startswith('--target='):
+            target = a.split('=', 1)[1]
+        else:
+            rest.append(a)
+    if len(rest) == 2 and rest[0] == '--offline':
+        offline(rest[1])
+    elif not rest:
+        setup(approve=flag, basic=basic, target=target)
     else:
-        raise SystemExit('Usage: prepare-storage.py [--use-free-space] [--offline /dev/device]')
+        raise SystemExit('Usage: prepare-storage.py [--use-free-space] [--basic|--check-only] [--target=/dev/...] [--offline /dev/device]')
