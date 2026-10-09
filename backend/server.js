@@ -762,6 +762,10 @@ async function recordDeploy(id, rec) {
       m.lastDeploy = rec;
       if (rec.status === 'ok') {
         delete m.dirty;
+        if (Array.isArray(m.pendingImportBuilds) && Array.isArray(rec.services)) {
+          m.pendingImportBuilds = m.pendingImportBuilds.filter(name => !rec.services.includes(name));
+          if (!m.pendingImportBuilds.length) delete m.pendingImportBuilds;
+        }
         m.lastGoodDeploy = { at: rec.at, sha: rec.sha, status: rec.status, source: rec.source || null, durationMs: rec.durationMs != null ? rec.durationMs : null };
       }
       m.deployHistory = [{ at: rec.at, sha: rec.sha, status: rec.status, source: rec.source || null, durationMs: rec.durationMs != null ? rec.durationMs : null, error: rec.error || null }, ...(m.deployHistory || [])].slice(0, 10);
@@ -1057,11 +1061,12 @@ async function deployNow(id, opts = {}) {
     for (const s of svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false)) {
       if (/^db(-|$)/.test(s.name || '')) continue;
       const ctxDir = path.join(buildCodeDir, s.subdir || '');
-      const item = prebuild.plan(ctxDir);
+      const force = Array.isArray(meta.pendingImportBuilds) && meta.pendingImportBuilds.includes(s.name);
+      const item = prebuild.plan(ctxDir, { force });
       if (!item) continue;
       prebuildService = s.name;
       if (item.blocked) throw new Error(`service '${s.name}' pre-build blocked - running containers untouched: ${item.blocked}`);
-      fs.appendFileSync(buildLog, `--- pre-building service '${s.name}' folder '${s.subdir || '.'}' (${item.manager} run build) for missing '${item.outputDir}/' ---\n`);
+      fs.appendFileSync(buildLog, `--- pre-building service '${s.name}' folder '${s.subdir || '.'}' (${item.manager} run build) ${force ? 'after approved import correction' : `for missing '${item.outputDir}/'`} ---\n`);
       await prebuild.ensureBuilderImage(args => args[1] === 'pull'
         ? runLogged(DOCKER_BIN, args, { cwd: dir, logFile: buildLog })
         : runOut(DOCKER_BIN, args, { cwd: dir }));
@@ -1198,7 +1203,7 @@ async function deployNow(id, opts = {}) {
     await recordDeploy(id, { sha, at: stamp(), status: 'error', error: ('new containers unhealthy - rolled back: ' + gate.detail).slice(-500) });
     throw new Error('new containers unhealthy - rolled back: ' + gate.detail);
   }
-  await recordDeploy(id, { sha, at: stamp(), status: 'ok' });
+  await recordDeploy(id, { sha, at: stamp(), status: 'ok', services: only.length ? only : svc.fullServices(meta, dir).filter(s => s.enabled !== false).map(s => s.name) });
   // Landing-path discovery is optional follow-up work. Do not hold the deploy
   // lock (and keep the UI pulsing) after the release is already healthy/live.
   autodetectHome(id).catch(e => console.error(id, 'home detection:', e.message));
@@ -1895,14 +1900,26 @@ app.post('/api/apps/:id/remediate', async (req, res) => {
       const matches = remediationSuggestions(meta, dir).filter(s => s.key === key && (!requestedService || s.service === requestedService));
       if (matches.length !== 1) throw lifecycleError('remediation no longer applies or is ambiguous - refresh suggestions', 409);
       const match = matches[0];
-      if (match.kind === 'dockerfile-restore' && match.revision !== (req.body && req.body.revision)) throw lifecycleError('Dockerfile or backup changed - refresh the preview before applying', 409);
+      if (match.revision && match.revision !== (req.body && req.body.revision)) throw lifecycleError('Files changed - refresh the recovery preview before applying', 409);
       const ctxDir = remediationContext(dir, match.subdir);
-      const result = remediate.apply(ctxDir, match);
+      if (!/^[A-Za-z0-9_-]{1,32}$/.test(match.service || '')) throw lifecycleError('invalid recovery service name', 400);
+      const result = remediate.apply(ctxDir, match, { backupRoot: path.join(dir, '.remediation-backups', match.service) });
+      if (result.backup) result.backup = path.relative(dir, result.backup).split(path.sep).join('/');
+      if (match.kind === 'import-repair') {
+        const fresh = load();
+        const stored = fresh.apps.find(a => a.id === meta.id);
+        if (!stored) throw lifecycleError('site metadata disappeared after saving the import correction', 409);
+        stored.pendingImportBuilds = [...new Set([...(stored.pendingImportBuilds || []), match.service])];
+        save(fresh);
+      }
       try { panelLog.logEvent({ level: 'warn', area: 'remediate', site: meta.id, message: `applied ${key}: ${result.applied.join(', ')}` }); } catch {}
       await markDirty(meta.id, 'remediation applied: ' + key);
       res.json({ ok: true, saved: true, ...result, note: 'box-local change - use local rebuild to preserve box edits; commit to the repo to keep it' });
     });
-  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+  } catch (e) {
+    panelLog.logEvent({ level: 'error', area: 'remediate', site: req.params.id, message: e.message });
+    res.status(e.status || 500).json({ error: e.message });
+  }
 });
 app.post('/api/apps/:id/services', async (req, res) => {
   try {

@@ -2,6 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const vm = require('vm');
 const prebuild = require('./prebuild');
 
 const VITE_DOCKERFILE = 'FROM nginx:stable-alpine\nWORKDIR /app\nCOPY . .\nRUN cp -r /app/dist/* /usr/share/nginx/html\nEXPOSE 80\n';
@@ -37,6 +38,9 @@ dir = fixture({ Dockerfile: VITE_DOCKERFILE, 'package.json': pkg('vite build') }
 dirs.push(dir);
 fs.mkdirSync(path.join(dir, 'dist'));
 assert.equal(prebuild.plan(dir), null, 'existing output dirs need no pre-build');
+assert.equal(prebuild.plan(dir, { force: true }).outputDir, 'dist', 'approved import edits force the repo build even when output exists');
+assert.equal(prebuild.plan(dirs[2], { force: true }), null, 'force never replaces a self-building Dockerfile');
+assert.equal(prebuild.plan(dirs[3], { force: true }), null, 'force never bypasses a panel-owned Dockerfile build');
 
 dir = fixture({ Dockerfile: VITE_DOCKERFILE, 'package.json': pkg('') });
 dirs.push(dir);
@@ -64,6 +68,18 @@ async function main() {
   const pulls = [];
   await prebuild.ensureBuilderImage(async args => { pulls.push(args); if (args[1] === 'inspect') throw new Error('missing'); return ''; });
   assert.deepEqual(pulls[1], ['image', 'pull', prebuild.BUILDER_IMAGE], 'builder image pulls only when absent');
+  const server = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+  const start = server.indexOf('async function recordDeploy(');
+  const stored = { id: 'demo', pendingImportBuilds: ['app', 'admin'] };
+  const context = vm.createContext({ deployOps: new Map(), load: () => ({ apps: [stored] }), save: () => {},
+    panelLog: { redact: text => text, logEvent: () => {}, deploymentEvent: (id, rec) => rec } });
+  vm.runInContext(server.slice(start, server.indexOf('// Anything that changes', start)), context);
+  await vm.runInContext("recordDeploy('demo', {status:'error', error:'build failed', services:['app']})", context);
+  assert.deepEqual(stored.pendingImportBuilds, ['app', 'admin'], 'failed builds retain the pending source rebuild');
+  await vm.runInContext("recordDeploy('demo', {status:'ok', services:['app']})", context);
+  assert.deepEqual(Array.from(stored.pendingImportBuilds), ['admin'], 'a scoped success only clears its own service marker');
+  await vm.runInContext("recordDeploy('demo', {status:'ok', services:['admin']})", context);
+  assert(!stored.pendingImportBuilds, 'markers clear after a verified successful deployment');
   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
   console.log('Pre-build detection: repo-owned dist/build/out triggers, self-builders, seeded files, ignore blocks and argv shape: OK');
 }

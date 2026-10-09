@@ -33,6 +33,14 @@ assert(!suggestions[0].key && !suggestions[0].preview, 'missing source is explai
 assert(suggestions[0].detail.includes('src/common/utils') && suggestions[0].detail.includes('TS2307'));
 assert(!fs.existsSync(path.join(dir, 'src/common/utils.ts')));
 assert.throws(() => remediate.apply(dir, { key: 'missing-module:src/common/utils.ts', kind: 'missing-module' }), /unknown remediation/);
+assert.deepEqual(remediate.missingModules("pre-build failed: docker exited with code 2: src/a.ts(1,2): error TS2307: Cannot find module './missing'.\nsrc/b.ts:7:30 - error TS2307: Cannot find module './missing'.").map(e => e.file), ['src/a.ts', 'src/b.ts'], 'prefixed and pretty compiler output preserve the actual filenames');
+fs.writeFileSync(path.join(dir, 'src/common/utilities.ts'), 'export const isProduction = import.meta.env.MODE === "production";\n');
+suggestions = remediate.suggest(dir, errorText, null);
+assert.equal(suggestions.length, 1);
+assert.equal(suggestions[0].kind, 'import-repair');
+assert.equal(suggestions[0].files.length, 2);
+assert(suggestions[0].detail.includes('TS2307') && suggestions[0].preview.includes('common/utilities'));
+assert.equal(remediate.suggest(dir, NPM_CRASH, TEMPLATE)[0].kind, 'import-repair', 'source correction remains visible even when npm failed before the compiler');
 
 dir = fixture({ Dockerfile: VITE_DOCKERFILE, 'package.json': pkg });
 suggestions = remediate.suggest(dir, 'build failed', TEMPLATE);

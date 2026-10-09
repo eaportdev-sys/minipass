@@ -32,6 +32,16 @@ minipass turns a folder or git repo into a running site with one flow:
   output. Compiler errors are retained in deployment history and the Error log,
   not discarded behind an `ELIFECYCLE` footer. Missing modules are diagnosed;
   Minipass never generates placeholder exports to conceal a source error.
+  For an unresolved relative named import, a bounded source check can propose
+  the one existing module declaring all required exports. The Deploy tab lists
+  every affected file and previews the exact import-only diff; approval is required.
+  Ambiguous candidates, incomplete scans and unsupported imports get guidance,
+  not guessed edits. Matching exports cannot prove intended behavior; review the
+  proposed destination. Original source files are preserved outside `code/` in
+  the site's `.remediation-backups/` folder. Use local rebuild after applying,
+  and commit the changes to the deployment repository to retain them on fresh clones.
+  An approved import correction also marks that service for a source rebuild;
+  existing `dist/` output cannot silently bypass compilation of the edits.
   A taken host port is automatically rebound to the next free one before the build.
   **Redeploy** pulls the repo first (recovery path for broken box edits);
   **local rebuild** skips the pull and builds the box files as-is.

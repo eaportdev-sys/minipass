@@ -51,6 +51,23 @@ async function main() {
   assert.equal(posted.url, '/api/apps/demo/remediate');
   assert.deepEqual(posted.body, { key: restore.key, service: restore.service, revision: restore.revision });
   assert(confirmed.body.includes('local rebuild'));
+  const importFix = { key: 'import-repair:verified-key', kind: 'import-repair', service: 'app', revision: 'source-revision',
+    title: 'Correct imports to <existing.ts>', detail: 'One declared export match', files: ['src/a.ts', 'src/b.ts'],
+    preview: '--- a/src/a.ts\n-import { ready } from "./missing";\n+import { ready } from "./existing";' };
+  context.fetch = async (url, opts) => {
+    if (opts) posted = { url, body: JSON.parse(opts.body) };
+    return { json: async () => opts ? { ok: true, saved: true, applied: importFix.files, nextDeploy: 'local' } : [importFix] };
+  };
+  await run('loadRemediations(true)');
+  assert(element('remediateBox').innerHTML.includes('apply import correction'));
+  assert(element('remediateBox').innerHTML.includes('Correct imports to &lt;existing.ts&gt;'));
+  assert(element('remediateBox').innerHTML.includes('+import { ready } from "./existing";'));
+  await run('applyRemediation(0)');
+  assert.equal(confirmed.title, 'Apply import correction?');
+  assert.equal(confirmed.confirmLabel, 'Apply imports');
+  assert(confirmed.body.includes('src/a.ts, src/b.ts'));
+  assert.deepEqual(posted.body, { key: importFix.key, service: importFix.service, revision: importFix.revision });
+  assert(toasts.at(-1).text.includes('local rebuild'));
 
   // Navigating away while the confirmation is open cannot apply to another site.
   posted = null;

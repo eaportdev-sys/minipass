@@ -394,7 +394,7 @@ async function loadRemediations(failed) {
     box.innerHTML = remediateCache.map((s, i) =>
       `<div class="remediate-item"><b>${safeHtml(s.title)}</b><div class="meta">Service: ${safeHtml(s.service || 'app')} · ${safeHtml(s.subdir || 'repository root')}</div><div class="meta">${safeHtml(s.detail)}</div>` +
       (s.preview ? `<pre class="compact-output">${safeHtml(s.preview)}</pre>` : '') +
-      (s.key ? `<div class="appcard-actions"><button class="btn primary" onclick="applyRemediation(${i})">${s.kind === 'dockerfile-restore' ? 'restore original Dockerfile' : 'apply fix'}</button></div>` : '') + '</div>'
+      (s.key ? `<div class="appcard-actions"><button class="btn primary" onclick="applyRemediation(${i})">${s.kind === 'dockerfile-restore' ? 'restore original Dockerfile' : s.kind === 'import-repair' ? 'apply import correction' : 'apply fix'}</button></div>` : '') + '</div>'
     ).join('');
   } catch {
     if (seq === remediateSeq && currentApp === appId) { card.style.display = 'none'; box.innerHTML = ''; }
@@ -418,9 +418,9 @@ async function applyRemediation(i) {
   if (!s || !s.key || !currentApp) return;
   const appId = currentApp;
   const ok = await uiConfirm({
-    title: 'Apply fix?',
+    title: s.kind === 'import-repair' ? 'Apply import correction?' : 'Apply fix?',
     body: `${s.title}. Writes box files only (${(s.files || []).join(', ')}) — use local rebuild afterwards to preserve box edits. Your remote repo stays untouched until you commit.`,
-    confirmLabel: 'Apply fix'
+    confirmLabel: s.kind === 'import-repair' ? 'Apply imports' : 'Apply fix'
   });
   if (!ok || currentApp !== appId) return;
   try {

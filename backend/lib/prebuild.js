@@ -75,10 +75,11 @@ function ignoreBlocks(ctxDir, outputDir) {
   } catch { return false; }
 }
 
-function plan(ctxDir) {
+function plan(ctxDir, { force = false } = {}) {
   const dockerfile = readFile(ctxDir, 'Dockerfile');
   if (!dockerfile || isPanelSeeded(dockerfile) || buildsItself(dockerfile)) return null;
   const missing = expectedOutputs(dockerfile).filter(out => {
+    if (force) return true; // approved source edits must not reuse stale output
     try { return !fs.statSync(path.join(ctxDir, out)).isDirectory(); } catch { return true; }
   });
   if (!missing.length) return null;

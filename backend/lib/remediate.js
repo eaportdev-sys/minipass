@@ -7,6 +7,7 @@ const path = require('path');
 const crypto = require('crypto');
 const prebuild = require('./prebuild');
 const { failureSummary } = require('./build-log');
+const importRepair = require('./import-repair');
 
 const VALID_KEY = /^[a-z-]+:[A-Za-z0-9_.\/-]{1,120}$/;
 
@@ -31,7 +32,8 @@ function restoreRevision(current, original) {
 function missingModules(errorText) {
   const out = [];
   for (const line of String(errorText || '').split('\n')) {
-    const m = line.match(/^(.+?)\(\d+,\d+\):\s*error\s+TS2307:\s*Cannot find module\s+'([^']+)'/);
+    const clean = line.replace(/\x1b\[[0-9;]*m/g, '').replace(/^\s*(?:#\d+\s+)?\d+\.\d+\s+/, '');
+    const m = clean.match(/(?:^|:\s+)([A-Za-z0-9_.\/\\-]+\.(?:tsx?|jsx?|[mc]ts|[mc]js))(?:(?:\(\d+,\s*\d+\):)|(?::\d+:\d+\s*-))\s*error\s+TS2307:\s*Cannot find module\s+'([^']+)'/);
     if (m) out.push({ file: m[1].trim(), request: m[2] });
   }
   return out;
@@ -47,43 +49,25 @@ function resolveRequest(ctxDir, fromFile, request) {
   return path.relative(ctxDir, base).split(path.sep).join('/');
 }
 
-// Identifier names imported from the missing module across the repo.
-function importedNames(ctxDir, request) {
-  const names = new Set();
-  const walk = dir => {
-    let entries = [];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) {
-        if (['node_modules', '.git', 'dist', 'build', 'out'].includes(e.name)) continue;
-        walk(full);
-      } else if (e.isFile() && /\.(ts|tsx)$/.test(e.name)) {
-        const text = readText(full);
-        if (!text) continue;
-        for (const m of text.matchAll(/import\s*(?:\{([^}]*)\}|(\*\s*as\s+[\w$]+)|([\w$]+))\s*from\s*['"]([^'"]+)['"]/g)) {
-          if (m[4] !== request) continue;
-          if (m[1]) for (const part of m[1].split(',')) {
-            const name = (part.trim().split(/\s+as\s+/).pop() || '').trim();
-            if (/^[\w$]+$/.test(name) && name !== 'type') names.add(name);
-          }
-          else if (m[3]) names.add(m[3]);
-        }
-      }
-    }
-  };
-  walk(ctxDir);
-  return [...names].slice(0, 20);
-}
-
 function suggest(ctxDir, errorText, templateDockerfile, latestError = errorText) {
-  const suggestions = [];
+  // Inspect source even when the latest install failure prevented tsc from
+  // running. This can show a separate, previewed import correction alongside
+  // Dockerfile recovery instead of hiding the source problem until another build.
+  const suggestions = importRepair.suggest(ctxDir);
   const seen = new Set();
   for (const { file, request } of missingModules(errorText)) {
     const rel = resolveRequest(ctxDir, file, request);
     const identity = rel || `${file}:${request}`;
     if (seen.has(identity)) continue;
     seen.add(identity);
+    const checked = rel && suggestions.find(s => s.unresolved === rel);
+    if (checked) {
+      checked.detail = `The compiler reported TS2307 in ${file}. ` + checked.detail;
+      continue;
+    }
+    // The build record is historical after a saved correction. Do not keep
+    // diagnosing an import that the current source no longer contains.
+    if (!importRepair.hasImport(ctxDir, file, request)) continue;
     suggestions.push({
       kind: 'diagnostic',
       title: `TypeScript cannot resolve '${request}'`,
@@ -131,14 +115,15 @@ function suggest(ctxDir, errorText, templateDockerfile, latestError = errorText)
   });
   if (!npmCrash && !suggestions.length && /pre-build failed|ELIFECYCLE|error TS\d+/i.test(String(latestError || ''))) suggestions.push({
     kind: 'diagnostic', title: 'Repository pre-build failed',
-    detail: 'The repository build command failed. This does not establish that its Dockerfile is wrong. Compiler and installer details are retained in the latest build log; Minipass will not replace the Dockerfile or invent application code to hide the failure.',
+    detail: 'The last deployment\'s repository build command failed. This does not establish that its Dockerfile is wrong. After source edits, use local rebuild to verify them. Compiler and installer details are retained in the latest build log; Minipass will not replace the Dockerfile or invent application code to hide the failure.',
     files: [], preview: failureSummary(errorText)
   });
   return suggestions;
 }
 
-function apply(ctxDir, suggestion) {
+function apply(ctxDir, suggestion, options = {}) {
   if (!suggestion || !VALID_KEY.test(suggestion.key || '')) throw new Error('unknown remediation');
+  if (suggestion.kind === 'import-repair') return importRepair.apply(ctxDir, suggestion, options);
   if (suggestion.kind === 'dockerfile-restore') {
     const dfName = (suggestion.files && suggestion.files[0]) || 'Dockerfile';
     const dfPath = inside(ctxDir, dfName);
@@ -162,4 +147,4 @@ function apply(ctxDir, suggestion) {
   throw new Error('unknown remediation');
 }
 
-module.exports = { VALID_KEY, suggest, apply, missingModules, importedNames };
+module.exports = { VALID_KEY, suggest, apply, missingModules };
