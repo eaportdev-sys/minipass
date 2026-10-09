@@ -18,4 +18,7 @@ assert(rows.includes('vg:ubuntu-vg') && rows.includes('device:/dev/sdb') && rows
 assert(rows.includes('fillProvisionTarget('), 'candidates fill the approval field instead of requiring retyping');
 const evil = vm.runInContext(`hostCandidateRows({vgFree:{'<vg>':1},spares:[],freeRegions:[]})`, context);
 assert(!evil.includes('<vg>'), 'candidate names are escaped');
+const capacity = vm.runInContext(`hostCapacityMarkup({bridge:{mount:{source:'/dev/sda2',target:'/'},appsTotalBytes:100,appsFreeBytes:36},quota:{ready:false,error:'not active'}})`, context);
+assert(capacity.includes('/dev/sda2') && capacity.includes('100 total') && capacity.includes('64 used') && capacity.includes('36 free'), 'capacity shows drive size, used and available');
+assert(capacity.includes('not active'), 'quota state stays visible below the numbers');
 console.log('Host storage UI: sidebar view, escaped candidates and approval-shaped targets: OK');

@@ -1452,6 +1452,19 @@ function fillProvisionTarget(target) {
   const input = document.getElementById('provisionTarget');
   if (input) { input.value = target; input.focus(); }
 }
+function hostCapacityMarkup(d) {
+  const b = (d && d.bridge) || {};
+  const q = (d && d.quota) || {};
+  const mount = b.mount || {};
+  const where = mount.source ? ` (${safeHtml(mount.source)} on ${safeHtml(mount.target || '/srv/apps')})` : '';
+  const disk = Number.isFinite(b.appsTotalBytes) && Number.isFinite(b.appsFreeBytes)
+    ? `Host filesystem${where}: ${storageSize(b.appsTotalBytes)} total · ${storageSize(b.appsTotalBytes - b.appsFreeBytes)} used · ${storageSize(b.appsFreeBytes)} free.`
+    : `Host filesystem size unavailable${where}.`;
+  const quota = q.ready
+    ? `Quotas active — ${storageSize(q.availableBytes)} available for new allowances (Trash and host headroom reserved).`
+    : `${q.error || 'Quotas are not enforced yet.'} Basic install is intentional — approve expansion below, then run the shown host command.`;
+  return `<div>${disk}</div><div class="meta">${safeHtml(quota)}</div>`;
+}
 async function loadHostStorage() {
   const box = document.getElementById('hostStorageBox');
   const list = document.getElementById('hostCandidates');
@@ -1462,9 +1475,7 @@ async function loadHostStorage() {
     const d = await (await fetch('/api/panel/storage/discovery')).json();
     const q = d.quota || {};
     if (state) { state.textContent = q.ready ? 'quotas active' : 'unenforced'; state.className = 'panel-state ' + (q.ready ? 'is-ok' : 'is-busy'); }
-    if (box) box.innerHTML = q.ready
-      ? `Quotas active. ${storageSize(q.availableBytes)} available for new allowances (Trash and host headroom reserved).`
-      : `${safeHtml(q.error || (d.setup && d.setup.message) || 'Quotas are not enforced yet.')}<div class="meta">Basic install is intentional — approve expansion below, then run the shown host command.</div>`;
+    if (box) box.innerHTML = hostCapacityMarkup(d);
     if (list) list.innerHTML = hostCandidateRows(d.bridge);
     const p = await (await fetch('/api/panel/storage/provision')).json();
     if (p && p.approval) document.getElementById('provisionOut').textContent = `Pending host approval: ${p.approval.target} — run: sudo MINIPASS_USE_FREE_SPACE=1 bash install-linux.sh --provision-storage=${p.approval.target}`;
