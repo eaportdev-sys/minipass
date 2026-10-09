@@ -1,0 +1,32 @@
+const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const identity = require('./site-identity');
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-site-identity-'));
+try {
+  assert.equal(identity.displayName('  My website  '), 'My website');
+  assert.equal(identity.displayName('café <preview>'), 'café <preview>');
+  for (const name of ['', 'a'.repeat(81), '../bad', 'https://github.com/owner/repo', 'site\nname']) assert.throws(() => identity.displayName(name), /site name/);
+  const meta = { apps: [{ id: 'old-name', name: 'reused' }], trash: [{ id: 'site-' + 'a'.repeat(24), name: 'reused' }] };
+  const sequence = ['a', 'b', 'c'];
+  const busy = new Set(['site-' + 'b'.repeat(24)]);
+  const id = identity.allocate(root, meta, busy, () => sequence.shift().repeat(24));
+  assert.equal(id, 'site-' + 'c'.repeat(24));
+  const next = identity.allocate(root, meta);
+  assert(identity.newId(next) && next !== id, 'names never participate in identity allocation');
+  fs.mkdirSync(path.join(root, next));
+  assert.throws(() => identity.allocate(root, meta, new Set(), () => next.slice(5)), /unique site id/, 'orphaned disk folders are not reused');
+  const dir = path.join(root, id);
+  fs.mkdirSync(dir);
+  identity.writeName(dir, id, 'reused');
+  assert.equal(identity.readName(dir, id), 'reused');
+  assert.equal(identity.readName(dir, 'another-id'), 'another-id', 'identity file cannot change recovered ids');
+  assert.equal(identity.readName(root, 'old-name'), 'old-name', 'legacy sites need no directory migration');
+  fs.writeFileSync(path.join(dir, '.pending-create.json'), JSON.stringify({ id, repoUrl: 'https://example.invalid/repo.git' }));
+  assert.equal(identity.pending(root, id).id, id);
+  assert.throws(() => identity.pending(root, 'old-name'), /invalid pending/);
+  fs.writeFileSync(path.join(dir, '.pending-create.json'), JSON.stringify({ id: next }));
+  assert.throws(() => identity.pending(root, id), /does not match/);
+  console.log('Site identity: independent opaque IDs, live/Trash/busy/orphan collision guards, display-name recovery and pending retry isolation: OK');
+} finally { fs.rmSync(root, { recursive: true, force: true }); }

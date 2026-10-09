@@ -221,7 +221,7 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
         // keep per-app deploy keys so the key can still be shown + registered
         try {
           for (const f of fs.readdirSync(dir)) {
-            if (f === 'deploy-key' || f === 'deploy-key.pub' || f === '.storage-quota.json') continue;
+            if (f === 'deploy-key' || f === 'deploy-key.pub' || f === '.storage-quota.json' || f === '.pending-create.json') continue;
             fs.rmSync(path.join(dir, f), { recursive: true, force: true });
           }
         } catch {}

@@ -23,6 +23,8 @@ const panelLog = require('./lib/panel-log');
 const prebuild = require('./lib/prebuild');
 const { runLogged, failureSummary } = require('./lib/build-log');
 const remediate = require('./lib/remediate');
+const importProtection = require('./lib/import-protection');
+const siteIdentity = require('./lib/site-identity');
 const { refreshStandardDockerfile, standardDockerfileType } = require('./lib/dockerfiles');
 const { buildProfile, readBuildProfile, localBuildProfile, isJekyll } = require('./lib/build-profile');
 
@@ -306,7 +308,7 @@ function pubApp(a) {
   // detection therefore mistook /health/live for their homepage. Preserve an
   // operator-set path, otherwise frontend roots always open at /.
   const homePath = ['static', 'react'].includes(a.type) && !a.homePathManual ? '' : (a.homePath || '');
-  return { ...a, homePath, github: pub };
+  return { ...a, name: a.name || a.id, homePath, github: pub };
 }
 function publicServices(meta, dir) {
   return svc.fullServices(meta, dir).map(s => {
@@ -487,13 +489,10 @@ app.post('/api/apps', async (req, res) => {
     const { name, type, repoUrl, db, port, domain } = req.body;
     if (!name || !type) return res.status(400).json({ error: 'name and type required' });
     if (!['static', 'react', 'node', 'php'].includes(type)) return res.status(400).json({ error: 'unsupported application type' });
-    const rawName = String(name).trim();
-    if (/:\/\/|[\\/]/.test(rawName)) return res.status(400).json({ error: 'site name must be short, for example knex-demo; put the repository URL in Code source' });
-    const id = rawName.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-    if (!id || id.length > 32) return res.status(400).json({ error: 'site name must produce 1–32 letters, numbers, or hyphens' });
-    if (!trashLib.validId(id)) return res.status(400).json({ error: 'site name must start with a letter or number; minipass is reserved for the panel' });
-    if (lifecycleLocks.has(id) || (load().trash || []).some(t => t.id === id)) return res.status(409).json({ error: 'site name is held in Trash - restore it or permanently destroy it before reusing the name' });
-    if (creatingSites.has(id) || load().apps.some(a => a.id === id)) return res.status(409).json({ error: 'site already exists or is being created' });
+    const rawName = siteIdentity.displayName(name);
+    const id = req.body.pendingId || siteIdentity.allocate(APPS_DIR, load(), new Set([...creatingSites, ...lifecycleLocks]));
+    if (lifecycleLocks.has(id) || creatingSites.has(id) || [...load().apps, ...(load().trash || [])].some(a => a.id === id)) return res.status(409).json({ error: 'site identity is already registered or busy' });
+    const draft = req.body.pendingId ? siteIdentity.pending(APPS_DIR, id) : null;
     const storageBytes = quotas.limitBytes(req.body.storageGB);
     creatingId = id;
     creatingSites.add(id);
@@ -553,6 +552,7 @@ app.post('/api/apps', async (req, res) => {
     }
     const dbs = normDbs(req.body.dbs !== undefined ? req.body.dbs : db);
     const subdir = String(req.body.subdir || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '') || '';
+    if (draft && (draft.repoUrl !== finalRepoUrl || draft.branch !== explicitBranch || draft.subdir !== subdir)) throw lifecycleError('pending checkout uses a different source - cancel and reopen before changing repositories, branches or folders');
     // Requested allowance is always validated and recorded. When the host
     // quota bridge is unavailable, creation proceeds unenforced rather than
     // bricking site creation - the UI labels it honestly as not enforced.
@@ -567,18 +567,23 @@ app.post('/api/apps', async (req, res) => {
       storageWarning = e.message;
       storageQuota = { projectId: null, limitBytes: storageBytes, enforced: false };
     }
+    const pendingDir = appDir(APPS_DIR, id);
+    fs.mkdirSync(pendingDir, { recursive: true });
+    fs.writeFileSync(path.join(pendingDir, '.pending-create.json'), JSON.stringify({ id, repoUrl: finalRepoUrl, branch: explicitBranch, subdir }), { mode: 0o600 });
     const created = createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain: appDomain, hostPort, gitToken: siteToken, subdir, gitBranch: explicitBranch, standardDockerfile: req.body.standardDockerfile === true, modernizeBuild: req.body.modernizeBuild === true });
+    siteIdentity.writeName(created.dir, id, rawName);
     fs.writeFileSync(path.join(created.dir, '.storage-quota.json'), JSON.stringify({ projectId: storageQuota.projectId, limitBytes: storageBytes }), { mode: 0o600 });
     quotas.bindDatabases(created.dir);
     envSetManaged(created.dir, { COMPOSE_PROJECT_NAME: id });
     const db_ = load();
-    const meta = { id, type: created.type || type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: appDomain, token, hostPort, subdir: created.subdir || '', storageQuota, buildOptions: { modernize: req.body.modernizeBuild === true }, createdAt: new Date().toISOString() };
+    const meta = { id, name: rawName, type: created.type || type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: appDomain, token, hostPort, subdir: created.subdir || '', storageQuota, buildOptions: { modernize: req.body.modernizeBuild === true }, createdAt: new Date().toISOString() };
     // Capture repository env sources before the first deploy. Never fail an
     // otherwise valid create solely because the private snapshot could not be written.
     try { applyEnvDefaults(meta, created.dir, req.hostname, req.protocol); }
     catch (e) { console.error(id, 'env defaults snapshot:', e.message); }
     db_.apps = db_.apps.filter(a => a.id !== id).concat([meta]);
     save(db_);
+    try { fs.unlinkSync(path.join(created.dir, '.pending-create.json')); } catch {}
     // Source linking and automatic deployment are separate choices. The first
     // build is manual and automation stays off until explicitly enabled.
     const webhookNote = ghLink ? 'github linked - automation disabled' : 'no github automation';
@@ -588,10 +593,11 @@ app.post('/api/apps', async (req, res) => {
     res.json({ ...pubApp(meta), localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote, storageEnforced: storageQuota.enforced === true, ...(storageWarning ? { storageWarning } : {}) });
   } catch (e) {
     const error = redactUrl(e.message);
-    try { panelLog.logEvent({ level: 'error', area: 'create', site: String((req.body && req.body.name) || '').toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 32) || null, message: error }); } catch {}
+    try { panelLog.logEvent({ level: 'error', area: 'create', site: creatingId, message: error }); } catch {}
     const needsDockerfile = /no Dockerfile in build context and type/i.test(error);
     const needsModernization = /Jekyll static build needs modernization/i.test(error);
-    res.status(needsDockerfile || needsModernization ? 409 : (e.status || 500)).json({ error, needsDockerfile, needsModernization });
+    const pendingId = creatingId && fs.existsSync(path.join(appDir(APPS_DIR, creatingId), '.pending-create.json')) ? creatingId : null;
+    res.status(needsDockerfile || needsModernization ? 409 : (e.status || 500)).json({ error, needsDockerfile, needsModernization, ...(pendingId ? { pendingId } : {}) });
   } finally {
     if (creatingId) creatingSites.delete(creatingId);
   }
@@ -601,7 +607,7 @@ app.post('/api/apps', async (req, res) => {
 app.delete('/api/apps/pending/:id', async (req, res) => {
   try {
     const id = String(req.params.id || '').toLowerCase().replace(/[^a-z0-9-]/g, '-');
-    if (!id) return res.status(400).json({ error: 'bad site name' });
+    if (!trashLib.validId(id)) return res.status(400).json({ error: 'bad site id' });
     if (creatingSites.has(id)) return res.status(409).json({ error: 'site creation is still in progress' });
     if (load().apps.some(a => a.id === id)) return res.status(409).json({ error: 'site is already registered' });
     const dir = appDir(APPS_DIR, id);
@@ -982,6 +988,11 @@ async function deployNow(id, opts = {}) {
     const url = isSsh ? meta.repoUrl : gh.authUrlFor(meta, meta.repoUrl);
     const env = isSsh ? appGitEnv(dir) : process.env;
     try {
+      const protectedServices = svc.fullServices(meta, dir);
+      for (const service of protectedServices.filter(s => s.enabled !== false)) importProtection.migrate(dir, service, codeDir);
+      if (fs.existsSync(path.join(codeDir, '.git'))) {
+        importProtection.run(dir, protectedServices, codeDir, 'suspend', line => fs.appendFileSync(buildLog, line + '\n'));
+      }
       if (!fs.existsSync(path.join(codeDir, '.git'))) {
         // first sync: repo linked after a template create - replace starter with repo,
         // keeping managed build files the container needs
@@ -999,12 +1010,28 @@ async function deployNow(id, opts = {}) {
         await sh(`git pull --ff-only "${url}" "${branch}"`, codeDir, env);
       }
     } catch (e) {
-      const msg = redactUrl(e.stderr ? String(e.stderr) : e.message);
+      let msg = redactUrl(e.stderr ? String(e.stderr) : e.message);
+      // A failed pull must not leave the exact approved correction removed.
+      try { importProtection.run(dir, svc.fullServices(meta, dir), codeDir, 'replay', line => fs.appendFileSync(buildLog, line + '\n')); }
+      catch (restoreError) { msg += '\nImport protection needs review: ' + restoreError.message; }
       const sha0 = await currentSha(dir);
       await recordDeploy(id, { sha: sha0, at: new Date().toISOString(), status: 'error', error: ('git sync failed - running containers untouched: ' + msg).slice(-500) });
       throw new Error(msg);
     }
     } // end pull (local rebuilds skip the sync: box files are the source of truth)
+  }
+  // All deployment sources, including detached local-push checkouts and local
+  // rebuilds, pass the same approval gate before any build or container swap.
+  const replayedImportServices = new Set();
+  try {
+    const protectedServices = svc.fullServices(meta, dir);
+    for (const service of protectedServices.filter(s => s.enabled !== false)) importProtection.migrate(dir, service, codeDir);
+    for (const name of importProtection.run(dir, protectedServices, buildCodeDir, 'replay', line => fs.appendFileSync(buildLog, line + '\n'))) replayedImportServices.add(name);
+  } catch (e) {
+    const failure = 'import protection blocked deployment - running containers untouched: ' + e.message;
+    fs.appendFileSync(buildLog, failure + '\n');
+    await recordDeploy(id, { sha: sourceSha || await currentSha(dir), at: new Date().toISOString(), status: 'error', error: failure });
+    throw new Error(failure);
   }
   // self-heal seeded build files: a panel-seeded Dockerfile/nginx.conf that later
   // vanished (swept, deleted, never committed) kills the build cryptically.
@@ -1061,7 +1088,7 @@ async function deployNow(id, opts = {}) {
     for (const s of svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false)) {
       if (/^db(-|$)/.test(s.name || '')) continue;
       const ctxDir = path.join(buildCodeDir, s.subdir || '');
-      const force = Array.isArray(meta.pendingImportBuilds) && meta.pendingImportBuilds.includes(s.name);
+      const force = replayedImportServices.has(s.name) || (Array.isArray(meta.pendingImportBuilds) && meta.pendingImportBuilds.includes(s.name)) || importProtection.list(dir, s.name).length > 0;
       const item = prebuild.plan(ctxDir, { force });
       if (!item) continue;
       prebuildService = s.name;
@@ -1858,9 +1885,11 @@ function remediationContext(dir, subdir) {
   return context;
 }
 function remediationSuggestions(meta, dir) {
+  const services = svc.fullServices(meta || {}, dir);
+  const protectedCards = importProtection.cards(dir, services);
   const out = [];
   const last = meta.lastDeploy && meta.lastDeploy.status !== 'ok' ? String(meta.lastDeploy.error || '') : '';
-  if (!last) return out;
+  if (!last) return protectedCards;
   // The deploy record truncates; the persisted log tail keeps the evidence
   // (tsc error lines, missing-module paths) suggestions match against.
   let evidence = last;
@@ -1878,7 +1907,7 @@ function remediationSuggestions(meta, dir) {
       out.push({ service: s.name, subdir: s.subdir || '', ...suggestion });
     }
   }
-  return out;
+  return [...out, ...protectedCards];
 }
 app.get('/api/apps/:id/remediations', (req, res) => {
   try {
@@ -1903,7 +1932,9 @@ app.post('/api/apps/:id/remediate', async (req, res) => {
       if (match.revision && match.revision !== (req.body && req.body.revision)) throw lifecycleError('Files changed - refresh the recovery preview before applying', 409);
       const ctxDir = remediationContext(dir, match.subdir);
       if (!/^[A-Za-z0-9_-]{1,32}$/.test(match.service || '')) throw lifecycleError('invalid recovery service name', 400);
-      const result = remediate.apply(ctxDir, match, { backupRoot: path.join(dir, '.remediation-backups', match.service) });
+      const result = remediate.apply(ctxDir, match, { backupRoot: path.join(dir, '.remediation-backups', match.service),
+        beforeApply: approval => importProtection.save(dir, match.service, match.subdir, approval) });
+      if (match.kind === 'import-repair') result.protected = true;
       if (result.backup) result.backup = path.relative(dir, result.backup).split(path.sep).join('/');
       if (match.kind === 'import-repair') {
         const fresh = load();
@@ -1914,12 +1945,23 @@ app.post('/api/apps/:id/remediate', async (req, res) => {
       }
       try { panelLog.logEvent({ level: 'warn', area: 'remediate', site: meta.id, message: `applied ${key}: ${result.applied.join(', ')}` }); } catch {}
       await markDirty(meta.id, 'remediation applied: ' + key);
-      res.json({ ok: true, saved: true, ...result, note: 'box-local change - use local rebuild to preserve box edits; commit to the repo to keep it' });
+      res.json({ ok: true, saved: true, ...result, note: result.protected ? 'approved import correction retained outside Git and revalidated on redeploy; remote repository unchanged' : 'box-local change - use local rebuild to preserve box edits; commit to the repo to keep it' });
     });
   } catch (e) {
     panelLog.logEvent({ level: 'error', area: 'remediate', site: req.params.id, message: e.message });
     res.status(e.status || 500).json({ error: e.message });
   }
+});
+app.delete('/api/apps/:id/import-protection', async (req, res) => {
+  try {
+    await siteLifecycle(req.params.id, async () => {
+      const meta = load().apps.find(a => a.id === req.params.id);
+      if (!meta) throw lifecycleError('unknown app', 404);
+      importProtection.remove(appDir(APPS_DIR, meta.id), req.body.service, req.body.key, req.body.revision);
+      panelLog.logEvent({ level: 'warn', area: 'remediate', site: meta.id, message: `removed import protection for '${req.body.service}': ${req.body.key}; current source unchanged` });
+      res.json({ ok: true });
+    });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/services', async (req, res) => {
   try {
@@ -2924,7 +2966,7 @@ app.post('/api/trash/:id/restore', async (req, res) => {
     if (!Array.isArray(db_.trash)) db_.trash = [];
     const idx = db_.trash.map(t => t.id).lastIndexOf(req.params.id);
     if (idx < 0) return res.status(404).json({ error: 'nothing in trash for ' + req.params.id });
-    if (db_.apps.some(a => a.id === req.params.id)) return res.status(409).json({ error: 'a live site already uses this name - delete or rename it first' });
+    if (db_.apps.some(a => a.id === req.params.id)) return res.status(409).json({ error: 'a live site already uses this internal id; resolve the metadata conflict before restoring' });
     const record = db_.trash[idx];
     if (db_.trash.filter(t => t.id === record.id).length > 1) return res.status(409).json({ error: 'multiple Trash generations share this name - use Empty trash to clean them together' });
     if (record.cleanupStartedAt || Date.now() - record.deletedAt >= TRASH_HOLD_MS) return res.status(410).json({ error: 'retention expired or permanent cleanup started - retry destruction instead' });
@@ -3101,7 +3143,7 @@ app.post('/api/panel/scan', (req, res) => {
         storageQuota = { projectId: storageQuota.projectId || null, limitBytes: storageQuota.limitBytes, enforced: !!storageQuota.projectId };
       }
       db_.apps.push({
-        id: name, type: env.APP_TYPE || 'static', repoUrl: '',
+        id: name, name: siteIdentity.readName(dir, name), type: env.APP_TYPE || 'static', repoUrl: '',
         db: dbLabel, domain: env.DOMAIN || '',
         token: crypto.randomBytes(16).toString('hex'),
         hostPort, ...(storageQuota ? { storageQuota } : {}), createdAt: new Date().toISOString(), recovered: true

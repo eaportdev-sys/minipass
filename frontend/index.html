@@ -206,7 +206,6 @@
         </div>
       </div>
       <div id="tab-deploy" class="sitetab" style="display:none">
-        <div class="deploy-top-grid">
           <div class="card deploy-manual-card">
             <div class="sectionhead"><div><b>Deploy now</b><div class="meta">Rebuild and release safely. Redeploy pulls the repo first; local rebuild uses the box files as-is (keeps Files-tab edits).</div></div><div class="deploy-now-btns"><button class="btn primary deploy-now-btn" onclick="deployCurrent()">redeploy</button><button class="deploy-now-btn" onclick="deployLocal()">local rebuild</button></div></div>
             <div class="deploy-safety-flow" aria-label="Deployment stages">
@@ -216,10 +215,18 @@
             </div>
             <div id="deployProg" class="deploy-progress" style="display:none"><div class="deploy-progress-head"><span id="deployStage">deploying…</span><span><b id="deployPct"></b> <span id="deployTime"></span></span></div><div class="progress"><div id="deployBar"></div></div><pre id="deployTail"></pre></div>
           </div>
+        <div class="card recovery" id="remediateCard" style="display:none">
+          <div class="sectionhead"><div><b>Fixes and deployment protection</b><div class="meta">Review the affected files and exact diff before approving. Import corrections are retained and checked after Git sync; other box edits still need local rebuild.</div></div><button onclick="loadRemediations(true)">refresh fixes</button></div>
+          <div id="remediateBox"></div>
+        </div>
+        <div class="deploy-top-grid">
           <div class="card deploy-history-card">
-            <div class="sectionhead"><div><b>Recent deployments</b><div class="meta">Latest five attempts from every source. Failed attempts show compiler and installer details below.</div></div><div class="actions"><button onclick="loadDeployLog()">latest build log</button></div></div>
+            <div class="sectionhead"><div><b>Recent deployments</b><div class="meta">Latest attempts from every source. Expand a failure for its saved details.</div></div></div>
             <div id="deployHist" class="deploy-history"></div>
-            <pre id="deployFullLog" class="compact-output" style="display:none" aria-live="polite"></pre>
+          </div>
+          <div class="card deploy-log-card">
+            <div class="sectionhead"><div><b>Latest build output</b><div class="meta">Scrollable log — kept separate from fixes.</div></div><div class="actions"><button onclick="loadDeployLog()">load / refresh</button><button onclick="showSiteTab('logs');showBuildLog(true)">full log</button></div></div>
+            <pre id="deployFullLog" class="deploy-build-log" style="display:none" tabindex="0" aria-label="Latest build output" aria-live="polite"></pre>
           </div>
         </div>
         <div class="deploy-source-grid">
@@ -243,11 +250,6 @@
             <div id="localHist" class="source-last"></div>
             <div id="localProg" class="deploy-progress" style="display:none"><div class="deploy-progress-head"><span id="localStage">deploying…</span><span><b id="localPct"></b> <span id="localTime"></span></span></div><div class="progress"><div id="localBar"></div></div></div>
           </div>
-        </div>
-        <div class="card recovery" id="remediateCard" style="display:none">
-          <b>Deployment diagnosis and recovery</b>
-          <div class="meta">Based on the latest failed deploy. Review any recovery preview before applying. Changes stay in box files only — use local rebuild afterwards to preserve local edits.</div>
-          <div id="remediateBox"></div>
         </div>
         <div class="card recovery">
           <b>Recovery tools</b>
@@ -357,7 +359,7 @@
   <header class="create-header"><h2 id="createTitle">New website</h2><div class="meta">Choose a source. Check the runtime and databases. Build.</div></header>
   <div class="create-body">
     <section class="create-identity">
-      <label for="name">Website name<input id="name" placeholder="my-site" autocomplete="off"></label>
+      <label for="name">Website name<input id="name" placeholder="my-site" autocomplete="off" maxlength="80"><span class="meta">Display name only. A unique site ID is assigned automatically; names can be reused.</span></label>
       <div>
         <div class="mlabel">Access</div>
         <div class="create-access">

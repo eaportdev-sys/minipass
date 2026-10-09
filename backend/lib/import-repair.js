@@ -138,8 +138,13 @@ function replacementRequest(source, request, target) {
   if (!rel.startsWith('.')) rel = './' + rel;
   return rel;
 }
-function plans(ctxDir, limits) {
+function plans(ctxDir, limits, originals) {
   const scanned = scan(ctxDir, limits);
+  if (originals) for (const file of scanned.files) {
+    if (!originals.has(file.file)) continue;
+    file.text = originals.get(file.file);
+    Object.assign(file, inspect(file.text, file.file));
+  }
   const groups = new Map();
   for (const source of scanned.files) for (const node of source.imports) {
     const request = node.source.value;
@@ -189,9 +194,9 @@ function plans(ctxDir, limits) {
     }
     const key = 'import-repair:' + hash([base, target.file]).slice(0, 24);
     const revision = hash([catalogue, key, [...changes.values()].map(c => [c.file, c.after])]);
-    result.push({ root: scanned.root, changes: [...changes.values()], public: {
+    result.push({ root: scanned.root, target: { file: target.file, digest: hash(target.text) }, changes: [...changes.values()], public: {
       key, kind: 'import-repair', unresolved: base, title: `Correct imports to ${target.file}`,
-      detail: `Source check: '${base}' is unresolved. '${target.file}' is the only eligible scanned module declaring all required exports (${[...new Set(requirements.map(req => req.name))].join(', ')}). Review that it is the intended implementation; matching names alone cannot prove behavior. Only import paths in ${changes.size} file(s) will change. Existing implementations, Dockerfiles and lockfiles stay untouched. Apply explicitly, then use local rebuild. Commit the changes to your repository for future deployments.`,
+      detail: `Source check: '${base}' is unresolved. '${target.file}' is the only eligible scanned module declaring all required exports (${[...new Set(requirements.map(req => req.name))].join(', ')}). Review that it is the intended implementation; matching names alone cannot prove behavior. Only import paths in ${changes.size} file(s) will change. Existing implementations, Dockerfiles and lockfiles stay untouched. Approval is retained outside the checkout and revalidated after Git sync; changed or ambiguous source stops deployment for review. Apply explicitly, then rebuild. Commit the changes to your repository to fix it independently of this panel.`,
       files: [...changes.keys()], preview: diff.join('\n\n'), revision, nextDeploy: 'local'
     } });
   }
@@ -221,9 +226,73 @@ function ensureDirectory(directory) {
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw conflict('Import-repair backup path must contain only real directories');
   }
 }
-function apply(ctxDir, suggestion, { backupRoot = path.join(ctxDir, '.minipass-import-repairs') } = {}) {
+function approval(plan) {
+  return { key: plan.public.key, revision: plan.public.revision, target: plan.target,
+    files: plan.changes.map(({ file, before, after }) => ({ file, before, after })) };
+}
+function validateApproval(ctxDir, saved) {
+  if (!saved || !/^import-repair:[a-f0-9]{24}$/.test(saved.key || '') || !saved.target || !Array.isArray(saved.files) || !saved.files.length || saved.files.length > 50) throw conflict('Invalid saved import approval');
+  const root = fs.realpathSync(ctxDir), originals = new Map();
+  const pending = new Set();
+  for (const change of saved.files) {
+    if (typeof change.before !== 'string' || typeof change.after !== 'string' || Buffer.byteLength(change.before) > LIMITS.fileBytes || Buffer.byteLength(change.after) > LIMITS.fileBytes || originals.has(change.file)) throw conflict('Invalid saved import files');
+    const file = safeFile(root, change.file);
+    if (!file) throw conflict(`Approved import file '${change.file}' is missing or unsafe`);
+    if (fs.statSync(file).size > LIMITS.fileBytes) throw conflict(`Approved import file '${change.file}' exceeds the bounded source-check limit`);
+    const text = fs.readFileSync(file, 'utf8');
+    if (text !== change.before && text !== change.after) throw conflict(`Approved import file '${change.file}' changed`);
+    if (text === change.before) pending.add(change.file);
+    originals.set(change.file, change.before);
+  }
+  const plan = plans(ctxDir, undefined, originals).find(p => p.public.key === saved.key);
+  if (!plan || hash(plan.target) !== hash(saved.target) || hash(approval(plan).files) !== hash(saved.files)) throw conflict('Approved imports or destination module changed, or the match is no longer unique');
+  return { plan, pending };
+}
+function recoverApproval(ctxDir, backupDir, revision) {
+  // Pre-persistence releases wrote byte-identical originals beneath a revision
+  // hash. Recover only when that exact preview and all applied bytes still match.
+  const backup = scan(backupDir);
+  if (!backup.complete || !backup.files.length) return null;
+  const originals = new Map(backup.files.map(f => [f.file, f.text]));
+  const plan = plans(ctxDir, undefined, originals).find(p => p.public.revision === revision);
+  if (!plan || plan.changes.length !== originals.size) return null;
+  const saved = approval(plan);
+  try {
+    const checked = validateApproval(ctxDir, saved);
+    return checked.pending.size ? null : saved;
+  } catch { return null; }
+}
+function apply(ctxDir, suggestion, { beforeApply, ...options } = {}) {
   const plan = plans(ctxDir).find(p => p.public.key === suggestion.key);
   if (!plan || plan.public.revision !== suggestion.revision) throw conflict('Source files or candidate exports changed - refresh the import-repair preview');
+  if (beforeApply) beforeApply(approval(plan));
+  return writePlan(ctxDir, plan, () => {
+    const current = plans(ctxDir).find(p => p.public.key === suggestion.key);
+    if (!current || current.public.revision !== suggestion.revision) throw conflict('Source changed while preparing the import repair - refresh the preview');
+  }, options);
+}
+function replay(ctxDir, saved, options = {}) {
+  const { plan, pending } = validateApproval(ctxDir, saved);
+  plan.changes = plan.changes.filter(c => pending.has(c.file));
+  plan.public.files = plan.changes.map(c => c.file);
+  if (!pending.size) return { applied: [], nextDeploy: 'local' };
+  return writePlan(ctxDir, plan, () => { validateApproval(ctxDir, saved); }, options);
+}
+function suspend(ctxDir, saved, isOriginal, options = {}) {
+  const { plan, pending } = validateApproval(ctxDir, saved);
+  plan.changes = plan.changes.filter(c => !pending.has(c.file));
+  plan.changes = plan.changes.filter(change => {
+    const state = isOriginal(change.file, change.before);
+    if (state === 'fixed') return false;
+    if (!state) throw conflict(`Cannot safely remove approved edits in '${change.file}' before Git sync; repository HEAD differs. Review or commit the correction first`);
+    [change.before, change.after] = [change.after, change.before];
+    return true;
+  });
+  plan.public.files = plan.changes.map(c => c.file);
+  if (!plan.changes.length) return { applied: [] };
+  return writePlan(ctxDir, plan, () => { validateApproval(ctxDir, saved); }, options);
+}
+function writePlan(ctxDir, plan, verify, { backupRoot = path.join(ctxDir, '.minipass-import-repairs') } = {}) {
   const backupDir = path.join(backupRoot, plan.public.revision);
   const prepared = [], swapped = [];
   try {
@@ -243,8 +312,7 @@ function apply(ctxDir, suggestion, { backupRoot = path.join(ctxDir, '.minipass-i
       fs.writeFileSync(temp, change.after, { flag: 'wx', mode: fs.statSync(file).mode });
     }
     // Recheck the entire source catalogue before replacing the first file.
-    const current = plans(ctxDir).find(p => p.public.key === suggestion.key);
-    if (!current || current.public.revision !== suggestion.revision) throw conflict('Source changed while preparing the import repair - refresh the preview');
+    verify();
     for (const item of prepared) {
       if (safeFile(plan.root, item.relative) !== item.file || fs.readFileSync(item.file, 'utf8') !== item.before) throw conflict('Source changed while applying the import repair');
       fs.renameSync(item.temp, item.file);
@@ -268,4 +336,4 @@ function apply(ctxDir, suggestion, { backupRoot = path.join(ctxDir, '.minipass-i
     for (const item of prepared) { try { if (safeFile(plan.root, item.relative) === item.file) fs.unlinkSync(item.temp); } catch {} }
   }
 }
-module.exports = { LIMITS, suggest, apply, inspect, hasImport };
+module.exports = { LIMITS, suggest, apply, inspect, hasImport, validateApproval, recoverApproval, replay, suspend, ensureDirectory };

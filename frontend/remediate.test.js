@@ -5,7 +5,7 @@ const vm = require('vm');
 const source = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
 const elements = new Map();
 const element = id => {
-  if (!elements.has(id)) elements.set(id, { innerHTML: '', style: {} });
+  if (!elements.has(id)) elements.set(id, { innerHTML: '', style: {}, dataset: {}, querySelectorAll: () => [], scrollTop: 0 });
   return elements.get(id);
 };
 const toasts = [];
@@ -79,16 +79,17 @@ async function main() {
   await run('loadRemediations(true)');
   assert(element('remediateBox').innerHTML.includes('npm edgesOut'));
   assert(!element('remediateBox').innerHTML.includes('<button'), 'diagnosis without a verified repair has no apply button');
-  // no failure hides the card without fetching
+  // Successful sites still query retained import approvals.
   let fetched = false;
   context.fetch = async () => { fetched = true; return { json: async () => [] }; };
   await run('loadRemediations(false)');
-  assert(!fetched && element('remediateCard').style.display === 'none');
+  assert(fetched && element('remediateCard').style.display === 'none');
   // stale site responses are ignored
   let finish;
   context.fetch = () => new Promise(resolve => { finish = () => resolve({ json: async () => [stub] }); });
   const pending = run('loadRemediations(true)');
   context.currentApp = 'other';
+  context.fetch = async () => ({ json: async () => [] });
   await run('loadRemediations(false)');
   finish();
   await pending;
@@ -117,10 +118,24 @@ async function main() {
   context.currentApp = 'demo';
   context.fetch = () => new Promise(resolve => { finish = () => resolve({ json: async () => [stub] }); });
   const stale = run('loadRemediations(true)');
+  context.fetch = async () => ({ json: async () => [] });
   await run('loadRemediations(false)');
   finish();
   await stale;
   assert(element('remediateCard').style.display === 'none');
-  console.log('Remediation UI: escaped recovery preview, service/revision POST, local rebuild guidance, read-only diagnosis and stale/navigation guards: OK');
+  const protectedFix = { kind: 'import-protection', service: 'web', protectionKey: 'approved-key', revision: 'registry-revision', title: 'Protected import correction', detail: 'Retained outside Git', files: ['src/a.ts'] };
+  context.fetch = async (url, opts) => {
+    if (opts) posted = { url, method: opts.method, body: JSON.parse(opts.body) };
+    return { json: async () => opts ? { ok: true } : [protectedFix] };
+  };
+  context.uiConfirm = async value => { confirmed = value; return true; };
+  await run('loadRemediations(false)');
+  assert(element('remediateBox').innerHTML.includes('remove protection'));
+  await run('removeImportProtection(0)');
+  assert.equal(posted.method, 'DELETE');
+  assert.equal(posted.url, '/api/apps/demo/import-protection');
+  assert.deepEqual(posted.body, { key: protectedFix.protectionKey, service: 'web', revision: 'registry-revision' });
+  assert(confirmed.body.includes('Current source files are not changed'));
+  console.log('Remediation UI: escaped previews, exact approval confirmation, retained protection/removal, compact details and stale/navigation guards: OK');
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

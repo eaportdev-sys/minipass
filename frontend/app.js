@@ -13,6 +13,9 @@ window.fetch = (...a) => _fetch(...a).then(r => {
 });
 const dbPopupSlots = new Map();
 let websiteApps = [];
+let trashApps = [];
+function siteName(site) { return (site && (site.name || site.id)) || ''; }
+function siteById(id) { return websiteApps.find(a => a.id === id) || trashApps.find(a => a.id === id) || { id }; }
 let websiteVisibleApps = [];
 let websitePage = 1;
 let websiteRenderSeq = 0;
@@ -34,7 +37,7 @@ async function refresh() {
   const tsel = document.getElementById('termApp');
   if (tsel) {
     const prev = tsel.value;
-    tsel.innerHTML = apps.map(a => `<option value="${a.id}">${a.id}</option>`).join('');
+    tsel.innerHTML = apps.map(a => `<option value="${a.id}">${safeHtml(siteName(a))} (${a.id})</option>`).join('');
     if (apps.some(a => a.id === prev)) tsel.value = prev;
   }
   return apps;
@@ -43,7 +46,7 @@ function appCardMarkup(a) {
   const services = appPublishedServices(a);
   const facts = [a.domain, dbLabel(a) !== 'none' ? 'DB: ' + dbLabel(a) : '', services.length > 1 ? services.length + ' services' : ''].filter(Boolean).join(' · ');
   return `<div class="website-row" id="card-${a.id}" role="row">` +
-    `<div class="website-name" role="cell"><button class="website-name-link" onclick="openSite('${a.id}')">${safeHtml(a.id)}</button>${a.dirty ? '<span class="website-pending" title="Saved changes — redeploy to apply" aria-label="Changes pending">●</span>' : ''}<div class="website-facts" title="${safeHtml(facts)}">${safeHtml(facts || 'No managed database')}</div></div>` +
+    `<div class="website-name" role="cell"><button class="website-name-link" onclick="openSite('${a.id}')">${safeHtml(siteName(a))}</button>${a.dirty ? '<span class="website-pending" title="Saved changes — redeploy to apply" aria-label="Changes pending">●</span>' : ''}<div class="website-facts" title="${safeHtml(facts)}">${safeHtml(facts || 'No managed database')}</div>${a.name && a.name !== a.id ? `<div class="website-facts" title="Internal site ID">${safeHtml(a.id)}</div>` : ''}</div>` +
     `<div class="website-runtime" role="cell"><span class="badge type">${safeHtml(a.type === 'node' ? 'Node.js' : a.type === 'php' ? 'PHP' : a.type === 'react' ? 'React' : a.type === 'static' ? 'Static' : a.type)}</span></div>` +
     `<div role="cell"><span id="appState-${a.id}" class="website-state is-checking">Checking</span></div>` +
     `<div class="website-urls" role="cell">${appLinksMarkup(a, services)}</div>` +
@@ -52,9 +55,9 @@ function appCardMarkup(a) {
 function websitePageData(apps, { search = '', type = '', sort = 'name', page = 1, size = 10 } = {}) {
   const words = search.toLowerCase().trim().split(/\s+/).filter(Boolean);
   const filtered = apps.filter(a => {
-    const text = [a.id, a.domain, a.repoUrl, a.github && a.github.repo, a.type, dbLabel(a), ...appPublishedServices(a).map(s => s.name)].filter(Boolean).join(' ').toLowerCase();
+    const text = [a.id, a.name, a.domain, a.repoUrl, a.github && a.github.repo, a.type, dbLabel(a), ...appPublishedServices(a).map(s => s.name)].filter(Boolean).join(' ').toLowerCase();
     return (!type || a.type === type) && words.every(word => text.includes(word));
-  }).sort((a, b) => (sort === 'type' ? String(a.type).localeCompare(String(b.type)) : 0) || a.id.localeCompare(b.id) * (sort === 'name-desc' ? -1 : 1));
+  }).sort((a, b) => (sort === 'type' ? String(a.type).localeCompare(String(b.type)) : 0) || (siteName(a).localeCompare(siteName(b)) || a.id.localeCompare(b.id)) * (sort === 'name-desc' ? -1 : 1));
   size = [10, 25, 50].includes(Number(size)) ? Number(size) : 10;
   const pages = Math.max(1, Math.ceil(filtered.length / size));
   page = Math.max(1, Math.min(pages, Number(page) || 1));
@@ -166,6 +169,11 @@ function rememberSiteRoute(id, tab) {
 }
 function openSite(id, tab = 'overview', remember = true) {
   currentApp = id;
+  remediateSeq++;
+  remediateCache = [];
+  document.getElementById('remediateCard').style.display = 'none';
+  document.getElementById('remediateBox').innerHTML = '';
+  document.getElementById('deployHist').innerHTML = '';
   deployLogSeq++;
   document.getElementById('deployFullLog').textContent = '';
   document.getElementById('deployFullLog').style.display = 'none';
@@ -207,7 +215,7 @@ async function deployLocal() {
 }
 async function syncGithub() {
   if (!currentApp) return;
-  const ok = await uiConfirm({ title: 'Sync checkout to GitHub?', body: 'Use this only for recovery. Tracked and untracked box edits are saved in a git stash, then code/ resets to GitHub. Databases and volumes are untouched. Type the site name to confirm.', requireText: currentApp, confirmLabel: 'Sync', danger: true });
+  const ok = await uiConfirm({ title: 'Sync checkout to GitHub?', body: `Use this only for recovery. Tracked and untracked box edits are saved in a git stash, then code/ resets to GitHub. Databases and volumes are untouched. Site ID: ${currentApp}. Type the site name to confirm.`, requireText: siteName(siteById(currentApp)), confirmLabel: 'Sync', danger: true });
   if (!ok) return;
   toast('syncing to GitHub…');
   try {
@@ -359,6 +367,15 @@ async function loadMigrateSuggest() {
 function deploySourceName(source) {
   return ({ manual: 'Manual', local: 'Local files', webhook: 'GitHub webhook', poll: 'GitHub poll', 'local-push': 'Local push' })[source] || source || 'Unknown';
 }
+function renderDeployMarkup(box, html) {
+  if (box.dataset.rendered === html && box.innerHTML) return;
+  const scrollTop = box.scrollTop;
+  const expanded = new Map([...box.querySelectorAll('details[data-record]')].map(d => [d.dataset.record, d.open]));
+  box.innerHTML = html;
+  box.dataset.rendered = html;
+  for (const detail of box.querySelectorAll('details[data-record]')) if (expanded.has(detail.dataset.record)) detail.open = expanded.get(detail.dataset.record);
+  box.scrollTop = scrollTop;
+}
 function deployRecordParts(h) {
   const when = (h.at || '').replace('T', ' ').slice(0, 19) || 'time unavailable';
   const duration = h.durationMs != null ? `${Math.round(h.durationMs / 1000)}s` : '';
@@ -373,7 +390,7 @@ function deployHistoryMarkup(hist) {
     return `<div class="deploy-history-item ${p.ok ? 'is-ok' : 'is-failed'}">` +
       `<div class="deploy-history-title"><b>${safeHtml(deploySourceName(h.source))}</b><span class="deploy-result">${p.ok ? 'success' : 'failed'}</span></div>` +
       `<div class="deploy-history-details"><span>${safeHtml(p.when)}</span>${p.sha ? `<code>${safeHtml(p.sha)}</code>` : ''}${p.duration ? `<span>${safeHtml(p.duration)}</span>` : ''}</div>` +
-      (p.error ? `<div class="deploy-history-error" title="${safeHtml(p.error)}">${safeHtml(p.error)}</div>` : '') + `</div>`;
+      (p.error ? `<details class="deploy-history-failure" data-record="${safeHtml(h.at || p.error)}"><summary>${safeHtml(p.error.split('\n')[0].slice(0, 140))}${p.error.length > 140 ? '…' : ''}</summary><div class="deploy-history-error">${safeHtml(p.error)}</div></details>` : '') + `</div>`;
   }).join('');
 }
 let remediateSeq = 0;
@@ -384,20 +401,27 @@ async function loadRemediations(failed) {
   const box = document.getElementById('remediateBox');
   if (!card || !box) return;
   const seq = ++remediateSeq;
-  if (!currentApp || !failed) { remediateCache = []; card.style.display = 'none'; box.innerHTML = ''; return; }
+  if (!currentApp) { remediateCache = []; card.style.display = 'none'; box.innerHTML = ''; return; }
   const appId = currentApp;
   try {
     const list = await (await fetch(`/api/apps/${appId}/remediations`)).json();
     if (seq !== remediateSeq || currentApp !== appId) return;
+    if (!Array.isArray(list)) throw new Error(list.error || 'invalid fixes response');
     remediateCache = Array.isArray(list) ? list : [];
     card.style.display = remediateCache.length ? 'block' : 'none';
-    box.innerHTML = remediateCache.map((s, i) =>
-      `<div class="remediate-item"><b>${safeHtml(s.title)}</b><div class="meta">Service: ${safeHtml(s.service || 'app')} · ${safeHtml(s.subdir || 'repository root')}</div><div class="meta">${safeHtml(s.detail)}</div>` +
-      (s.preview ? `<pre class="compact-output">${safeHtml(s.preview)}</pre>` : '') +
-      (s.key ? `<div class="appcard-actions"><button class="btn primary" onclick="applyRemediation(${i})">${s.kind === 'dockerfile-restore' ? 'restore original Dockerfile' : s.kind === 'import-repair' ? 'apply import correction' : 'apply fix'}</button></div>` : '') + '</div>'
-    ).join('');
-  } catch {
-    if (seq === remediateSeq && currentApp === appId) { card.style.display = 'none'; box.innerHTML = ''; }
+    renderDeployMarkup(box, remediateCache.map((s, i) =>
+      `<div class="remediate-item"><div class="remediate-head"><div><b>${safeHtml(s.title)}</b><div class="meta">Service: ${safeHtml(s.service || 'app')} · ${safeHtml(s.subdir || 'repository root')}</div></div>` +
+      (s.key ? `<button class="btn primary" onclick="applyRemediation(${i})">${s.kind === 'dockerfile-restore' ? 'restore original Dockerfile' : s.kind === 'import-repair' ? 'apply import correction' : 'apply fix'}</button>` : s.protectionKey ? `<button onclick="removeImportProtection(${i})">remove protection</button>` : '') + '</div>' +
+      `<details class="remediate-review" data-record="${safeHtml((s.service || '') + ':' + (s.key || s.protectionKey || s.title))}"${s.key ? ' open' : ''}><summary>${s.preview ? 'Review files and exact diff' : 'Details'}</summary><div class="meta">${safeHtml(s.detail)}</div>` +
+      ((s.files || []).length ? `<ul class="remediate-files">${s.files.map(f => `<li>${safeHtml(f)}</li>`).join('')}</ul>` : '') +
+      (s.preview ? `<pre tabindex="0" aria-label="Proposed changes">${safeHtml(s.preview)}</pre>` : '') + '</details></div>'
+    ).join(''));
+  } catch (e) {
+    if (seq === remediateSeq && currentApp === appId) {
+      remediateCache = [];
+      card.style.display = 'block';
+      box.innerHTML = `<div class="meta">Could not load fixes: ${safeHtml(e.message)}</div>`;
+    }
   }
 }
 async function loadDeployLog() {
@@ -407,10 +431,14 @@ async function loadDeployLog() {
   const appId = currentApp;
   const seq = ++deployLogSeq;
   box.style.display = 'block';
-  box.textContent = 'loading…';
+  if (!box.textContent) box.textContent = 'loading…';
   try {
     const text = await (await fetch(`/api/apps/${appId}/build-log?tail=500`)).text();
-    if (seq === deployLogSeq && currentApp === appId) box.textContent = text;
+    if (seq === deployLogSeq && currentApp === appId && box.textContent !== text) {
+      const scrollTop = box.scrollTop;
+      box.textContent = text;
+      box.scrollTop = scrollTop;
+    }
   } catch { if (seq === deployLogSeq && currentApp === appId) box.textContent = 'log unavailable'; }
 }
 async function applyRemediation(i) {
@@ -419,16 +447,30 @@ async function applyRemediation(i) {
   const appId = currentApp;
   const ok = await uiConfirm({
     title: s.kind === 'import-repair' ? 'Apply import correction?' : 'Apply fix?',
-    body: `${s.title}. Writes box files only (${(s.files || []).join(', ')}) — use local rebuild afterwards to preserve box edits. Your remote repo stays untouched until you commit.`,
+    body: s.kind === 'import-repair'
+      ? `${s.title}. Files: ${(s.files || []).join(', ')}. The approved import-only repair is retained outside Git and revalidated on redeploy. Changed or ambiguous source stops for review. Your remote repo stays untouched. Use local rebuild now.\n\n${s.preview || ''}`
+      : `${s.title}. Writes box files only (${(s.files || []).join(', ')}) — use local rebuild afterwards to preserve box edits. Your remote repo stays untouched until you commit.`,
     confirmLabel: s.kind === 'import-repair' ? 'Apply imports' : 'Apply fix'
   });
   if (!ok || currentApp !== appId) return;
   try {
     const r = await (await fetch(`/api/apps/${appId}/remediate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: s.key, service: s.service, revision: s.revision }) })).json();
-    toast(r.ok ? `saved (${(r.applied || []).join(', ')}) — use local rebuild to apply` : (r.error || 'failed'), !!r.ok);
+    toast(r.ok ? `${r.protected ? 'saved with redeploy protection' : 'saved'} (${(r.applied || []).join(', ')}) — use local rebuild to apply` : (r.error || 'failed'), !!r.ok);
   } catch (e) { toast('apply failed: ' + e.message, false); }
   await refresh();
   if (currentApp === appId) loadDeployStatus();
+}
+async function removeImportProtection(i) {
+  const s = remediateCache[i];
+  if (!s || !s.protectionKey || !currentApp) return;
+  const appId = currentApp;
+  const ok = await uiConfirm({ title: 'Remove redeploy protection?', body: `Stop retaining this approved correction for ${s.service}: ${(s.files || []).join(', ')}. Current source files are not changed. Future checkouts will use repository source; commit the correction there if it is still needed.`, confirmLabel: 'Remove protection', danger: true });
+  if (!ok || currentApp !== appId) return;
+  try {
+    const r = await (await fetch(`/api/apps/${appId}/import-protection`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: s.protectionKey, service: s.service, revision: s.revision }) })).json();
+    toast(r.ok ? 'protection removed — current files unchanged' : (r.error || 'failed'), !!r.ok);
+    if (currentApp === appId) await loadRemediations(true);
+  } catch (e) { toast('remove protection failed: ' + e.message, false); }
 }
 function deployLastMarkup(label, h) {
   if (!h) return `<div class="source-last-empty">${safeHtml(label)}: no deployment recorded</div>`;
@@ -536,7 +578,7 @@ async function loadDeployStatus() {
     document.getElementById('hookHist').innerHTML = deployLastMarkup('Last GitHub deploy', hookLast);
     const localLast = lastSrc('local-push');
     document.getElementById('localHist').innerHTML = deployLastMarkup('Last local push', localLast);
-    document.getElementById('deployHist').innerHTML = deployHistoryMarkup(hist);
+    renderDeployMarkup(document.getElementById('deployHist'), deployHistoryMarkup(hist));
     const failed = !s.deploying && s.lastDeploy && s.lastDeploy.status !== 'ok';
     loadRemediations(failed);
     if (failed) loadDeployLog();
@@ -558,11 +600,12 @@ function backToSites() {
 }
 function fillSiteHeader(a) {
   if (!a) return;
-  document.getElementById('siteName').textContent = a.id;
+  document.getElementById('siteName').textContent = siteName(a);
+  document.getElementById('siteName').title = 'Site ID: ' + a.id;
   document.getElementById('siteBadges').innerHTML =
     `<span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}${a.hostPort ? `<span class="badge">:${a.hostPort}</span>` : ''}${a.subdir ? `<span class="badge">/${a.subdir}</span>` : ''}${a.github ? `<span class="badge">git: ${a.github.login ? a.github.login + '/' : ''}${a.github.repo}${a.github.branch ? '@' + a.github.branch : ''}</span>` : ''}`;
   const url = appUrl(a);
-  document.getElementById('siteMeta').innerHTML = url ? `live URL: <a href="${url}" target="_blank">${url.replace(/^http:\/\//, '')}</a>` : 'no published port';
+  document.getElementById('siteMeta').innerHTML = (url ? `live URL: <a href="${url}" target="_blank">${url.replace(/^http:\/\//, '')}</a>` : 'no published port') + ` · ID: ${safeHtml(a.id)}`;
   document.getElementById('siteRedeploy').onclick = () => { showSiteTab('deploy'); deploy(a.id); };
   document.getElementById('siteStop').onclick = () => stopApp(a.id);
   document.getElementById('siteStart').onclick = () => startApp(a.id);
@@ -985,7 +1028,7 @@ async function fillApiLink(a) {
     const prev = ab.app || '';
     let html = '<option value="">— no link —</option>';
     if (sibs.length) html += `<optgroup label="this site">` + sibs.map(s => `<option value="svc:${s.name}">${s.name} (:${s.hostPort})</option>`).join('') + '</optgroup>';
-    if (others.length) html += `<optgroup label="other sites">` + others.map(x => `<option value="${x.id}">${x.id} (:${x.hostPort})</option>`).join('') + '</optgroup>';
+    if (others.length) html += `<optgroup label="other sites">` + others.map(x => `<option value="${x.id}">${safeHtml(siteName(x))} (${x.id}, :${x.hostPort})</option>`).join('') + '</optgroup>';
     sel.innerHTML = html;
     const prevSib = prev.replace(/^svc:/, '');
     if (sibs.some(s => s.name === prevSib)) sel.value = 'svc:' + prevSib;
@@ -1145,6 +1188,7 @@ async function createApp() {
     subdir: v('subdir'), standardDockerfile: createStandardDockerfile,
     modernizeBuild: document.getElementById('createModernBuild').checked
   };
+  if (createPendingId) body.pendingId = createPendingId;
   // site-owned connection: fresh token travels with this build only
   const ghSel = document.getElementById('ghrepo');
   if (ghSel.value) {
@@ -1166,6 +1210,7 @@ async function createApp() {
     r = await (await fetch('/api/apps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
   } catch (e) { r = { error: e.message }; }
   if (session !== createModalSession) return;
+  if (r.pendingId) createPendingId = r.pendingId;
   document.getElementById('out').textContent = JSON.stringify(r, null, 2);
   if (r.needsDockerfile) document.getElementById('createDockerAction').style.display = 'flex';
   if (r.needsModernization) {
@@ -1335,6 +1380,7 @@ let createDetectRepo = '';
 let createStandardDockerfile = false;
 let createStorageAvailable = null;
 let createCleanupPromise = Promise.resolve();
+let createPendingId = null;
 async function modalListRepos() {
   const session = createModalSession;
   const request = ++createConnectRequest;
@@ -1446,6 +1492,7 @@ function resetCreateForm() {
   createConnectRequest++;
   createDetectRequest++;
   createStandardDockerfile = false;
+  createPendingId = null;
   createStorageAvailable = null;
   document.getElementById('createStorageGB').value = '5';
   document.getElementById('createStorageState').textContent = 'Checking host quota setup…';
@@ -1497,13 +1544,12 @@ function useCreateStandardDockerfile() {
   createApp();
 }
 function closeCreate(created = false) {
-  const rawName = document.getElementById('name').value.trim();
+  const id = createPendingId;
   document.getElementById('modal').classList.remove('open');
   resetCreateForm();
-  if (!created && rawName) {
-    const id = rawName.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-    if (id) createCleanupPromise = fetch(`/api/apps/pending/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true })
-      .then(async response => { const result = await response.json(); if (!result.ok) toast('Unfinished site cleanup failed: ' + (result.error || 'retry Cancel before reusing this name'), false); })
+  if (!created && id) {
+    createCleanupPromise = fetch(`/api/apps/pending/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true })
+      .then(async response => { const result = await response.json(); if (!result.ok) toast('Unfinished site cleanup failed: ' + (result.error || 'retry cleanup for ' + id), false); })
       .catch(e => toast('Unfinished site cleanup failed: ' + e.message, false));
   }
 }
@@ -1653,10 +1699,11 @@ async function toggleSitePower() {
   else if (state === 'off' || state === 'failed') await startApp(currentApp);
 }
 async function rmApp(id) {
+  const name = siteName(siteById(id));
   const ok = await uiConfirm({
-    title: 'Delete ' + id + '?',
-    body: 'Containers stop and the site moves to Trash for 48 hours (files and data kept). Destroy or expiry removes its files, database volumes and built images, and clears all unused Docker build cache. Shared images stay.',
-    requireText: id, confirmLabel: 'Move to trash', danger: true
+    title: 'Delete ' + name + '?',
+    body: `Site ID: ${id}. Containers stop and the site moves to Trash for 48 hours (files and data kept). The name can be reused immediately by a different site. Destroy or expiry removes only this site’s files, database volumes and built images, and clears all unused Docker build cache. Shared images stay.`,
+    requireText: name, confirmLabel: 'Move to trash', danger: true
   });
   if (!ok) return;
   // optimistic: gone from screen instantly, restored on failure
@@ -1681,12 +1728,13 @@ async function loadTrash() {
   const count = document.getElementById('trashCount');
   try {
     const list = await (await fetch('/api/trash')).json();
+    trashApps = list;
     if (count) { count.style.display = list.length ? '' : 'none'; count.textContent = list.length; }
     if (!box) return;
     box.innerHTML = list.length ? list.map(t => {
       const when = (t.deletedAt ? new Date(t.deletedAt).toISOString().replace('T', ' ').slice(0, 19) : '?');
       return `<div class="card appcard"><div class="appcard-layout"><div class="appcard-main">` +
-        `<div class="appcard-title"><div><h3>${safeHtml(t.id)}</h3><div class="badges"><span class="badge type">${safeHtml(t.type || '?')}</span><span class="badge">db: ${safeHtml(dbLabel(t))}</span><span class="badge">${safeHtml(trashLeft(t.msLeft))}</span></div></div></div>` +
+        `<div class="appcard-title"><div><h3>${safeHtml(siteName(t))}</h3><div class="meta">ID: ${safeHtml(t.id)}</div><div class="badges"><span class="badge type">${safeHtml(t.type || '?')}</span><span class="badge">db: ${safeHtml(dbLabel(t))}</span><span class="badge">${safeHtml(trashLeft(t.msLeft))}</span></div></div></div>` +
         `<div class="meta">deleted ${safeHtml(when)} · cleanup due ${safeHtml((t.restoreBy || '?').replace('T', ' ').slice(0, 19))}</div>${t.cleanupError ? `<div class="meta trash-cleanup-error">Cleanup incomplete: ${safeHtml(t.cleanupError)}</div>` : ''}</div>` +
         `<div class="appcard-actions"><button class="btn primary" onclick="restoreTrash('${safeHtml(t.id)}')" ${t.cleanupStartedAt || t.msLeft === 0 ? 'disabled' : ''}>restore</button><button class="btn danger" onclick="destroyTrash('${safeHtml(t.id)}')">${t.cleanupStartedAt || t.cleanupError ? 'retry cleanup' : 'delete forever'}</button></div>` +
         `</div></div>`;
@@ -1720,10 +1768,11 @@ async function emptyTrash() {
   } catch (e) { toast('empty failed: ' + e.message, false); }
 }
 async function destroyTrash(id) {
+  const name = siteName(siteById(id));
   const ok = await uiConfirm({
-    title: 'Destroy ' + id + ' forever?',
-    body: 'Remove this site’s containers, database volumes, files and built images. Also clear all unused Docker build cache; other builds may take longer afterward. Shared images needed elsewhere are kept. This cannot be undone.',
-    requireText: id, confirmLabel: 'Destroy forever', danger: true
+    title: 'Destroy ' + name + ' forever?',
+    body: `Site ID: ${id}. Remove only this site’s containers, database volumes, files and built images, not another site with the same name. Also clear all unused Docker build cache; other builds may take longer afterward. Shared images needed elsewhere are kept. This cannot be undone.`,
+    requireText: name, confirmLabel: 'Destroy forever', danger: true
   });
   if (!ok) return;
   try {

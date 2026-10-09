@@ -49,6 +49,12 @@ assert.equal(json('websitePageData(fixtures, {search:"missing"})').pages, 1);
 assert.equal(json('websitePageData([], {page:2})').page, 1);
 assert.equal(json('websitePageData(fixtures, {sort:"name-desc"})').apps[0].id, 'site-099');
 assert.equal(context.fixtures[0].id, 'site-000', 'sorting must not mutate metadata');
+context.named = [{ id: 'site-' + 'a'.repeat(24), name: 'Same name', type: 'node' }, { id: 'site-' + 'b'.repeat(24), name: 'Same name', type: 'static' }];
+assert.equal(json('websitePageData(named, {search:"same name"})').total, 2);
+assert(run('appCardMarkup(named[0])').includes('Same name'));
+assert(run('appCardMarkup(named[0])').includes("openSite('" + context.named[0].id + "')"), 'actions always target ids even when labels match');
+context.unsafeName = { id: 'site-' + 'c'.repeat(24), name: '<unsafe name>', type: 'static' };
+assert(run('appCardMarkup(unsafeName)').includes('&lt;unsafe name&gt;'));
 context.multi = {
   id: 'multi', type: 'react', domain: '<unsafe>', dirty: true, homePath: '/legacy',
   services: [

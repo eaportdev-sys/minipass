@@ -38,8 +38,18 @@ minipass turns a folder or git repo into a running site with one flow:
   Ambiguous candidates, incomplete scans and unsupported imports get guidance,
   not guessed edits. Matching exports cannot prove intended behavior; review the
   proposed destination. Original source files are preserved outside `code/` in
-  the site's `.remediation-backups/` folder. Use local rebuild after applying,
-  and commit the changes to the deployment repository to retain them on fresh clones.
+  the site's `.remediation-backups/` folder. Approvals live outside the checkout
+  in `.import-repairs/` and survive panel restarts, Git sync, fresh checkouts,
+  local pushes and Trash restore. Before a pull, only byte-exact approved edits
+  matching repository HEAD are temporarily removed; other box edits are never reset.
+  After sync, Minipass rechecks the original imports, exact destination module and
+  unique export match before replaying. Changed files, unsafe paths or ambiguous
+  candidates stop deployment before building or touching running containers.
+  Already-correct repository imports need no write. Deploy shows retained approvals;
+  explicitly removing protection leaves current source unchanged. Verified backups
+  from the previous import-repair release can recover an existing approval.
+  Use local rebuild after applying, and commit the correction upstream to make
+  the repository work independently of this panel.
   An approved import correction also marks that service for a source rebuild;
   existing `dist/` output cannot silently bypass compilation of the edits.
   A taken host port is automatically rebound to the next free one before the build.
@@ -248,7 +258,13 @@ are preserved; shared layers are not exclusive site data. No system/image/volume
 prune runs. The expiry worker checks every minute while the panel is running;
 startup retries expired entries. Docker/filesystem failures keep the entry with
 a visible error and retry action instead of reporting success. Once destructive
-cleanup starts, Restore is disabled. A name held in Trash cannot be reused.
+cleanup starts, Restore is disabled. New sites have an immutable random internal
+ID separate from their display name. A name can be reused immediately, including
+while the old site is in Trash; restoring or destroying one cannot target another
+with the same name. Existing sites retain their old IDs and use those as their
+display names. Folders, Compose projects, quotas, webhooks and links use IDs.
+Pending-create retries and cancellation use the server-issued pending ID, never
+the display name. `.site.json` preserves the name for metadata recovery scans.
 Images orphaned by older releases whose Trash records were already erased are
 not automatically guessed/deleted; those need separately scoped manual cleanup.
 
