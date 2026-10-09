@@ -18,6 +18,20 @@ const oldSimpleNode = [
   'FROM node:20-alpine', 'WORKDIR /app', 'COPY package*.json ./',
   'RUN npm i --omit=dev || true', 'COPY . .', 'EXPOSE 3000', 'CMD ["node", "index.js"]'
 ].join('\n');
+const previousNativeNode = [
+  '# minipass template',
+  'FROM node:20-alpine',
+  '# Native npm modules can fall back to compiling when no Alpine binary exists.',
+  'RUN apk add --no-cache python3 build-base autoconf automake libtool nasm pkgconf',
+  'WORKDIR /app',
+  'COPY package*.json ./',
+  'RUN npm install',
+  'COPY . .',
+  'RUN npm run build --if-present',
+  'EXPOSE 3000',
+  "# Prefer the project's declared start command; retain the zero-config index.js fallback.",
+  'CMD ["sh", "-c", "if node -e \\"const p=require(\'./package.json\');process.exit(p.scripts&&p.scripts.start?0:1)\\"; then exec npm start; else exec node index.js; fi"]'
+].join('\n');
 const oldReact = [
   '# minipass template',
   '# build stage + serve (vite emits dist/, CRA emits build/ - normalized to dist/)',
@@ -41,7 +55,24 @@ const firstReact = oldUnmarkedReact
   .replace('# build stage + serve (vite outputs dist/, CRA outputs build/ - adjust COPY below)', '# build stage + serve (works for vite/cra: npm run build -> dist/build)')
   .replace('# vite default:\n', '')
   .replace('EXPOSE 80', 'COPY --from=build /app/build /usr/share/nginx/html\nEXPOSE 80');
-const LEGACY = { node: [oldNode, oldSimpleNode], react: [oldReact, oldViteReact, oldLooseReact, oldUnmarkedReact, firstReact] };
+const previousNativeReact = [
+  '# minipass template',
+  '# build stage + serve (vite emits dist/, CRA emits build/ - normalized to dist/)',
+  'FROM node:20-alpine AS build',
+  '# Build tools stay in this stage; the serving image remains nginx-only.',
+  'RUN apk add --no-cache python3 build-base autoconf automake libtool nasm pkgconf',
+  'WORKDIR /app',
+  'COPY package*.json ./',
+  'RUN npm install',
+  'COPY . .',
+  'RUN npm run build && (test -d dist || (test -d build && mv build dist) || (echo "BUILD PRODUCED NO dist/ or build/ - add a build script emitting one of them or pick another type" && exit 1))',
+  'FROM nginx:alpine',
+  '# vite default (+ SPA fallback so deep links like /signup/warehouse load directly):',
+  'COPY nginx.conf /etc/nginx/conf.d/default.conf',
+  'COPY --from=build /app/dist /usr/share/nginx/html',
+  'EXPOSE 80'
+].join('\n');
+const LEGACY = { node: [previousNativeNode, oldNode, oldSimpleNode], react: [previousNativeReact, oldReact, oldViteReact, oldLooseReact, oldUnmarkedReact, firstReact] };
 const normalized = text => text.replace(/\r\n/g, '\n').trim();
 
 function refreshStandardDockerfile(ctxDir, type, templatesDir) {

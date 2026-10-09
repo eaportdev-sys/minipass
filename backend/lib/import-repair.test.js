@@ -87,6 +87,12 @@ try {
   assert.equal(actionable(root).length, 0, 'non-relative aliases require configuration-aware analysis, not a guessed rewrite');
   root = fixture({ ...original, 'src/common/utils.ts': 'export const isProduction = false;\n' });
   assert.equal(actionable(root).length, 0, 'existing source modules are never replaced');
+  root = fixture({
+    'package.json': '{"scripts":{"postinstall":"prisma generate"}}',
+    'prisma/schema.prisma': 'generator client {\n  provider = "prisma-client"\n  output = "../src/generated/prisma"\n}\n',
+    'src/config/prisma.config.ts': 'import { PrismaClient } from "../generated/prisma/client";\nexport const prisma = new PrismaClient();\n'
+  });
+  assert.equal(repair.suggest(root).length, 0, 'declared Prisma generator output is not misreported as a missing source module');
   root = fixture(original);
   assert(!repair.suggest(root, { ...repair.LIMITS, files: 1 }).some(s => s.key), 'incomplete source scans refuse edits');
   root = fixture({ ...original, 'broken.ts': 'export const broken = (\n' });

@@ -28,4 +28,27 @@ assert(blocked.includes('approved installer command'), 'instructions tell the op
 assert(!blocked.includes('MINIPASS_USE_FREE_SPACE'), 'panel command does not bypass the sudo installer confirmation');
 assert(!html.includes('50 GB free recommended at install'), 'obsolete install-size note is not shown in Storage');
 assert(source.includes('function showRemoteSetup(') && source.includes('onclick="showRemoteSetup('), 'remotes have a connect flow with host steps');
-console.log('Host storage UI: sidebar view, escaped candidates and approval-shaped targets: OK');
+
+async function verifyProvisionStatus() {
+  const elements = Object.fromEntries(['hostStorageBox', 'hostCandidates', 'hostQuotaState', 'provisionOut'].map(id => [id, { textContent: '', innerHTML: '', className: '' }]));
+  const responses = {
+    '/api/panel/storage/discovery': { quota: { ready: true }, bridge: {} },
+    '/api/panel/storage/provision': { approval: { target: 'region:/dev/sda:1:2', status: 'pending-host' } }
+  };
+  const loadContext = vm.createContext({
+    document: { getElementById: id => elements[id] || null },
+    fetch: async url => ({ json: async () => responses[url] }),
+    hostCapacityMarkup: () => 'capacity',
+    hostCandidateRows: () => 'candidates',
+    loadRemotes: () => undefined
+  });
+  vm.runInContext(section('async function loadHostStorage(', 'async function loadRemotes('), loadContext);
+  await vm.runInContext('loadHostStorage()', loadContext);
+  assert.equal(elements.provisionOut.textContent, 'Storage setup complete — quotas are active.', 'active quotas replace a stale pending-host approval');
+
+  responses['/api/panel/storage/discovery'].quota.ready = false;
+  await vm.runInContext('loadHostStorage()', loadContext);
+  assert(elements.provisionOut.textContent.startsWith('Pending host approval: region:/dev/sda:1:2'), 'unfinished setup still shows its exact approved target');
+}
+
+verifyProvisionStatus().then(() => console.log('Host storage UI: sidebar view, escaped candidates, exact approvals and completed-state override: OK')).catch(error => { console.error(error); process.exitCode = 1; });

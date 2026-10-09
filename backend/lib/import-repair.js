@@ -138,8 +138,34 @@ function replacementRequest(source, request, target) {
   if (!rel.startsWith('.')) rel = './' + rel;
   return rel;
 }
+function prismaGeneratedRoots(ctxDir) {
+  const candidates = new Set(['schema.prisma', 'prisma/schema.prisma']);
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ctxDir, 'package.json'), 'utf8'));
+    if (pkg && pkg.prisma && typeof pkg.prisma.schema === 'string') candidates.add(pkg.prisma.schema.replace(/\\/g, '/'));
+  } catch {}
+  const roots = new Set();
+  for (const rel of candidates) {
+    const schema = safeFile(ctxDir, rel);
+    if (!schema) continue;
+    let text = '';
+    try {
+      if (fs.statSync(schema).size > LIMITS.fileBytes) continue;
+      text = fs.readFileSync(schema, 'utf8');
+    } catch { continue; }
+    for (const block of text.matchAll(/generator\s+[A-Za-z_][A-Za-z0-9_]*\s*\{([\s\S]*?)\}/g)) {
+      const output = block[1].match(/\boutput\s*=\s*["']([^"']+)["']/);
+      if (!output) continue;
+      const full = path.resolve(path.dirname(schema), output[1]);
+      if (full !== ctxDir && !full.startsWith(ctxDir + path.sep)) continue;
+      roots.add(slash(path.relative(ctxDir, full)));
+    }
+  }
+  return roots;
+}
 function plans(ctxDir, limits, originals) {
   const scanned = scan(ctxDir, limits);
+  const generatedRoots = prismaGeneratedRoots(scanned.root);
   if (originals) for (const file of scanned.files) {
     if (!originals.has(file.file)) continue;
     file.text = originals.get(file.file);
@@ -150,6 +176,7 @@ function plans(ctxDir, limits, originals) {
     const request = node.source.value;
     const base = missingBase(scanned.root, source.file, request);
     if (!base) continue;
+    if ([...generatedRoots].some(root => base === root || base.startsWith(root + '/'))) continue;
     if (!groups.has(base)) groups.set(base, []);
     const requirements = node.type === 'ImportDeclaration' ? node.specifiers.map(spec => spec.type === 'ImportSpecifier' && spec.imported.type === 'Identifier'
       ? { name: spec.imported.name, typeOnly: node.importKind === 'type' || spec.importKind === 'type' } : null) : [];

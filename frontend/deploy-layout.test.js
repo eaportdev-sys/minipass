@@ -11,7 +11,8 @@ assert(deploy.indexOf('id="remediateCard"') < deploy.indexOf('deploy-source-grid
 assert.equal((html.match(/id="remediateCard"/g) || []).length, 1);
 assert(deploy.includes('class="deploy-log-card"') || deploy.includes('class="card deploy-log-card"'));
 assert(/\.deploy-build-log\s*\{[^}]*height: 300px;[^}]*overflow: auto/s.test(css));
-assert(/\.deploy-history\s*\{[^}]*max-height: 330px;[^}]*overflow: auto/s.test(css));
+assert(/\.deploy-history\s*\{[^}]*height: 300px;[^}]*max-height: 300px;[^}]*overflow: auto/s.test(css));
+assert(deploy.includes('id="deployHist"') && deploy.includes('tabindex="0"') && deploy.includes('aria-label="Recent deployments"'), 'deployment history is keyboard-scrollable like the build log');
 assert(css.includes('@media (max-width: 1050px)') && css.includes('grid-template-columns: minmax(0, 1fr)'));
 assert(css.includes('#deployTail { max-height: 160px;'));
 assert(/\.upgrade-log\s*\{[^}]*height: 360px;[^}]*overflow: auto/s.test(css));

@@ -242,7 +242,7 @@ main { flex: 1; min-width: 0; width: 100%; padding: 24px; max-width: 1100px; }
 .migrate-detect.unavailable small { color: var(--danger); white-space: normal; }
 .deploy-progress { margin-top: 13px; padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--input); }
 .deploy-progress-head { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; margin-bottom: 7px; }
-.deploy-history { display: grid; gap: 8px; max-height: 330px; overflow: auto; margin-top: 12px; overscroll-behavior: contain; }
+.deploy-history { display: grid; align-content: start; gap: 8px; height: 300px; max-height: 300px; overflow: auto; margin-top: 12px; overscroll-behavior: contain; }
 .deploy-history-item { padding: 10px 11px; border: 1px solid var(--border); border-left: 3px solid var(--ok); border-radius: 8px; background: var(--input); }
 .remediate-item { padding: 10px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--input); margin-top: 10px; }
 .remediate-item { min-width: 0; overflow-wrap: anywhere; }

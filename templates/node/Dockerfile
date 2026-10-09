@@ -1,11 +1,12 @@
 # minipass template
-FROM node:20-alpine
+FROM node:22-alpine
 # Native npm modules can fall back to compiling when no Alpine binary exists.
 RUN apk add --no-cache python3 build-base autoconf automake libtool nasm pkgconf
 WORKDIR /app
-COPY package*.json ./
-RUN npm install
 COPY . .
+# Copy source before install because repository lifecycle scripts may need
+# Prisma schemas, generator configs, workspace files, or other project assets.
+RUN npm install
 RUN npm run build --if-present
 EXPOSE 3000
 # Prefer the project's declared start command; retain the zero-config index.js fallback.

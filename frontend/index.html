@@ -223,7 +223,7 @@
         <div class="deploy-top-grid">
           <div class="card deploy-history-card">
             <div class="sectionhead"><div><b>Recent deployments</b><div class="meta">Latest attempts from every source. Expand a failure for its saved details.</div></div></div>
-            <div id="deployHist" class="deploy-history"></div>
+            <div id="deployHist" class="deploy-history" tabindex="0" aria-label="Recent deployments" aria-live="polite"></div>
           </div>
           <div class="card deploy-log-card">
             <div class="sectionhead"><div><b>Latest build output</b><div class="meta">Scrollable log — kept separate from fixes.</div></div><div class="actions"><button onclick="loadDeployLog()">load / refresh</button><button onclick="showSiteTab('logs');showBuildLog(true)">full log</button></div></div>

@@ -1487,6 +1487,7 @@ async function loadHostStorage() {
   const box = document.getElementById('hostStorageBox');
   const list = document.getElementById('hostCandidates');
   const state = document.getElementById('hostQuotaState');
+  const provisionOut = document.getElementById('provisionOut');
   if (box) box.textContent = 'loading…';
   if (list) list.innerHTML = '';
   try {
@@ -1498,7 +1499,13 @@ async function loadHostStorage() {
     if (state) { state.textContent = q.ready ? 'quotas active' : 'unenforced'; state.className = 'panel-state ' + (q.ready ? 'is-ok' : 'is-busy'); }
     if (box) box.innerHTML = hostCapacityMarkup(d, p && p.approval);
     if (list) list.innerHTML = hostCandidateRows(d.bridge);
-    if (p && p.approval) document.getElementById('provisionOut').textContent = `Selected target: ${p.approval.target} — run: sudo bash install-linux.sh --provision-storage=${p.approval.target} — then answer the installer's confirmation prompt.`;
+    if (provisionOut) {
+      provisionOut.textContent = q.ready
+        ? 'Storage setup complete — quotas are active.'
+        : p && p.approval
+          ? `Pending host approval: ${p.approval.target} — run: sudo bash install-linux.sh --provision-storage=${p.approval.target} — then answer the installer's confirmation prompt.`
+          : '';
+    }
     loadRemotes();
   } catch { if (box) box.textContent = 'Storage discovery unavailable.'; }
 }
