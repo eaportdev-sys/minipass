@@ -229,7 +229,7 @@ def migration_allowed(apps):
     except (subprocess.CalledProcessError, FileNotFoundError):
         running = ''
     if running:
-        return (False, 'Site files exist and containers are running. Stop the panel and sites, then rerun the installer so content can move to the new volume.')
+        return (False, 'Site files exist and Docker containers are running, so /srv/apps cannot be moved safely. Stop every site in the Websites view. Then, from the Minipass repository on the host, run: docker compose -p minipass down.')
     return (True, '')
 
 

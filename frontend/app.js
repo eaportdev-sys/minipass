@@ -1452,18 +1452,36 @@ function fillProvisionTarget(target) {
   const input = document.getElementById('provisionTarget');
   if (input) { input.value = target; input.focus(); }
 }
-function hostCapacityMarkup(d) {
+function hostCapacityMarkup(d, approval) {
   const b = (d && d.bridge) || {};
   const q = (d && d.quota) || {};
+  const setup = (d && d.setup) || {};
   const mount = b.mount || {};
   const where = mount.source ? ` (${safeHtml(mount.source)} on ${safeHtml(mount.target || '/srv/apps')})` : '';
   const disk = Number.isFinite(b.appsTotalBytes) && Number.isFinite(b.appsFreeBytes)
     ? `Host filesystem${where}: ${storageSize(b.appsTotalBytes)} total · ${storageSize(b.appsTotalBytes - b.appsFreeBytes)} used · ${storageSize(b.appsFreeBytes)} free.`
     : `Host filesystem size unavailable${where}.`;
-  const quota = q.ready
-    ? `Quotas active — ${storageSize(q.availableBytes)} available for new allowances (Trash and host headroom reserved).`
-    : `${q.error || 'Quotas are not enforced yet.'} Basic install is intentional — approve expansion below, then run the shown host command.`;
-  return `<div>${disk}</div><div class="meta">${safeHtml(quota)}</div>`;
+  if (q.ready) return `<div>${disk}</div><div class="meta">Quotas active — ${storageSize(q.availableBytes)} available for new allowances (Trash and host headroom reserved).</div>`;
+
+  const status = setup.message || q.error || 'Quota enforcement is not active on /srv/apps.';
+  const target = approval && approval.target;
+  const command = target ? `sudo MINIPASS_USE_FREE_SPACE=1 bash install-linux.sh --provision-storage=${target}` : '';
+  let next = '';
+  if (/containers are running/i.test(status)) {
+    next = `<div class="meta"><b>Finish setup:</b><br>` +
+      `1. Copy the approved installer command shown below.<br>` +
+      `2. In Websites, stop every running site.<br>` +
+      `3. On the host, open the Minipass repository and run <code>docker compose -p minipass down</code>.<br>` +
+      `4. Run the approved installer command. It will safely move the site data and start the panel again.<br>` +
+      `5. Return here and press refresh.</div>`;
+  } else if (/reboot/i.test(status)) {
+    next = `<div class="meta"><b>Next:</b> reboot during maintenance, rerun the installer from the Minipass repository, then refresh this page.</div>`;
+  } else if (command) {
+    next = `<div class="meta"><b>Next:</b> run this approved command from the Minipass repository on the host:<br><code>${safeHtml(command)}</code></div>`;
+  } else {
+    next = `<div class="meta"><b>Next:</b> choose an expansion candidate, approve its exact target, then run the host command shown below.</div>`;
+  }
+  return `<div>${disk}</div><div class="meta"><b>Not enforced:</b> ${safeHtml(status)}</div>${next}`;
 }
 async function loadHostStorage() {
   const box = document.getElementById('hostStorageBox');
@@ -1472,12 +1490,14 @@ async function loadHostStorage() {
   if (box) box.textContent = 'loading…';
   if (list) list.innerHTML = '';
   try {
-    const d = await (await fetch('/api/panel/storage/discovery')).json();
+    const [d, p] = await Promise.all([
+      fetch('/api/panel/storage/discovery').then(r => r.json()),
+      fetch('/api/panel/storage/provision').then(r => r.json()).catch(() => ({ approval: null }))
+    ]);
     const q = d.quota || {};
     if (state) { state.textContent = q.ready ? 'quotas active' : 'unenforced'; state.className = 'panel-state ' + (q.ready ? 'is-ok' : 'is-busy'); }
-    if (box) box.innerHTML = hostCapacityMarkup(d);
+    if (box) box.innerHTML = hostCapacityMarkup(d, p && p.approval);
     if (list) list.innerHTML = hostCandidateRows(d.bridge);
-    const p = await (await fetch('/api/panel/storage/provision')).json();
     if (p && p.approval) document.getElementById('provisionOut').textContent = `Pending host approval: ${p.approval.target} — run: sudo MINIPASS_USE_FREE_SPACE=1 bash install-linux.sh --provision-storage=${p.approval.target}`;
     loadRemotes();
   } catch { if (box) box.textContent = 'Storage discovery unavailable.'; }

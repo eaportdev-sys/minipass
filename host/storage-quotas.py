@@ -41,7 +41,7 @@ def mount_info():
     raw = subprocess.check_output(['findmnt', '-J', '-T', str(APPS), '-o', 'TARGET,SOURCE,FSTYPE,OPTIONS'], timeout=10)
     mount = json.loads(raw)['filesystems'][0]
     if mount['fstype'] != 'ext4' or 'prjquota' not in mount['options'].split(','):
-        raise QuotaError('ext4 project quotas are not active. Run the Linux installer; complete its offline setup/reboot instructions.')
+        raise QuotaError('Quota enforcement is not active on /srv/apps. Open Storage for the installer status and exact next step.')
     if not str(mount['source']).startswith('/dev/'):
         raise QuotaError('Site storage must use a host ext4 block device with project quotas.')
     return mount
