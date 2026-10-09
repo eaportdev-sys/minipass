@@ -1368,7 +1368,7 @@ function showView(view) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + view));
   document.querySelectorAll('.navitem').forEach(n => n.classList.toggle('active', n.dataset.view === view));
   if (view === 'trash') loadTrash();
-  if (view === 'panel') loadPanelErrors();
+  if (view === 'errors') loadPanelErrors();
 }
 function panelErrorText(e) {
   return `${String(e.at || '').replace('T', ' ').slice(0, 19)} [${e.level || 'error'}] ${e.area || 'panel'}${e.site ? ' (' + e.site + ')' : ''}: ${e.message || ''}`;
@@ -1380,7 +1380,7 @@ async function loadPanelErrors() {
   try {
     const r = await (await fetch('/api/panel/errors?limit=100')).json();
     const list = Array.isArray(r) ? r : [];
-    box.textContent = list.length ? list.map(panelErrorText).join('\n') : 'No recorded errors. Site creation, Trash cleanup and quota problems land here with timestamps.';
+    box.textContent = list.length ? list.map(panelErrorText).join('\n\n') : 'No recorded errors. Deployment failures, site creation and Trash cleanup problems are saved here with timestamps.';
   } catch { box.textContent = 'Could not load the error log.'; }
 }
 async function copyPanelErrors() {

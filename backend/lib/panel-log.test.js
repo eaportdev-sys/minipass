@@ -17,8 +17,22 @@ assert.equal(events[0].area, 'trash');
 assert.equal(events[1].level, 'warn');
 assert.deepEqual(log.readEvents(1).length, 1);
 assert.deepEqual(log.readEvents(99999).length, 2, 'limit is clamped');
+const failure = { at: '2026-10-09T09:02:39.000Z', status: 'error', source: 'local',
+  error: "build failed - running containers untouched: npm error Cannot read properties of null (reading 'edgesOut') DB_PASSWORD=hunter2" };
+const app = { id: 'testsite', lastDeploy: failure, deployHistory: [failure,
+  { at: '2026-10-09T08:00:00.000Z', status: 'error', source: 'webhook', error: 'older failure' },
+  { at: '2026-10-09T07:00:00.000Z', status: 'ok' }] };
+let failures = log.readErrors([app], 100).filter(e => e.site === 'testsite');
+assert.equal(failures.length, 2, 'retained failures are visible before the new logging hook; successes excluded');
+assert.equal(failures[0].area, 'deploy-local');
+assert(failures[0].message.includes('edgesOut') && !failures[0].message.includes('hunter2'));
+log.logEvent(log.deploymentEvent(app.id, failure));
+failures = log.readErrors([app], 100).filter(e => e.site === 'testsite');
+assert.equal(failures.length, 2, 'persisted and metadata copies of the same attempt are deduplicated');
+assert.equal(log.readErrors([app], 1).length, 1);
+assert.equal(log.readErrors([], 100).filter(e => e.site === 'testsite').length, 1, 'saved failures survive removal of site metadata');
 for (let i = 0; i < 3000; i++) log.logEvent({ area: 'fill', message: 'x'.repeat(200) });
 events = log.readEvents(500);
 assert(events.length <= 500 && events.length > 0, 'log rotates under the cap');
 assert(fs.statSync(log.logPath()).size <= 512 * 1024 + 4096);
-console.log('Panel error log: redaction, newest-first reads, corrupt-line tolerance and rotation: OK');
+console.log('Panel error log: redaction, deployment history fallback, deduplication, newest-first reads and rotation: OK');

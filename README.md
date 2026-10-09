@@ -30,6 +30,11 @@ minipass turns a folder or git repo into a running site with one flow:
   **local rebuild** skips the pull and builds the box files as-is.
 - Extras: per-site terminal, file manager, environment editor, on-demand
   database UIs (pgAdmin, phpMyAdmin for MySQL/MariaDB, mongo-express, Redis Commander)
+- **Error log** in the sidebar retains deployment failures from every trigger,
+  with site, source and timestamp, alongside creation and Trash cleanup errors.
+  It survives panel restarts; older failures still in site history are included.
+  The log is bounded/rotated, not an unlimited archive. Site Deploy → full log
+  shows the latest build output separately.
 
 No build step for the panel UI — plain HTML/JS/CSS. One Express API (`:3001`)
 serves the frontend and shells Docker for app containers.

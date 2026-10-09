@@ -476,7 +476,7 @@ app.get('/api/panel/storage', async (req, res) => {
 });
 // Persistent panel error log: toasts vanish, this does not. Newest first.
 app.get('/api/panel/errors', (req, res) => {
-  try { res.json(panelLog.readEvents(req.query.limit)); }
+  try { res.json(panelLog.readErrors(load().apps, req.query.limit)); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -744,15 +744,20 @@ function createLocalPushStage(dir, meta, pushedSha, pushedBranch) {
   }
 }
 async function recordDeploy(id, rec) {
+  const op = deployOps.get(id);
+  if (op) {
+    rec.source = rec.source || op.source;
+    if (!rec.durationMs) rec.durationMs = Date.now() - op.startedAt;
+  }
+  if (rec.status === 'error') {
+    rec.error = panelLog.redact(rec.error || 'Deployment failed').slice(0, 2000);
+    panelLog.logEvent(panelLog.deploymentEvent(id, rec));
+    if (op) op.failureRecorded = true;
+  }
   try {
     const db2 = load();
     const m = db2.apps.find(a => a.id === id);
     if (m) {
-      const op = deployOps.get(id);
-      if (op) {
-        rec.source = rec.source || op.source;
-        if (!rec.durationMs) rec.durationMs = Date.now() - op.startedAt;
-      }
       m.lastDeploy = rec;
       if (rec.status === 'ok') {
         delete m.dirty;
@@ -1153,7 +1158,7 @@ async function deployNow(id, opts = {}) {
       const cause = lines.filter(l => /(npm error( code)?|error TS\d+|ELIFECYCLE|ERESOLVE|EJSONPARSE|failed to solve|COPY failed|can't stat|no such file)/i.test(l));
       tail = (cause.length ? cause.slice(-8) : lines.slice(-25)).join('\n');
     } catch {}
-    await recordDeploy(id, { sha, at: stamp(), status: 'error', error: ('build failed - running containers untouched: ' + (tail || e.message)).trim().slice(-500) });
+    await recordDeploy(id, { sha, at: stamp(), status: 'error', error: panelLog.redact('build failed - running containers untouched: ' + (tail || e.message)).trim().slice(0, 2000) });
     throw new Error('build failed - running containers untouched: ' + (tail || e.message).trim().split('\n').slice(-3).join(' '));
   }
   if (opts.skipSync) {
@@ -1195,6 +1200,15 @@ async function deployNow(id, opts = {}) {
   // lock (and keep the UI pulsing) after the release is already healthy/live.
   autodetectHome(id).catch(e => console.error(id, 'home detection:', e.message));
   return true;
+  } catch (e) {
+    // Also retain failures before the build stage (quota checks, staging, etc.).
+    // Stage-specific failures already recorded above must not be duplicated.
+    const op = deployOps.get(id);
+    if (op && !op.failureRecorded) {
+      await recordDeploy(id, { at: new Date().toISOString(), status: 'error',
+        error: panelLog.redact(e.message).slice(0, 2000) });
+    }
+    throw e;
   } finally {
     try {
       const retained = load().apps.find(a => a.id === id);

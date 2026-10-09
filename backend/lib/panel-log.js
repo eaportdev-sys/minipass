@@ -15,10 +15,10 @@ function redact(text) {
     .replace(/(bearer\s+)[A-Za-z0-9\-._~+/=]{8,}/gi, '$1***')
     .replace(/((?<!access-)(?:password|passwd|secret|token)[-_a-z]*["'\s:=]+)(["']?)([^\s"';,]{4,})/gi, (m, k, q) => k + q + '***');
 }
-function logEvent({ level = 'error', area = 'panel', site = null, message = '' } = {}) {
+function logEvent({ at = new Date().toISOString(), level = 'error', area = 'panel', site = null, message = '' } = {}) {
   try {
     const file = logPath();
-    const entry = JSON.stringify({ at: new Date().toISOString(), level, area, site: site || null, message: redact(message).slice(0, 2000) }) + '\n';
+    const entry = JSON.stringify({ at, level, area, site: site || null, message: redact(message).slice(0, 2000) }) + '\n';
     fs.appendFileSync(file, entry);
     try {
       if (fs.statSync(file).size > MAX_BYTES) {
@@ -49,4 +49,24 @@ function readEvents(limit = 100) {
   }
   return out.slice(-n).reverse();
 }
-module.exports = { logEvent, readEvents, redact, logPath };
+function deploymentEvent(site, rec) {
+  return { at: rec.at, level: 'error', area: 'deploy-' + (rec.source || 'manual'), site,
+    message: redact(rec.error || 'Deployment failed').slice(0, 2000) };
+}
+// Include failures retained in site metadata from before deploy logging existed.
+// Persisted entries take precedence; never show the same attempt twice.
+function readErrors(apps = [], limit = 100) {
+  const n = Math.min(MAX_READ, Math.max(1, parseInt(limit, 10) || 100));
+  const events = readEvents(MAX_READ);
+  const key = e => JSON.stringify([e.at, e.site, e.area]);
+  const seen = new Set(events.map(key));
+  for (const app of apps) {
+    for (const rec of [app.lastDeploy, ...(app.deployHistory || [])]) {
+      if (!rec || rec.status !== 'error' || !rec.at) continue;
+      const event = deploymentEvent(app.id, rec);
+      if (!seen.has(key(event))) { events.push(event); seen.add(key(event)); }
+    }
+  }
+  return events.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, n);
+}
+module.exports = { logEvent, readEvents, readErrors, deploymentEvent, redact, logPath };
