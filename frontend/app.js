@@ -411,7 +411,7 @@ async function loadRemediations(failed) {
     card.style.display = remediateCache.length ? 'block' : 'none';
     renderDeployMarkup(box, remediateCache.map((s, i) =>
       `<div class="remediate-item"><div class="remediate-head"><div><b>${safeHtml(s.title)}</b><div class="meta">Service: ${safeHtml(s.service || 'app')} · ${safeHtml(s.subdir || 'repository root')}</div></div>` +
-      (s.key ? `<button class="btn primary" onclick="applyRemediation(${i})">${s.kind === 'dockerfile-restore' ? 'restore original Dockerfile' : s.kind === 'import-repair' ? 'apply import correction' : 'apply fix'}</button>` : s.protectionKey ? `<button onclick="removeImportProtection(${i})">remove protection</button>` : '') + '</div>' +
+      (s.key ? `<button class="btn primary" onclick="applyRemediation(${i})">${s.kind === 'dockerfile-restore' ? 'restore original Dockerfile' : s.kind === 'import-repair' ? 'apply import correction' : s.kind === 'dockerfile-fix' ? 'apply Dockerfile fix' : 'apply fix'}</button>` : s.protectionKey ? `<button onclick="${s.kind === 'dockerfile-protection' ? 'removeDockerfileProtection' : 'removeImportProtection'}(${i})">remove protection</button>` : '') + '</div>' +
       `<details class="remediate-review" data-record="${safeHtml((s.service || '') + ':' + (s.key || s.protectionKey || s.title))}"${s.key ? ' open' : ''}><summary>${s.preview ? 'Review files and exact diff' : 'Details'}</summary><div class="meta">${safeHtml(s.detail)}</div>` +
       ((s.files || []).length ? `<ul class="remediate-files">${s.files.map(f => `<li>${safeHtml(f)}</li>`).join('')}</ul>` : '') +
       (s.preview ? `<pre tabindex="0" aria-label="Proposed changes">${safeHtml(s.preview)}</pre>` : '') + '</details></div>'
@@ -446,11 +446,13 @@ async function applyRemediation(i) {
   if (!s || !s.key || !currentApp) return;
   const appId = currentApp;
   const ok = await uiConfirm({
-    title: s.kind === 'import-repair' ? 'Apply import correction?' : 'Apply fix?',
+    title: s.kind === 'import-repair' ? 'Apply import correction?' : s.kind === 'dockerfile-fix' ? 'Apply Dockerfile fix?' : 'Apply fix?',
     body: s.kind === 'import-repair'
       ? `${s.title}. Files: ${(s.files || []).join(', ')}. The approved import-only repair is retained outside Git and revalidated on redeploy. Changed or ambiguous source stops for review. Your remote repo stays untouched. Use local rebuild now.\n\n${s.preview || ''}`
+      : s.kind === 'dockerfile-fix'
+      ? `${s.title}. Files: ${(s.files || []).join(', ')}. The approved build-environment adaptation is retained outside Git and revalidated on redeploy. Only the base image tag and build tools change; application source stays untouched. Your remote repo stays untouched. Use local rebuild now.\n\n${s.preview || ''}`
       : `${s.title}. Writes box files only (${(s.files || []).join(', ')}) — use local rebuild afterwards to preserve box edits. Your remote repo stays untouched until you commit.`,
-    confirmLabel: s.kind === 'import-repair' ? 'Apply imports' : 'Apply fix'
+    confirmLabel: s.kind === 'import-repair' ? 'Apply imports' : s.kind === 'dockerfile-fix' ? 'Apply Dockerfile fix' : 'Apply fix'
   });
   if (!ok || currentApp !== appId) return;
   try {
@@ -468,6 +470,18 @@ async function removeImportProtection(i) {
   if (!ok || currentApp !== appId) return;
   try {
     const r = await (await fetch(`/api/apps/${appId}/import-protection`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: s.protectionKey, service: s.service, revision: s.revision }) })).json();
+    toast(r.ok ? 'protection removed — current files unchanged' : (r.error || 'failed'), !!r.ok);
+    if (currentApp === appId) await loadRemediations(true);
+  } catch (e) { toast('remove protection failed: ' + e.message, false); }
+}
+async function removeDockerfileProtection(i) {
+  const s = remediateCache[i];
+  if (!s || !s.protectionKey || !currentApp) return;
+  const appId = currentApp;
+  const ok = await uiConfirm({ title: 'Remove redeploy protection?', body: `Stop retaining this approved Dockerfile adaptation for ${s.service}: ${(s.files || []).join(', ')}. The current build recipe is not changed. Future checkouts will use the repository Dockerfile; fix the repository itself if the adaptation is still needed.`, confirmLabel: 'Remove protection', danger: true });
+  if (!ok || currentApp !== appId) return;
+  try {
+    const r = await (await fetch(`/api/apps/${appId}/dockerfile-fix`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: s.protectionKey, service: s.service, revision: s.revision }) })).json();
     toast(r.ok ? 'protection removed — current files unchanged' : (r.error || 'failed'), !!r.ok);
     if (currentApp === appId) await loadRemediations(true);
   } catch (e) { toast('remove protection failed: ' + e.message, false); }

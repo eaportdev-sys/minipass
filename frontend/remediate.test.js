@@ -136,6 +136,33 @@ async function main() {
   assert.equal(posted.url, '/api/apps/demo/import-protection');
   assert.deepEqual(posted.body, { key: protectedFix.protectionKey, service: 'web', revision: 'registry-revision' });
   assert(confirmed.body.includes('Current source files are not changed'));
+  const dfFix = { key: 'dockerfile-fix:Dockerfile', kind: 'dockerfile-fix', service: 'app', revision: 'recipe-revision',
+    title: 'Adapt the repository Dockerfile build environment (node:20-alpine -> node:24-alpine) + git', detail: 'Build evidence: package engines require node >= 24', files: ['Dockerfile'],
+    preview: '--- a/Dockerfile\n- FROM node:20-alpine AS build\n+ FROM node:24-alpine AS build' };
+  context.fetch = async (url, opts) => {
+    if (opts) posted = { url, method: opts.method, body: JSON.parse(opts.body) };
+    return { json: async () => opts ? { ok: true, saved: true, protected: true, applied: ['Dockerfile'] } : [dfFix] };
+  };
+  await run('loadRemediations(true)');
+  assert(element('remediateBox').innerHTML.includes('apply Dockerfile fix'));
+  assert(element('remediateBox').innerHTML.includes('+ FROM node:24-alpine AS build'));
+  await run('applyRemediation(0)');
+  assert.equal(confirmed.title, 'Apply Dockerfile fix?');
+  assert.equal(confirmed.confirmLabel, 'Apply Dockerfile fix');
+  assert(confirmed.body.includes('retained outside Git') && confirmed.body.includes('+ FROM node:24-alpine'));
+  assert.deepEqual(posted.body, { key: dfFix.key, service: 'app', revision: 'recipe-revision' });
+  assert(toasts.at(-1).text.includes('redeploy protection'));
+  const dfProtected = { kind: 'dockerfile-protection', service: 'app', protectionKey: 'dockerfile-fix:Dockerfile', revision: 'df-registry-revision', title: 'Protected Dockerfile adaptation: Dockerfile', detail: 'Retained outside Git', files: ['Dockerfile'] };
+  context.fetch = async (url, opts) => {
+    if (opts) posted = { url, method: opts.method, body: JSON.parse(opts.body) };
+    return { json: async () => opts ? { ok: true } : [dfProtected] };
+  };
+  await run('loadRemediations(false)');
+  assert(element('remediateBox').innerHTML.includes('removeDockerfileProtection(0)'));
+  await run('removeDockerfileProtection(0)');
+  assert.equal(posted.method, 'DELETE');
+  assert.equal(posted.url, '/api/apps/demo/dockerfile-fix');
+  assert(confirmed.body.includes('current build recipe is not changed') || confirmed.body.includes('build recipe'));
   console.log('Remediation UI: escaped previews, exact approval confirmation, retained protection/removal, compact details and stale/navigation guards: OK');
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

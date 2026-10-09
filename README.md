@@ -37,13 +37,22 @@ minipass turns a folder or git repo into a running site with one flow:
   every affected file and previews the exact import-only diff; approval is required.
   Ambiguous candidates, incomplete scans and unsupported imports get guidance,
   not guessed edits. Matching exports cannot prove intended behavior; review the
-  proposed destination. Original source files are preserved outside `code/` in
+  proposed destination. When a repository Dockerfile itself blocks the build —
+  a stale Node.js base image the package engines reject, or install lifecycle
+  scripts needing a git binary the image lacks — the Deploy tab can propose a
+  minimal build-environment adaptation (base image tag bump plus build-tool
+  installation before package install). Only the build recipe changes;
+  application source, lockfiles and the remote repository stay untouched, and
+  the exact diff is previewed for approval. Fixing the repository itself is the
+  last resort if the adaptation cannot cover a failure.
+  Original source files are preserved outside `code/` in
   the site's `.remediation-backups/` folder. Approvals live outside the checkout
-  in `.import-repairs/` and survive panel restarts, Git sync, fresh checkouts,
+  in `.import-repairs/` and `.dockerfile-fixes/` and survive panel restarts, Git sync, fresh checkouts,
   local pushes and Trash restore. Before a pull, only byte-exact approved edits
   matching repository HEAD are temporarily removed; other box edits are never reset.
   After sync, Minipass rechecks the original imports, exact destination module and
-  unique export match before replaying. Changed files, unsafe paths or ambiguous
+  unique export match before replaying, and re-derives Dockerfile adaptations
+  against the updated recipe. Changed files, unsafe paths or ambiguous
   candidates stop deployment before building or touching running containers.
   Already-correct repository imports need no write. Deploy shows retained approvals;
   explicitly removing protection leaves current source unchanged. Verified backups

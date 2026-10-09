@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const prebuild = require('./prebuild');
 const { failureSummary } = require('./build-log');
 const importRepair = require('./import-repair');
+const dockerfileFix = require('./dockerfile-fix');
 
 const VALID_KEY = /^[a-z-]+:[A-Za-z0-9_.\/-]{1,120}$/;
 
@@ -54,7 +55,17 @@ function suggest(ctxDir, errorText, templateDockerfile, latestError = errorText)
   // running. This can show a separate, previewed import correction alongside
   // Dockerfile recovery instead of hiding the source problem until another build.
   const suggestions = importRepair.suggest(ctxDir);
-  const seen = new Set();
+  // Build-environment evidence is cached per folder so apply() re-derives the
+  // same proposal without trusting client-sent file contents.
+  dockerfileFix.noteEvidence(ctxDir, errorText);
+  for (const fix of dockerfileFix.suggest(ctxDir)) {
+    if (fix.key) {
+      if (suggestions.some(s => s.key === fix.key)) continue;
+      suggestions.push(fix);
+    } else {
+      suggestions.push(fix);
+    }
+  }  const seen = new Set();
   for (const { file, request } of missingModules(errorText)) {
     const rel = resolveRequest(ctxDir, file, request);
     const identity = rel || `${file}:${request}`;
@@ -124,6 +135,7 @@ function suggest(ctxDir, errorText, templateDockerfile, latestError = errorText)
 function apply(ctxDir, suggestion, options = {}) {
   if (!suggestion || !VALID_KEY.test(suggestion.key || '')) throw new Error('unknown remediation');
   if (suggestion.kind === 'import-repair') return importRepair.apply(ctxDir, suggestion, options);
+  if (suggestion.kind === 'dockerfile-fix') return dockerfileFix.apply(ctxDir, suggestion, options);
   if (suggestion.kind === 'dockerfile-restore') {
     const dfName = (suggestion.files && suggestion.files[0]) || 'Dockerfile';
     const dfPath = inside(ctxDir, dfName);

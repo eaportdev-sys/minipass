@@ -96,6 +96,25 @@ assert.deepEqual(remediate.suggest(dir, NPM_CRASH, TEMPLATE, 'another latest fai
 assert.deepEqual(remediate.suggest(dir, 'unrelated failure', TEMPLATE).filter(s => s.kind === 'missing-module'), [], 'no stub without TS2307 evidence');
 assert.throws(() => remediate.apply(dir, { key: 'dockerfile-restore:../escape', kind: 'dockerfile-restore', files: ['../escape'], preview: 'x' }), /escapes/);
 assert.equal(remediate.suggest(dir, 'pre-build failed: ELIFECYCLE', TEMPLATE)[0].kind, 'diagnostic', 'a generic build exit never offers a Dockerfile rewrite');
+
+// Repository build-environment failure: missing git + stale node base.
+const repoDockerfile = 'FROM node:20-alpine AS build\nRUN apk add --no-cache python3 build-base\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install\nCOPY . .\nRUN npm run build\nFROM nginx:alpine\nCOPY --from=build /app/dist /usr/share/nginx/html\n';
+const repoPkg = JSON.stringify({ scripts: { build: 'vite build', prepare: 'is-ci || lefthook install' } });
+const repoError = 'Error: exec: "git": executable file not found in $PATH\n' +
+  "npm warn EBADENGINE required: { node: '>=24' }, current: { node: 'v20.20.2', npm: '10.8.2' }\n" +
+  'ERROR: process "/bin/sh -c npm install" did not complete successfully: exit code: 1';
+dir = fixture({ Dockerfile: repoDockerfile, 'package.json': repoPkg });
+suggestions = remediate.suggest(dir, repoError, TEMPLATE);
+const fix = suggestions.find(s => s.kind === 'dockerfile-fix');
+assert(fix && fix.key === 'dockerfile-fix:Dockerfile', 'build-environment failure proposes an adaptation');
+assert(fix.preview.includes('node:24-alpine') && fix.preview.includes('apk add --no-cache git'));
+assert(fix.detail.includes('remote repository stay untouched'));
+const fixed = remediate.apply(dir, fix);
+assert.deepEqual(fixed.applied, ['Dockerfile']);
+assert(fixed.protected === undefined, 'protection flag is set by the API layer, not the library');
+assert(fs.readFileSync(path.join(dir, 'Dockerfile'), 'utf8').includes('node:24-alpine'));
+assert.throws(() => remediate.apply(dir, fix), /changed/, 'stale approval cannot rewrite');
+assert(!remediate.suggest(dir, repoError, TEMPLATE).some(s => s.kind === 'dockerfile-fix'), 'adapted recipe proposes nothing more');
 assert.throws(() => remediate.apply(dir, { key: 'bogus', kind: 'bogus' }), /unknown remediation/);
 for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
 

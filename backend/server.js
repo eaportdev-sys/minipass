@@ -25,6 +25,7 @@ const prebuild = require('./lib/prebuild');
 const { runLogged, failureSummary } = require('./lib/build-log');
 const remediate = require('./lib/remediate');
 const importProtection = require('./lib/import-protection');
+const dockerfileProtection = require('./lib/dockerfile-protection');
 const siteIdentity = require('./lib/site-identity');
 const { refreshStandardDockerfile, standardDockerfileType } = require('./lib/dockerfiles');
 const { buildProfile, readBuildProfile, localBuildProfile, isJekyll } = require('./lib/build-profile');
@@ -1017,6 +1018,7 @@ async function deployNow(id, opts = {}) {
       for (const service of protectedServices.filter(s => s.enabled !== false)) importProtection.migrate(dir, service, codeDir);
       if (fs.existsSync(path.join(codeDir, '.git'))) {
         importProtection.run(dir, protectedServices, codeDir, 'suspend', line => fs.appendFileSync(buildLog, line + '\n'));
+        dockerfileProtection.run(dir, protectedServices, codeDir, 'suspend', line => fs.appendFileSync(buildLog, line + '\n'));
       }
       if (!fs.existsSync(path.join(codeDir, '.git'))) {
         // first sync: repo linked after a template create - replace starter with repo,
@@ -1036,8 +1038,11 @@ async function deployNow(id, opts = {}) {
       }
     } catch (e) {
       let msg = redactUrl(e.stderr ? String(e.stderr) : e.message);
-      // A failed pull must not leave the exact approved correction removed.
-      try { importProtection.run(dir, svc.fullServices(meta, dir), codeDir, 'replay', line => fs.appendFileSync(buildLog, line + '\n')); }
+      // A failed pull must not leave exact approved corrections removed.
+      try {
+        importProtection.run(dir, svc.fullServices(meta, dir), codeDir, 'replay', line => fs.appendFileSync(buildLog, line + '\n'));
+        dockerfileProtection.run(dir, svc.fullServices(meta, dir), codeDir, 'replay', line => fs.appendFileSync(buildLog, line + '\n'));
+      }
       catch (restoreError) { msg += '\nImport protection needs review: ' + restoreError.message; }
       const sha0 = await currentSha(dir);
       await recordDeploy(id, { sha: sha0, at: new Date().toISOString(), status: 'error', error: ('git sync failed - running containers untouched: ' + msg).slice(-500) });
@@ -1052,6 +1057,7 @@ async function deployNow(id, opts = {}) {
     const protectedServices = svc.fullServices(meta, dir);
     for (const service of protectedServices.filter(s => s.enabled !== false)) importProtection.migrate(dir, service, codeDir);
     for (const name of importProtection.run(dir, protectedServices, buildCodeDir, 'replay', line => fs.appendFileSync(buildLog, line + '\n'))) replayedImportServices.add(name);
+    for (const name of dockerfileProtection.run(dir, protectedServices, buildCodeDir, 'replay', line => fs.appendFileSync(buildLog, line + '\n'))) replayedImportServices.add(name);
   } catch (e) {
     const failure = 'import protection blocked deployment - running containers untouched: ' + e.message;
     fs.appendFileSync(buildLog, failure + '\n');
@@ -1911,7 +1917,7 @@ function remediationContext(dir, subdir) {
 }
 function remediationSuggestions(meta, dir) {
   const services = svc.fullServices(meta || {}, dir);
-  const protectedCards = importProtection.cards(dir, services);
+  const protectedCards = [...importProtection.cards(dir, services), ...dockerfileProtection.cards(dir, services)];
   const out = [];
   const last = meta.lastDeploy && meta.lastDeploy.status !== 'ok' ? String(meta.lastDeploy.error || '') : '';
   if (!last) return protectedCards;
@@ -1957,9 +1963,12 @@ app.post('/api/apps/:id/remediate', async (req, res) => {
       if (match.revision && match.revision !== (req.body && req.body.revision)) throw lifecycleError('Files changed - refresh the recovery preview before applying', 409);
       const ctxDir = remediationContext(dir, match.subdir);
       if (!/^[A-Za-z0-9_-]{1,32}$/.test(match.service || '')) throw lifecycleError('invalid recovery service name', 400);
-      const result = remediate.apply(ctxDir, match, { backupRoot: path.join(dir, '.remediation-backups', match.service),
-        beforeApply: approval => importProtection.save(dir, match.service, match.subdir, approval) });
-      if (match.kind === 'import-repair') result.protected = true;
+      const result = match.kind === 'dockerfile-fix'
+        ? remediate.apply(ctxDir, match, { backupRoot: path.join(dir, '.remediation-backups', match.service),
+          beforeApply: approval => dockerfileProtection.save(dir, match.service, match.subdir, approval) })
+        : remediate.apply(ctxDir, match, { backupRoot: path.join(dir, '.remediation-backups', match.service),
+          beforeApply: approval => importProtection.save(dir, match.service, match.subdir, approval) });
+      if (match.kind === 'import-repair' || match.kind === 'dockerfile-fix') result.protected = true;
       if (result.backup) result.backup = path.relative(dir, result.backup).split(path.sep).join('/');
       if (match.kind === 'import-repair') {
         const fresh = load();
@@ -1970,7 +1979,7 @@ app.post('/api/apps/:id/remediate', async (req, res) => {
       }
       try { panelLog.logEvent({ level: 'warn', area: 'remediate', site: meta.id, message: `applied ${key}: ${result.applied.join(', ')}` }); } catch {}
       await markDirty(meta.id, 'remediation applied: ' + key);
-      res.json({ ok: true, saved: true, ...result, note: result.protected ? 'approved import correction retained outside Git and revalidated on redeploy; remote repository unchanged' : 'box-local change - use local rebuild to preserve box edits; commit to the repo to keep it' });
+      res.json({ ok: true, saved: true, ...result, note: result.protected ? (match.kind === 'dockerfile-fix' ? 'approved Dockerfile adaptation retained outside Git and revalidated on redeploy; remote repository unchanged' : 'approved import correction retained outside Git and revalidated on redeploy; remote repository unchanged') : 'box-local change - use local rebuild to preserve box edits; commit to the repo to keep it' });
     });
   } catch (e) {
     panelLog.logEvent({ level: 'error', area: 'remediate', site: req.params.id, message: e.message });
@@ -1984,6 +1993,17 @@ app.delete('/api/apps/:id/import-protection', async (req, res) => {
       if (!meta) throw lifecycleError('unknown app', 404);
       importProtection.remove(appDir(APPS_DIR, meta.id), req.body.service, req.body.key, req.body.revision);
       panelLog.logEvent({ level: 'warn', area: 'remediate', site: meta.id, message: `removed import protection for '${req.body.service}': ${req.body.key}; current source unchanged` });
+      res.json({ ok: true });
+    });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.delete('/api/apps/:id/dockerfile-fix', async (req, res) => {
+  try {
+    await siteLifecycle(req.params.id, async () => {
+      const meta = load().apps.find(a => a.id === req.params.id);
+      if (!meta) throw lifecycleError('unknown app', 404);
+      dockerfileProtection.remove(appDir(APPS_DIR, meta.id), req.body.service, req.body.key, req.body.revision);
+      panelLog.logEvent({ level: 'warn', area: 'remediate', site: meta.id, message: `removed Dockerfile adaptation protection for '${req.body.service}': ${req.body.key}; current build recipe unchanged` });
       res.json({ ok: true });
     });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
