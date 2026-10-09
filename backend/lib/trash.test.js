@@ -47,7 +47,12 @@ function fakeDocker() {
     if (args[1] === 'inspect') {
       const id = args.at(-1), info = images.get(id);
       assert(info, 'inspect only existing image');
-      return JSON.stringify({ id, ...info });
+      assert(!args.includes('--format'), 'image data is parsed from full JSON, never Go templates');
+      // Docker 29 containerd-store shape: Parent/Config may be absent entirely.
+      const payload = { Id: id, RepoTags: info.tags };
+      if (info.parent) payload.Parent = info.parent;
+      if (info.project || info.service) payload.Config = { Labels: { ...(info.project ? { 'com.docker.compose.project': info.project } : {}), ...(info.service ? { 'com.docker.compose.service': info.service } : {}) } };
+      return JSON.stringify([payload]);
     }
     assert.equal(args[1], 'rm');
     assert(!args.includes('--force') && !args.includes('-f'), 'never force image removal');

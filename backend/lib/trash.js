@@ -7,7 +7,23 @@ const exec = promisify(execFile);
 const validId = id => id !== 'minipass' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(id || '');
 const validImage = id => /^sha256:[a-f0-9]{64}$/.test(id || '');
 const lines = text => String(text || '').trim().split(/\s+/).filter(Boolean);
-const imageFormat = '{"id":{{json .Id}},"parent":{{json .Parent}},"tags":{{json .RepoTags}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},"service":{{json (index .Config.Labels "com.docker.compose.service")}}}';
+
+// Full `docker image inspect` JSON, parsed defensively: field names differ
+// across Docker versions and image stores (e.g. Docker 29's containerd store
+// has no `.Parent`), while Go `--format` templates fail hard on a missing key.
+async function inspectImage(cli, image) {
+  const parsed = JSON.parse(await cli.docker(['image', 'inspect', image]));
+  const info = Array.isArray(parsed) ? parsed[0] : parsed;
+  if (!info || typeof info !== 'object') throw new Error('Docker returned invalid image data');
+  const labels = (info.Config && info.Config.Labels) || {};
+  return {
+    id: info.Id || null,
+    parent: typeof info.Parent === 'string' ? info.Parent : null,
+    tags: Array.isArray(info.RepoTags) ? info.RepoTags.filter(t => typeof t === 'string') : [],
+    project: typeof labels['com.docker.compose.project'] === 'string' ? labels['com.docker.compose.project'] : null,
+    service: typeof labels['com.docker.compose.service'] === 'string' ? labels['com.docker.compose.service'] : null
+  };
+}
 
 function builtServices(dir, record) {
   let names = (record.services || []).map(s => s.name);
@@ -64,7 +80,7 @@ async function collectImages({ id, dir, record, ...options }) {
   if ([...ids].some(x => !validImage(x))) throw new Error('Docker returned an invalid image id');
   const result = [];
   for (const image of ids) {
-    const info = JSON.parse(await cli.docker(['image', 'inspect', '--format', imageFormat, image]));
+    const info = await inspectImage(cli, image);
     const tags = (info.tags || []).filter(t => typeof t === 'string');
     const labeled = info.project === id;
     const known = prior.has(image);
@@ -133,7 +149,7 @@ async function destroySite({ record, trashRoot, images, protectedImages = [], ..
       // Recheck existence after earlier removals and any external Docker work.
       const available = new Set(lines(await cli.docker(['image', 'ls', '--all', '--no-trunc', '--quiet'])));
       if (!available.has(image.id)) continue;
-      const current = JSON.parse(await cli.docker(['image', 'inspect', '--format', imageFormat, image.id]));
+      const current = await inspectImage(cli, image.id);
       const tags = current.tags || [];
       const mine = new Set(image.tags || []);
       const foreign = tags.filter(t => !mine.has(t));
