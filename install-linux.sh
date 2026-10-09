@@ -176,5 +176,22 @@ fi
 
 docker --version
 docker compose version || docker-compose --version || echo "compose missing - install docker-compose-plugin"
-echo "done. copy minipaas to /opt/minipaas, then: cd /opt/minipaas && docker compose up -d --build"
-echo "UI on http://SERVER_IP:3001, apps in /srv/apps"
+
+# 8. blank-install finish: the invoking user gets docker access, and a host
+#    with no panel container yet gets it built + started so install ends with
+#    a live UI. Reruns never touch an existing panel - upgrades stay on the
+#    host-cron path, and restarts from inside the container are still banned.
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+  usermod -aG docker "$SUDO_USER" || true
+fi
+if [ -f "$INSTALL_DIR/docker-compose.yml" ]; then
+  if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx 'minipass-panel-1'; then
+    msg "first install detected - building and starting the panel (a few minutes, npm install dominates)"
+    (cd "$INSTALL_DIR" && GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo dev) docker compose -p minipass up -d --build) \
+      || msg "panel auto-start failed - start it manually: cd $INSTALL_DIR && docker compose -p minipass up -d --build"
+  fi
+fi
+echo "done. UI on http://SERVER_IP:3001, apps in /srv/apps"
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+  echo "NOTE: $SUDO_USER has docker access - if 'docker' says permission denied, log out and back in (or run 'newgrp docker') once."
+fi

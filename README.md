@@ -65,11 +65,18 @@ Stop-Process -Id $p.Id -Force
 ```
 
 ## Quickstart — Linux host (Ubuntu, `/opt/minipass`)
+One block, run on the server. The repo is private: use your GitHub username and
+a PAT (Settings → Developer settings → Personal access tokens, `repo` scope) at
+the password prompt. The installer adds you to the `docker` group, pulls DB
+admin images in the background, and starts the panel itself on a blank host.
 ```bash
-git clone <this-repo> /opt/minipass && cd /opt/minipass
+git clone https://github.com/eaportdev-sys/minipass.git ~/minipass
+sudo mv ~/minipass /opt/minipass
+sudo chown -R $USER:$USER /opt/minipass
+cd /opt/minipass
 sudo bash install-linux.sh
-GIT_SHA=$(git rev-parse --short HEAD) docker compose -p minipass up -d --build
-# open http://SERVER_IP:3001
+# if docker says permission denied: log out/in once (or: newgrp docker)
+# open http://SERVER_IP:3001 and set the admin password
 ```
 
 Per-app: `cd /srv/apps/<id> && docker compose ps | docker compose logs --tail=30`.
