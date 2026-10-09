@@ -21,4 +21,5 @@ assert(!evil.includes('<vg>'), 'candidate names are escaped');
 const capacity = vm.runInContext(`hostCapacityMarkup({bridge:{mount:{source:'/dev/sda2',target:'/'},appsTotalBytes:100,appsFreeBytes:36},quota:{ready:false,error:'not active'}})`, context);
 assert(capacity.includes('/dev/sda2') && capacity.includes('100 total') && capacity.includes('64 used') && capacity.includes('36 free'), 'capacity shows drive size, used and available');
 assert(capacity.includes('not active'), 'quota state stays visible below the numbers');
+assert(source.includes('function showRemoteSetup(') && source.includes('onclick="showRemoteSetup('), 'remotes have a connect flow with host steps');
 console.log('Host storage UI: sidebar view, escaped candidates and approval-shaped targets: OK');

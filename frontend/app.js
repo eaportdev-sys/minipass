@@ -1487,7 +1487,7 @@ async function loadRemotes() {
   if (!box) return;
   try {
     const remotes = await (await fetch('/api/panel/storage/remotes')).json();
-    box.innerHTML = remotes.length ? remotes.map(r => `<div class="storage-row"><b>${safeHtml(r.type)} · ${safeHtml(r.address)}</b><span>${r.hasPassword ? 'password stored · ' : ''}backup-only, never quota-capable <button onclick="removeRemote('${r.id}')">remove</button></span></div>`).join('') : '<div class="meta">No remotes registered.</div>';
+    box.innerHTML = remotes.length ? remotes.map(r => `<div class="storage-row"><b>${safeHtml(r.type)} · ${safeHtml(r.address)}</b><span>${r.hasPassword ? 'password stored · ' : ''}backup-only, never quota-capable <button onclick="showRemoteSetup('${r.id}')">connect</button> <button onclick="removeRemote('${r.id}')">remove</button></span></div><div id="remote-setup-${r.id}"></div>`).join('') : '<div class="meta">No remotes registered.</div>';
   } catch { box.textContent = 'Remotes unavailable.'; }
 }
 async function addRemote() {
@@ -1498,6 +1498,18 @@ async function addRemote() {
     document.getElementById('remotePass').value = '';
     loadRemotes();
   } catch (e) { toast('add remote failed: ' + e.message, false); }
+}
+async function showRemoteSetup(id) {
+  const box = document.getElementById('remote-setup-' + id);
+  if (!box) return;
+  box.innerHTML = '<div class="meta">loading connect steps…</div>';
+  try {
+    const r = await (await fetch('/api/panel/storage/remotes/' + encodeURIComponent(id) + '/setup')).json();
+    if (r.error) { box.innerHTML = `<div class="meta">${safeHtml(r.error)}</div>`; return; }
+    box.innerHTML = `<div class="meta">Run once as root on the host. ${safeHtml(r.persist)}</div>` +
+      `<pre tabindex="0">${safeHtml(r.steps.join('\n'))}</pre>` +
+      `<div class="meta">Verify: <code>${safeHtml(r.verify)}</code>. ${safeHtml(r.note)}</div>`;
+  } catch { box.innerHTML = '<div class="meta">setup unavailable</div>'; }
 }
 async function removeRemote(id) {
   const ok = await uiConfirm({ title: 'Remove remote?', body: 'Removes the registry entry only. Mounted storage is left untouched.', confirmLabel: 'Remove' });

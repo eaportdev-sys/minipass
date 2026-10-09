@@ -495,6 +495,13 @@ app.delete('/api/panel/storage/remotes/:id', (req, res) => {
   try { res.json(hostStorage.removeRemote(req.params.id)); }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
+app.get('/api/panel/storage/remotes/:id/setup', (req, res) => {
+  try {
+    const found = hostStorage.loadRemotes().find(r => r.id === req.params.id);
+    if (!found) return res.status(404).json({ error: 'unknown remote' });
+    res.json(hostStorage.remoteSetup(found));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.get('/api/panel/storage/provision', (req, res) => {
   try { res.json({ approval: hostStorage.provisionStatus() }); }
   catch (e) { res.status(500).json({ error: e.message }); }

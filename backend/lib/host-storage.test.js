@@ -30,6 +30,25 @@ async function main() {
   assert.throws(() => hostStorage.requestProvision({ target: 'vg:ubuntu-vg', confirm: 'vg:other' }), /exact target/);
   assert.throws(() => hostStorage.requestProvision({ target: '/dev/sda', confirm: '/dev/sda' }), /provision target/);
   assert.equal(hostStorage.provisionStatus().target, 'vg:ubuntu-vg');
+  // Stay-connected setup: exact host steps per type, secrets never embedded.
+  const setups = [
+    hostStorage.remoteSetup({ id: 'remote-1', type: 'nfs', address: 'nas:/exports', mount: '/mnt/nas' }),
+    hostStorage.remoteSetup({ id: 'remote-2', type: 'smb', address: '//nas/share', username: 'ops', mount: '/mnt/smb' }),
+    hostStorage.remoteSetup({ id: 'remote-3', type: 'sshfs', address: 'backup.example.com', username: 'ops', mount: '' }),
+    hostStorage.remoteSetup({ id: 'remote-4', type: 'rclone-gdrive', address: 'gdrive:backups', mount: '' }),
+    hostStorage.remoteSetup({ id: 'remote-5', type: 'rclone-onedrive', address: 'onedrive:backups', mount: '' })
+  ];
+  assert(setups[0].steps.join('\n').includes('mount -t nfs') && setups[0].persist.includes('fstab'));
+  assert(setups[1].steps.join('\n').includes('credentials=') && setups[1].steps.join('\n').includes('chmod 600'), 'smb uses a 0600 credentials file');
+  assert(setups[2].steps.join('\n').includes('sshfs') && setups[2].steps.join('\n').includes('reconnect'));
+  assert(setups[3].steps.join('\n').includes('rclone mount') && setups[3].persist.includes('Restart=always'));
+  assert(setups[4].steps.join('\n').includes('rclone mount'));
+  for (const s of setups) {
+    assert(!s.steps.join('\n').includes('s3cret'), 'stored passwords never appear in setup text');
+    assert(s.verify.includes('mountpoint -q') && s.note.includes('Backup-class'));
+  }
+  assert.throws(() => hostStorage.addRemote({ type: 'nfs', address: 'nas:/x', mount: '/mnt/a;b' }), /mount/);
+  assert.throws(() => hostStorage.addRemote({ type: 'nfs', address: 'nas:/x', username: 'a;b' }), /login/);
   fs.rmSync(path.dirname(process.env.DATA_FILE), { recursive: true, force: true });
   console.log('Host storage: degraded discovery, redacted 0600 remote registry, backup-only remotes and exact-target host approval: OK');
 }

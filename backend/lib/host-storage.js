@@ -68,7 +68,8 @@ function addRemote({ type, address, mount, username, password, notes }) {
     notes: String(notes || '').slice(0, 500),
     addedAt: new Date().toISOString()
   };
-  if (record.mount && (!record.mount.startsWith('/') || record.mount.includes('..'))) throw invalid('mount must be an absolute path without ..');
+  if (record.mount && (!/^\/[A-Za-z0-9_./-]{0,255}$/.test(record.mount) || record.mount.includes('..'))) throw invalid('mount must be an absolute path without .. or shell characters');
+  if (record.username && !/^[A-Za-z0-9_.@-]{1,128}$/.test(record.username)) throw invalid('login contains unsupported characters');
   const list = loadRemotes();
   if (list.length >= 20) throw conflict('remote registry is full; remove one first');
   list.push(record);
@@ -82,8 +83,7 @@ function removeRemote(id) {
   saveRemotes(next);
   return { ok: true };
 }
-function validTarget(value) {
-  const v = String(value || '').trim();
+function validTarget(value) {  const v = String(value || '').trim();
   if (!/^(vg:[A-Za-z0-9_.-]{1,64}|device:\/dev\/[A-Za-z0-9_./-]{1,64}|region:[A-Za-z0-9_./-]{1,64}:\d+:\d+)$/.test(v)) throw invalid('provision target must look like vg:<name>, device:/dev/<path> or region:<disk>:<start>:<end>');
   return v;
 }
@@ -99,4 +99,43 @@ function provisionStatus() {
   try { return JSON.parse(fs.readFileSync(provisionFile(), 'utf8')); } catch { return null; }
 }
 
-module.exports = { REMOTE_TYPES, QUOTA_CAPABLE, discovery, loadRemotes, publicRemote, addRemote, removeRemote, requestProvision, provisionStatus, validTarget };
+// Stay-connected host setup for one registered remote. Returns copy-paste root
+// commands only - the panel never mounts anything itself. Secrets are never
+// embedded: the admin places passwords in a 0600 host file or uses keys.
+function remoteSetup(remote) {
+  const mount = (remote.mount && remote.mount.startsWith('/')) ? remote.mount : '/mnt/minipass-' + remote.id;
+  const lines = [`sudo mkdir -p ${mount}`];
+  let persist = '', verify = `mountpoint -q ${mount} && df -h ${mount}`;
+  if (remote.type === 'nfs') {
+    lines.push(`sudo mount -t nfs -o _netdev ${remote.address} ${mount}`,
+      `echo '${remote.address} ${mount} nfs defaults,_netdev 0 0' | sudo tee -a /etc/fstab`);
+    persist = 'fstab with _netdev: remounts automatically at boot after network.';
+  } else if (remote.type === 'smb') {
+    const cred = `/root/.minipass-cifs-${remote.id}`;
+    const user = remote.username ? `username=${remote.username}\n` : '';
+    lines.push(`printf '${user}password=<fill-on-host>\n' | sudo tee ${cred} >/dev/null && sudo chmod 600 ${cred}`,
+      `sudo mount -t cifs -o credentials=${cred},_netdev ${remote.address} ${mount}`,
+      `echo '${remote.address} ${mount} cifs credentials=${cred},_netdev 0 0' | sudo tee -a /etc/fstab`);
+    persist = 'credentials file stays 0600 on the host; fstab reconnects at boot.';
+  } else if (remote.type === 'sshfs') {
+    const login = remote.username ? `${remote.username}@` : '';
+    const host = remote.address.replace(/^ssh:\/\//, '');
+    const source = host.includes(':') ? host : host + ':';
+    lines.push(`sudo sshfs ${login}${source} ${mount} -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,allow_other,_netdev`,
+      `# persistent: ${remote.address} ${mount} fuse.sshfs reconnect,ServerAliveInterval=15,allow_other,_netdev 0 0  (or prefer key-based auth, no password stored)`);
+    persist = 'reconnect + ServerAlive keeps the session alive; key-based auth avoids passwords entirely.';
+  } else if (remote.type === 'rclone-gdrive' || remote.type === 'rclone-onedrive') {
+    const name = remote.type === 'rclone-gdrive' ? 'Google Drive' : 'OneDrive';
+    lines.push(`sudo rclone config   # create a '${remote.id}' remote for ${name} on the host, once`,
+      `sudo rclone mount ${remote.id}: ${mount} --daemon --vfs-cache-mode writes --allow-other`,
+      `# persistent: a systemd unit running the same rclone mount with Restart=always (enable it after the first manual mount works)`);
+    persist = 'systemd unit with Restart=always keeps the cloud mount connected across reboots.';
+  } else {
+    lines.push(`# mount ${remote.address} at ${mount} with the filesystem's own tool, then add it to /etc/fstab with _netdev so it reconnects at boot`);
+    persist = 'fstab entry with _netdev keeps it connected at boot.';
+  }
+  return { id: remote.id, type: remote.type, address: remote.address, mount, steps: lines, persist, verify,
+    note: 'Backup-class only: remotes cannot enforce site quotas. Secrets stay on the host; the panel never displays them.' };
+}
+
+module.exports = { REMOTE_TYPES, QUOTA_CAPABLE, discovery, loadRemotes, publicRemote, addRemote, removeRemote, requestProvision, provisionStatus, validTarget, remoteSetup };
