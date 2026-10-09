@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const prebuild = require('./prebuild');
+const { failureSummary } = require('./build-log');
 
 const VALID_KEY = /^[a-z-]+:[A-Za-z0-9_.\/-]{1,120}$/;
 
@@ -75,28 +76,19 @@ function importedNames(ctxDir, request) {
   return [...names].slice(0, 20);
 }
 
-function stubPreview(names) {
-  return '// minipass remediation stub - created with operator approval. The upstream\n// repository never shipped this module; verify its runtime behavior.\n' +
-    names.map(n => `export const ${n} = undefined as any;`).join('\n') + '\n';
-}
-
 function suggest(ctxDir, errorText, templateDockerfile, latestError = errorText) {
   const suggestions = [];
   const seen = new Set();
   for (const { file, request } of missingModules(errorText)) {
     const rel = resolveRequest(ctxDir, file, request);
-    if (!rel || seen.has(rel)) continue;
-    seen.add(rel);
-    const names = importedNames(ctxDir, request);
-    if (!names.length) continue;
-    const target = rel + '.ts';
+    const identity = rel || `${file}:${request}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     suggestions.push({
-      key: `missing-module:${target}`,
-      kind: 'missing-module',
-      title: `Create missing module ${target}`,
-      detail: `TypeScript cannot find '${request}' (imported by ${file} and others). This writes a stub exporting ${names.join(', ')} - review its runtime behavior, then redeploy. Box files only; your repo is untouched until you commit.`,
-      files: [target],
-      preview: stubPreview(names)
+      kind: 'diagnostic',
+      title: `TypeScript cannot resolve '${request}'`,
+      detail: `The compiler reported TS2307 in ${file}.${rel ? ` No matching TypeScript module was found at ${rel}.` : ''} Check the source files, path casing, import aliases and declared dependencies. A placeholder export could compile but break runtime behavior, so Minipass does not generate one.`,
+      files: [], preview: ''
     });
   }
   // Never replace a repository Dockerfile merely because it expects dist/.
@@ -137,20 +129,16 @@ function suggest(ctxDir, errorText, templateDockerfile, latestError = errorText)
     detail: 'npm failed internally while resolving dependencies, before the application build. This summary does not establish the exact trigger. No verified Dockerfile backup recovery is available here; Minipass will not delete lockfiles, force dependencies or overwrite a custom Dockerfile.',
     files: [], preview: ''
   });
+  if (!npmCrash && !suggestions.length && /pre-build failed|ELIFECYCLE|error TS\d+/i.test(String(latestError || ''))) suggestions.push({
+    kind: 'diagnostic', title: 'Repository pre-build failed',
+    detail: 'The repository build command failed. This does not establish that its Dockerfile is wrong. Compiler and installer details are retained in the latest build log; Minipass will not replace the Dockerfile or invent application code to hide the failure.',
+    files: [], preview: failureSummary(errorText)
+  });
   return suggestions;
 }
 
 function apply(ctxDir, suggestion) {
   if (!suggestion || !VALID_KEY.test(suggestion.key || '')) throw new Error('unknown remediation');
-  if (suggestion.kind === 'missing-module') {
-    const target = suggestion.files && suggestion.files[0];
-    const dest = target && inside(ctxDir, target);
-    if (!dest || !dest.endsWith('.ts')) throw new Error('remediation path escapes the build folder');
-    if (fs.existsSync(dest)) throw new Error('target already exists - re-run suggestions');
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.writeFileSync(dest, suggestion.preview);
-    return { applied: [path.relative(ctxDir, dest).split(path.sep).join('/')] };
-  }
   if (suggestion.kind === 'dockerfile-restore') {
     const dfName = (suggestion.files && suggestion.files[0]) || 'Dockerfile';
     const dfPath = inside(ctxDir, dfName);

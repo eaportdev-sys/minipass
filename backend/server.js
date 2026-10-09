@@ -21,6 +21,7 @@ const trashLib = require('./lib/trash');
 const quotas = require('./lib/quotas');
 const panelLog = require('./lib/panel-log');
 const prebuild = require('./lib/prebuild');
+const { runLogged, failureSummary } = require('./lib/build-log');
 const remediate = require('./lib/remediate');
 const { refreshStandardDockerfile, standardDockerfileType } = require('./lib/dockerfiles');
 const { buildProfile, readBuildProfile, localBuildProfile, isJekyll } = require('./lib/build-profile');
@@ -932,6 +933,10 @@ async function deployNow(id, opts = {}) {
   const meta = load().apps.find(a => a.id === id);
   const codeDir = path.join(dir, 'code');
   if (!meta) throw new Error('unknown app');
+  const buildLog = path.join(dir, 'deploy.log');
+  // One log per attempt. Clear before any preflight/pre-build output, not just
+  // before Docker build (which used to erase successful pre-build evidence).
+  fs.writeFileSync(buildLog, `--- deploy ${opSource} started ${new Date().toISOString()} ---\n`);
   await quotas.ensure(meta);
   if (meta.storageQuota) await quotas.verifyDatabases(meta.id, dir);
   let buildCodeDir = codeDir;
@@ -1047,34 +1052,31 @@ async function deployNow(id, opts = {}) {
   // a disposable builder container. The Dockerfile itself is never modified;
   // services that build themselves, lack a build script, or already have the
   // output behave exactly as before.
+  let prebuildService = null;
   try {
     for (const s of svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false)) {
       if (/^db(-|$)/.test(s.name || '')) continue;
       const ctxDir = path.join(buildCodeDir, s.subdir || '');
       const item = prebuild.plan(ctxDir);
       if (!item) continue;
+      prebuildService = s.name;
       if (item.blocked) throw new Error(`service '${s.name}' pre-build blocked - running containers untouched: ${item.blocked}`);
-      await prebuild.ensureBuilderImage(args => runOut(DOCKER_BIN, args, { cwd: dir }));
-      try { fs.appendFileSync(path.join(dir, 'deploy.log'), `--- pre-building '${s.subdir || '.'}' (${item.manager} run build) for missing '${item.outputDir}/' ---\n`); } catch {}
-      try {
-        await runOut(DOCKER_BIN, prebuild.argv(ctxDir, item), { cwd: dir, captureStderr: true });
-      } catch (e) {
-        // Persist the bounded builder output: suggestions and humans diagnose
-        // from deploy.log long after the deploy record truncated its copy.
-        try { fs.appendFileSync(path.join(dir, 'deploy.log'), `\n--- pre-build output ---\n${e.message}\n`); } catch {}
-        throw e;
-      }
+      fs.appendFileSync(buildLog, `--- pre-building service '${s.name}' folder '${s.subdir || '.'}' (${item.manager} run build) for missing '${item.outputDir}/' ---\n`);
+      await prebuild.ensureBuilderImage(args => args[1] === 'pull'
+        ? runLogged(DOCKER_BIN, args, { cwd: dir, logFile: buildLog })
+        : runOut(DOCKER_BIN, args, { cwd: dir }));
+      await runLogged(DOCKER_BIN, prebuild.argv(ctxDir, item), { cwd: dir, logFile: buildLog });
     }
   } catch (e) {
     const shaPb = sourceSha || await currentSha(dir);
-    await recordDeploy(id, { sha: shaPb, at: new Date().toISOString(), status: 'error', error: ('pre-build failed - running containers untouched: ' + e.message).slice(-500) });
-    throw e;
+    const failure = panelLog.redact(`pre-build failed${prebuildService ? ` for service '${prebuildService}'` : ''} - running containers untouched: ` + e.message).slice(0, 2000);
+    await recordDeploy(id, { sha: shaPb, at: new Date().toISOString(), status: 'error', service: prebuildService, error: failure });
+    throw new Error(failure);
   }
   // every build streams to deploy.log (host-persisted, per app) so the UI can show
   // the builder output; failures return the tail instead of a bare exit code.
   // --remove-orphans: disabled/removed services actually disappear.
   // opts.only: rebuild just these services, the rest stay untouched and running.
-  const buildLog = path.join(dir, 'deploy.log');
   const only = Array.isArray(opts.only)
     ? [...new Set(opts.only.filter(s => /^[A-Za-z0-9_-]{1,32}$/.test(s || '')))]
     : [];
@@ -1146,17 +1148,18 @@ async function deployNow(id, opts = {}) {
   // swap only on success, health-gate the new containers, roll back on failure.
   const snaps = await snapshotImages(dir);
   const scopeSuffix = scope ? ` ${scope}` : '';
+  fs.appendFileSync(buildLog, '--- Docker image build ---\n');
+  const buildOffset = fs.statSync(buildLog).size;
   try {
-    await sh(`${composeCmd} build${scopeSuffix} > "${buildLog}" 2>&1`, dir);
+    await sh(`${composeCmd} build${scopeSuffix} >> "${buildLog}" 2>&1`, dir);
   } catch (e) {
     let tail = '';
     try {
-      const lines = fs.readFileSync(buildLog, 'utf8').split('\n');
+      const lines = fs.readFileSync(buildLog).subarray(buildOffset).toString('utf8').split('\n');
       // The last lines are usually just the summary; the cause (npm error
       // codes, tsc errors, ELIFECYCLE) sits above. Prefer cause lines so the
       // Deploy tab names the failure without SSH.
-      const cause = lines.filter(l => /(npm error( code)?|error TS\d+|ELIFECYCLE|ERESOLVE|EJSONPARSE|failed to solve|COPY failed|can't stat|no such file)/i.test(l));
-      tail = (cause.length ? cause.slice(-8) : lines.slice(-25)).join('\n');
+      tail = failureSummary(lines.slice(-500).join('\n'));
     } catch {}
     await recordDeploy(id, { sha, at: stamp(), status: 'error', error: panelLog.redact('build failed - running containers untouched: ' + (tail || e.message)).trim().slice(0, 2000) });
     throw new Error('build failed - running containers untouched: ' + (tail || e.message).trim().split('\n').slice(-3).join(' '));
@@ -1862,6 +1865,7 @@ function remediationSuggestions(meta, dir) {
   } catch {}
   for (const s of svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false)) {
     if (/^db(-|$)/.test(s.name || '')) continue;
+    if (meta.lastDeploy.service && meta.lastDeploy.service !== s.name) continue;
     const ctxDir = remediationContext(dir, s.subdir);
     let template = null;
     try { template = fs.readFileSync(path.join(TEMPLATES_DIR, s.type, 'Dockerfile'), 'utf8'); } catch {}

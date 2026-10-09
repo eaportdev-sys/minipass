@@ -166,6 +166,9 @@ function rememberSiteRoute(id, tab) {
 }
 function openSite(id, tab = 'overview', remember = true) {
   currentApp = id;
+  deployLogSeq++;
+  document.getElementById('deployFullLog').textContent = '';
+  document.getElementById('deployFullLog').style.display = 'none';
   showView('site');
   tab = SITE_TABS.has(tab) ? tab : 'overview';
   if (remember) rememberSiteRoute(id, tab);
@@ -360,7 +363,7 @@ function deployRecordParts(h) {
   const when = (h.at || '').replace('T', ' ').slice(0, 19) || 'time unavailable';
   const duration = h.durationMs != null ? `${Math.round(h.durationMs / 1000)}s` : '';
   const sha = h.sha ? String(h.sha).slice(0, 7) : '';
-  const error = h.error ? String(h.error).split('\n').filter(Boolean).slice(-1)[0] : '';
+  const error = h.error ? String(h.error).trim() : '';
   return { when, duration, sha, error, ok: h.status === 'ok' };
 }
 function deployHistoryMarkup(hist) {
@@ -375,6 +378,7 @@ function deployHistoryMarkup(hist) {
 }
 let remediateSeq = 0;
 let remediateCache = [];
+let deployLogSeq = 0;
 async function loadRemediations(failed) {
   const card = document.getElementById('remediateCard');
   const box = document.getElementById('remediateBox');
@@ -400,11 +404,14 @@ async function loadDeployLog() {
   if (!currentApp) return;
   const box = document.getElementById('deployFullLog');
   if (!box) return;
+  const appId = currentApp;
+  const seq = ++deployLogSeq;
   box.style.display = 'block';
   box.textContent = 'loading…';
   try {
-    box.textContent = await (await fetch(`/api/apps/${currentApp}/build-log?tail=500`)).text();
-  } catch { box.textContent = 'log unavailable'; }
+    const text = await (await fetch(`/api/apps/${appId}/build-log?tail=500`)).text();
+    if (seq === deployLogSeq && currentApp === appId) box.textContent = text;
+  } catch { if (seq === deployLogSeq && currentApp === appId) box.textContent = 'log unavailable'; }
 }
 async function applyRemediation(i) {
   const s = remediateCache[i];
@@ -493,7 +500,7 @@ async function loadDeployStatus() {
     info.dataset.live = '1';
     const d = s.lastDeploy;
     info.textContent = d
-      ? `${d.status === 'ok' ? 'live' : 'FAILED'} @ ${d.sha || '?'} · ${d.at || ''}${d.error ? ' — ' + d.error.split('\n').slice(-2).join(' ') : ''}`
+      ? `${d.status === 'ok' ? 'live' : 'FAILED'} @ ${d.sha || '?'} · ${d.at || ''}${d.error ? ' — ' + d.error : ''}`
       : 'never deployed by the panel';
     const containers = s.containers || [];
     const running = containers.filter(c => /^running/i.test(c.state || '')).length;
@@ -530,7 +537,9 @@ async function loadDeployStatus() {
     const localLast = lastSrc('local-push');
     document.getElementById('localHist').innerHTML = deployLastMarkup('Last local push', localLast);
     document.getElementById('deployHist').innerHTML = deployHistoryMarkup(hist);
-    loadRemediations(s.lastDeploy && s.lastDeploy.status !== 'ok');
+    const failed = !s.deploying && s.lastDeploy && s.lastDeploy.status !== 'ok';
+    loadRemediations(failed);
+    if (failed) loadDeployLog();
     updatePowerStates(s);
   } catch {
     if (seq !== deployStatusSeq || currentApp !== appId) return;

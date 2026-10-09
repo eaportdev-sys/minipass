@@ -28,6 +28,10 @@ minipass turns a folder or git repo into a running site with one flow:
   Repository Dockerfiles expecting prebuilt output are no longer replaced by a
   generic recipe. Use **local rebuild** after restoring to preserve box edits.
   Recovery is previewed and explicit, and never committed or pushed automatically.
+  Pre-build stdout and stderr stream into the same per-attempt build log as Docker
+  output. Compiler errors are retained in deployment history and the Error log,
+  not discarded behind an `ELIFECYCLE` footer. Missing modules are diagnosed;
+  Minipass never generates placeholder exports to conceal a source error.
   A taken host port is automatically rebound to the next free one before the build.
   **Redeploy** pulls the repo first (recovery path for broken box edits);
   **local rebuild** skips the pull and builds the box files as-is.

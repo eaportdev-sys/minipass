@@ -253,7 +253,7 @@ main { flex: 1; min-width: 0; width: 100%; padding: 24px; max-width: 1100px; }
 .is-failed .deploy-result, .deploy-result.is-failed { color: var(--danger); background: rgba(229, 83, 75, .1); border-color: rgba(229, 83, 75, .35); }
 .deploy-history-details, .source-last-detail { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; color: var(--muted); font-size: 10px; margin-top: 5px; }
 .deploy-history-details code, .source-last-detail code { color: var(--text); }
-.deploy-history-error { overflow: hidden; margin-top: 7px; color: var(--danger); font-size: 10px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.deploy-history-error { overflow: auto; max-height: 180px; margin-top: 7px; color: var(--danger); font-size: 11px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .deploy-empty { display: grid; place-items: center; min-height: 180px; color: var(--muted); border: 1px dashed var(--border); border-radius: 9px; font-size: 12px; }
 .deploy-setting { padding: 11px; margin-top: 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--input); }
 .deploy-field-label, .deploy-setting > label { display: block; margin: 0 0 6px; color: var(--muted); font-size: 11px; font-weight: 700; }

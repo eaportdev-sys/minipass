@@ -27,14 +27,12 @@ let dir = fixture({
   'src/components/utils/development-tools/TanStackRouterDevelopmentTools.tsx': `import { isProduction } from "../../../common/utils";\nexport const x = isProduction;\n`
 });
 let suggestions = remediate.suggest(dir, errorText, null);
-assert.equal(suggestions.length, 1, 'one stub for the shared missing module');
-assert.equal(suggestions[0].key, 'missing-module:src/common/utils.ts');
-assert(suggestions[0].preview.includes('export const isProduction'), 'stub exports the imported names');
-assert(!suggestions[0].preview.includes('import.meta'), 'stub invents no behavior');
-const applied = remediate.apply(dir, suggestions[0]);
-assert.deepEqual(applied.applied, ['src/common/utils.ts']);
-assert(fs.existsSync(path.join(dir, 'src/common/utils.ts')));
-assert.throws(() => remediate.apply(dir, suggestions[0]), /already exists/);
+assert.equal(suggestions.length, 1, 'one diagnosis for the shared missing module');
+assert.equal(suggestions[0].kind, 'diagnostic');
+assert(!suggestions[0].key && !suggestions[0].preview, 'missing source is explained, never generated');
+assert(suggestions[0].detail.includes('src/common/utils') && suggestions[0].detail.includes('TS2307'));
+assert(!fs.existsSync(path.join(dir, 'src/common/utils.ts')));
+assert.throws(() => remediate.apply(dir, { key: 'missing-module:src/common/utils.ts', kind: 'missing-module' }), /unknown remediation/);
 
 dir = fixture({ Dockerfile: VITE_DOCKERFILE, 'package.json': pkg });
 suggestions = remediate.suggest(dir, 'build failed', TEMPLATE);
@@ -88,7 +86,8 @@ dir = fixture(recoveryFiles);
 assert.deepEqual(remediate.suggest(dir, NPM_CRASH, TEMPLATE, 'another latest failure'), [], 'stale log errors do not offer restore for a different latest failure');
 
 assert.deepEqual(remediate.suggest(dir, 'unrelated failure', TEMPLATE).filter(s => s.kind === 'missing-module'), [], 'no stub without TS2307 evidence');
-assert.throws(() => remediate.apply(dir, { key: 'missing-module:../escape.ts', kind: 'missing-module', files: ['../escape.ts'], preview: 'x' }), /escapes/);
+assert.throws(() => remediate.apply(dir, { key: 'dockerfile-restore:../escape', kind: 'dockerfile-restore', files: ['../escape'], preview: 'x' }), /escapes/);
+assert.equal(remediate.suggest(dir, 'pre-build failed: ELIFECYCLE', TEMPLATE)[0].kind, 'diagnostic', 'a generic build exit never offers a Dockerfile rewrite');
 assert.throws(() => remediate.apply(dir, { key: 'bogus', kind: 'bogus' }), /unknown remediation/);
 for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
 

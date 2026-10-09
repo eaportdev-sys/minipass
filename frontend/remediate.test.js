@@ -20,22 +20,23 @@ const context = vm.createContext({
   loadDeployStatus: () => {}
 });
 const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
-vm.runInContext('let remediateSeq=0, remediateCache=[], deployStatusSeq=0;\n' +
+vm.runInContext('let remediateSeq=0, remediateCache=[], deployStatusSeq=0, deployLogSeq=0;\n' +
+  section('function deploySourceName(', 'let remediateSeq =') +
   section('async function loadRemediations(', 'async function applyRemediation(') +
   section('async function applyRemediation(', 'function deployLastMarkup('), context);
 const run = code => vm.runInContext(code, context);
 async function main() {
-  const stub = { key: 'missing-module:src/common/utils.ts', title: 'Create <stub>', detail: 'Writes <files>', files: ['src/common/utils.ts'], preview: 'export const x = <any>;' };
+  const stub = { key: 'dockerfile-restore:Dockerfile', kind: 'dockerfile-restore', title: 'Restore <backup>', detail: 'Writes <files>', files: ['Dockerfile'], preview: 'FROM <image>' };
   // failed deploy with suggestions renders escaped cards
-  context.fetch = async url => ({ json: async () => url.includes('/remediations') ? [stub] : { ok: true, applied: ['src/common/utils.ts'] } });
+  context.fetch = async url => ({ json: async () => url.includes('/remediations') ? [stub] : { ok: true, applied: ['Dockerfile'] } });
   await run('loadRemediations(true)');
   const html = element('remediateBox').innerHTML;
   assert(element('remediateCard').style.display === 'block');
-  assert(html.includes('Create &lt;stub&gt;') && html.includes('export const x = &lt;any&gt;;'));
-  assert(!html.includes('<stub>'), 'suggestion content is HTML-escaped');
+  assert(html.includes('Restore &lt;backup&gt;') && html.includes('FROM &lt;image&gt;'));
+  assert(!html.includes('<backup>'), 'suggestion content is HTML-escaped');
   // apply confirms with file list and recommends local rebuild, not a repo pull
   await run('applyRemediation(0)');
-  assert(confirmed.title === 'Apply fix?' && confirmed.body.includes('src/common/utils.ts'));
+  assert(confirmed.title === 'Apply fix?' && confirmed.body.includes('Dockerfile'));
   assert(toasts.at(-1).text.includes('local rebuild') && toasts.at(-1).ok === true);
   const restore = { key: 'dockerfile-restore:Dockerfile', kind: 'dockerfile-restore', service: 'web', revision: 'verified-revision',
     title: 'Restore the original', detail: 'Preserve box edits', files: ['Dockerfile'], preview: 'FROM nginx' };
@@ -75,8 +76,29 @@ async function main() {
   finish();
   await pending;
   assert(element('remediateCard').style.display === 'none');
+  const compilerError = "pre-build failed: src/main.ts(3,9): error TS2307: Cannot find module './missing'\n[ELIFECYCLE] Command failed";
+  context.compilerError = compilerError;
+  const history = run('deployHistoryMarkup([{status:"error", error:compilerError}])');
+  assert(history.includes('TS2307') && history.includes('[ELIFECYCLE]'), 'history keeps the compiler cause, not only its final footer');
+  context.currentApp = 'demo';
+  const finishes = [];
+  context.fetch = () => new Promise(resolve => finishes.push(text => resolve({ text: async () => text })));
+  const older = run('loadDeployLog()');
+  const newer = run('loadDeployLog()');
+  finishes[1]('new compiler output');
+  await newer;
+  finishes[0]('old log');
+  await older;
+  assert.equal(element('deployFullLog').textContent, 'new compiler output', 'older log requests cannot replace newer output');
+  const wrongSite = run('loadDeployLog()');
+  context.currentApp = 'other';
+  element('deployFullLog').textContent = ''; // openSite clears the previous site's log
+  finishes[2]('another site log');
+  await wrongSite;
+  assert.equal(element('deployFullLog').textContent, '', 'site navigation rejects stale log output');
   // A success on the same site also invalidates an in-flight failed-state load.
   context.currentApp = 'demo';
+  context.fetch = () => new Promise(resolve => { finish = () => resolve({ json: async () => [stub] }); });
   const stale = run('loadRemediations(true)');
   await run('loadRemediations(false)');
   finish();
