@@ -178,8 +178,8 @@ def free_regions():
         except (subprocess.CalledProcessError, FileNotFoundError):
             continue
         for line in out.splitlines():
-            m = re.match(r'^(\d+):(\d+)B:(\d+)B:(\d+)B:([^:]*):([^:]*):', line)
-            if m and m.group(6) == 'Free Space':
+            m = re.match(r'^([^:]*):(\d+)B:(\d+)B:(\d+)B:([^:;]*)(?::([^;]*))?;?\s*$', line.strip())
+            if m and ('free' in (m.group(5) or '').lower() or 'free' in (m.group(6) or '').lower()):
                 regions.append((disk, int(m.group(2)), int(m.group(3))))
     return regions
 

@@ -17,6 +17,7 @@ if ! command -v python3 >/dev/null || ! command -v systemctl >/dev/null; then
 fi
 mkdir -p /usr/local/lib/minipass /srv/panel-data /srv/apps
 install -m 0644 "$HERE/storage-quotas.py" /usr/local/lib/minipass/storage-quotas.py
+install -m 0644 "$HERE/prepare-storage.py" /usr/local/lib/minipass/prepare-storage.py
 if [ "${MINIPASS_BASIC:-0}" = 1 ]; then
   python3 "$HERE/prepare-storage.py" --basic || echo 'Storage check recorded - provisioning deferred to the Storage panel.'
 else

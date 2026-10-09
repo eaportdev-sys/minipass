@@ -210,6 +210,13 @@ class Tests(unittest.TestCase):
         with patch.object(prepare, 'run', side_effect=[json.dumps(disks), parted]):
             regions = prepare.free_regions()
         self.assertEqual(regions, [('/dev/sda', 52428800000, 107374182400)])
+        # Real-world lowercase machine format without trailing colons.
+        machine = ('BYT;\n/dev/sda:107374182400B:scsi:512:512:gpt:ATA VBOX HARDDISK:;\n'
+                   '2:1048576B:53700000000B:53698951424B:ext4::;\n'
+                   '1:53700000000B:107374182400B:53674182400B:free;\n')
+        with patch.object(prepare, 'run', side_effect=[json.dumps(disks), machine]):
+            regions = prepare.free_regions()
+        self.assertEqual(regions, [('/dev/sda', 53700000000, 107374182400)])
 
     def test_biggest_region_prefers_largest_and_enforces_minimum(self):
         regions = [('/dev/sda', 0, 100000000000), ('/dev/sdb', 0, 20000000000)]
