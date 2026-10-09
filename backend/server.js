@@ -21,6 +21,7 @@ const trashLib = require('./lib/trash');
 const quotas = require('./lib/quotas');
 const panelLog = require('./lib/panel-log');
 const prebuild = require('./lib/prebuild');
+const remediate = require('./lib/remediate');
 const { refreshStandardDockerfile, standardDockerfileType } = require('./lib/dockerfiles');
 const { buildProfile, readBuildProfile, localBuildProfile, isJekyll } = require('./lib/build-profile');
 
@@ -1050,7 +1051,14 @@ async function deployNow(id, opts = {}) {
       if (item.blocked) throw new Error(`service '${s.name}' pre-build blocked - running containers untouched: ${item.blocked}`);
       await prebuild.ensureBuilderImage(args => runOut(DOCKER_BIN, args, { cwd: dir }));
       try { fs.appendFileSync(path.join(dir, 'deploy.log'), `--- pre-building '${s.subdir || '.'}' (${item.manager} run build) for missing '${item.outputDir}/' ---\n`); } catch {}
-      await runOut(DOCKER_BIN, prebuild.argv(ctxDir, item), { cwd: dir, captureStderr: true });
+      try {
+        await runOut(DOCKER_BIN, prebuild.argv(ctxDir, item), { cwd: dir, captureStderr: true });
+      } catch (e) {
+        // Persist the bounded builder output: suggestions and humans diagnose
+        // from deploy.log long after the deploy record truncated its copy.
+        try { fs.appendFileSync(path.join(dir, 'deploy.log'), `\n--- pre-build output ---\n${e.message}\n`); } catch {}
+        throw e;
+      }
     }
   } catch (e) {
     const shaPb = sourceSha || await currentSha(dir);
@@ -1811,6 +1819,56 @@ app.post('/api/apps/:id/services/dockerfile', async (req, res) => {
     await markDirty(meta.id, 'standard Dockerfile added to ' + (subdir || 'root'));
     res.json({ ok: true, seeded, note: 'box-local file - commit it to the repo so fresh clones and rebuilds keep it' });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Suggested fixes for the latest failed deploy. Detection is automatic; every
+// fix needs an explicit POST (previewed in the UI) and touches box files only.
+function remediationSuggestions(meta, dir) {
+  const out = [];
+  const last = meta.lastDeploy && meta.lastDeploy.status !== 'ok' ? String(meta.lastDeploy.error || '') : '';
+  if (!last) return out;
+  // The deploy record truncates; the persisted log tail keeps the evidence
+  // (tsc error lines, missing-module paths) suggestions match against.
+  let evidence = last;
+  try {
+    const log = fs.readFileSync(path.join(dir, 'deploy.log'), 'utf8');
+    evidence = log.split('\n').slice(-300).join('\n') + '\n' + last;
+  } catch {}
+  for (const s of svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false)) {
+    if (/^db(-|$)/.test(s.name || '')) continue;
+    const ctxDir = path.join(dir, 'code', s.subdir || '');
+    let template = null;
+    try { template = fs.readFileSync(path.join(TEMPLATES_DIR, s.type, 'Dockerfile'), 'utf8'); } catch {}
+    for (const suggestion of remediate.suggest(ctxDir, evidence, template)) {
+      out.push({ service: s.name, subdir: s.subdir || '', ...suggestion });
+    }
+  }
+  return out;
+}
+app.get('/api/apps/:id/remediations', (req, res) => {
+  try {
+    const meta = load().apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    res.json(remediationSuggestions(meta, appDir(APPS_DIR, meta.id)));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/apps/:id/remediate', async (req, res) => {
+  try {
+    const key = String((req.body && req.body.key) || '');
+    if (!remediate.VALID_KEY.test(key)) return res.status(400).json({ error: 'unknown remediation' });
+    await siteLifecycle(req.params.id, async () => {
+      const meta = load().apps.find(a => a.id === req.params.id);
+      if (!meta) throw lifecycleError('unknown app', 404);
+      const dir = appDir(APPS_DIR, meta.id);
+      // Recompute server-side; the client preview is never trusted.
+      const match = remediationSuggestions(meta, dir).find(s => s.key === key);
+      if (!match) throw lifecycleError('remediation no longer applies - refresh suggestions', 409);
+      const ctxDir = path.join(dir, 'code', match.subdir || '');
+      const result = remediate.apply(ctxDir, match);
+      try { panelLog.logEvent({ level: 'warn', area: 'remediate', site: meta.id, message: `applied ${key}: ${result.applied.join(', ')}` }); } catch {}
+      await markDirty(meta.id, 'remediation applied: ' + key);
+      res.json({ ok: true, ...result, note: 'box-local change - redeploy to build it; commit to the repo to keep it' });
+    });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/services', async (req, res) => {
   try {

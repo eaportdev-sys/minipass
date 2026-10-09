@@ -373,6 +373,45 @@ function deployHistoryMarkup(hist) {
       (p.error ? `<div class="deploy-history-error" title="${safeHtml(p.error)}">${safeHtml(p.error)}</div>` : '') + `</div>`;
   }).join('');
 }
+let remediateSeq = 0;
+let remediateCache = [];
+async function loadRemediations(failed) {
+  const card = document.getElementById('remediateCard');
+  const box = document.getElementById('remediateBox');
+  if (!card || !box) return;
+  if (!currentApp || !failed) { card.style.display = 'none'; box.innerHTML = ''; return; }
+  const appId = currentApp;
+  const seq = ++remediateSeq;
+  try {
+    const list = await (await fetch(`/api/apps/${appId}/remediations`)).json();
+    if (seq !== remediateSeq || currentApp !== appId) return;
+    remediateCache = Array.isArray(list) ? list : [];
+    card.style.display = remediateCache.length ? 'block' : 'none';
+    box.innerHTML = remediateCache.map((s, i) =>
+      `<div class="remediate-item"><b>${safeHtml(s.title)}</b><div class="meta">${safeHtml(s.detail)}</div>` +
+      `<pre class="compact-output">${safeHtml(s.preview || '')}</pre>` +
+      `<div class="appcard-actions"><button class="btn primary" onclick="applyRemediation(${i})">apply fix</button></div></div>`
+    ).join('');
+  } catch {
+    if (seq === remediateSeq && currentApp === appId) { card.style.display = 'none'; box.innerHTML = ''; }
+  }
+}
+async function applyRemediation(i) {
+  const s = remediateCache[i];
+  if (!s || !currentApp) return;
+  const ok = await uiConfirm({
+    title: 'Apply fix?',
+    body: `${s.title}. Writes box files only (${(s.files || []).join(', ')}) — redeploy afterwards to build. Your repo stays untouched until you commit.`,
+    confirmLabel: 'Apply fix'
+  });
+  if (!ok) return;
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/remediate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: s.key }) })).json();
+    toast(r.ok ? `fix applied (${(r.applied || []).join(', ')}) — redeploy to build` : (r.error || 'failed'), !!r.ok);
+  } catch (e) { toast('apply failed: ' + e.message, false); }
+  await refresh();
+  loadDeployStatus();
+}
 function deployLastMarkup(label, h) {
   if (!h) return `<div class="source-last-empty">${safeHtml(label)}: no deployment recorded</div>`;
   const p = deployRecordParts(h);
@@ -480,6 +519,7 @@ async function loadDeployStatus() {
     const localLast = lastSrc('local-push');
     document.getElementById('localHist').innerHTML = deployLastMarkup('Last local push', localLast);
     document.getElementById('deployHist').innerHTML = deployHistoryMarkup(hist);
+    loadRemediations(s.lastDeploy && s.lastDeploy.status !== 'ok');
     updatePowerStates(s);
   } catch {
     if (seq !== deployStatusSeq || currentApp !== appId) return;

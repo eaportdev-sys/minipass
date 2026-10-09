@@ -244,6 +244,8 @@ main { flex: 1; min-width: 0; width: 100%; padding: 24px; max-width: 1100px; }
 .deploy-progress-head { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; margin-bottom: 7px; }
 .deploy-history { display: grid; gap: 8px; }
 .deploy-history-item { padding: 10px 11px; border: 1px solid var(--border); border-left: 3px solid var(--ok); border-radius: 8px; background: var(--input); }
+.remediate-item { padding: 10px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--input); margin-top: 10px; }
+.remediate-item > pre { max-height: 220px; overflow: auto; }
 .deploy-history-item.is-failed { border-left-color: var(--danger); }
 .deploy-history-title, .source-last-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .deploy-history-title b { font-size: 12px; }

@@ -242,6 +242,11 @@
             <div id="localProg" class="deploy-progress" style="display:none"><div class="deploy-progress-head"><span id="localStage">deploying…</span><span><b id="localPct"></b> <span id="localTime"></span></span></div><div class="progress"><div id="localBar"></div></div></div>
           </div>
         </div>
+        <div class="card recovery" id="remediateCard" style="display:none">
+          <b>Suggested fixes</b>
+          <div class="meta">Detected from the latest failed deploy. Applying writes box files only — redeploy afterwards to build. Review every preview; your repo stays untouched until you commit.</div>
+          <div id="remediateBox"></div>
+        </div>
         <div class="card recovery">
           <b>Recovery tools</b>
           <div class="meta">Use these only when a normal deploy fails. Sync backs up box edits, then restores the GitHub version.</div>
