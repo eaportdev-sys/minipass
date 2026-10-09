@@ -1443,10 +1443,14 @@ function showView(view) {
 }
 function hostCandidateRows(bridge) {
   if (!bridge || bridge.error) return `<div class="meta">${safeHtml(bridge && bridge.error ? bridge.error : 'Discovery unavailable — complete host quota setup and retry.')}</div>`;
-  const vgs = Object.entries(bridge.vgFree || {}).map(([vg, free]) => `<div class="storage-row"><b>VG free: ${safeHtml(vg)}</b><span>${storageSize(free)} — approve as <code>vg:${safeHtml(vg)}</code></span></div>`).join('');
-  const spares = (bridge.spares || []).map(d => `<div class="storage-row"><b>Spare: ${safeHtml(d)}</b><span>formatting destroys data — approve as <code>device:${safeHtml(d)}</code></span></div>`).join('');
-  const regions = (bridge.freeRegions || []).map(r => `<div class="storage-row"><b>Free space: ${safeHtml(r.disk)}</b><span>${storageSize(r.bytes)} — approve as <code>region:${safeHtml(r.disk)}:${r.start}:${r.end}</code></span></div>`).join('');
+  const vgs = Object.entries(bridge.vgFree || {}).map(([vg, free]) => `<div class="storage-row"><b>VG free: ${safeHtml(vg)}</b><span>${storageSize(free)} — <button onclick="fillProvisionTarget('vg:${safeHtml(vg)}')">use vg:${safeHtml(vg)}</button></span></div>`).join('');
+  const spares = (bridge.spares || []).map(d => `<div class="storage-row"><b>Spare: ${safeHtml(d)}</b><span>formatting destroys data — <button onclick="fillProvisionTarget('device:${safeHtml(d)}')">use device:${safeHtml(d)}</button></span></div>`).join('');
+  const regions = (bridge.freeRegions || []).map(r => `<div class="storage-row"><b>Free space: ${safeHtml(r.disk)}</b><span>${storageSize(r.bytes)} — <button onclick="fillProvisionTarget('region:${safeHtml(r.disk)}:${r.start}:${r.end}')">use region:${safeHtml(r.disk)}:${r.start}:${r.end}</button></span></div>`).join('');
   return vgs + spares + regions || '<div class="meta">No unallocated VG space, spare disks or free regions found. Attach storage, then refresh.</div>';
+}
+function fillProvisionTarget(target) {
+  const input = document.getElementById('provisionTarget');
+  if (input) { input.value = target; input.focus(); }
 }
 async function loadHostStorage() {
   const box = document.getElementById('hostStorageBox');

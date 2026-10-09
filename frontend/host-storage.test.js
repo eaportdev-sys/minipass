@@ -15,6 +15,7 @@ const context = vm.createContext({
 vm.runInContext(section('function hostCandidateRows(', 'async function loadHostStorage('), context);
 const rows = vm.runInContext(`hostCandidateRows({vgFree:{'ubuntu-vg':1},spares:['/dev/sdb'],freeRegions:[{disk:'/dev/sda',start:1,end:2,bytes:3}]})`, context);
 assert(rows.includes('vg:ubuntu-vg') && rows.includes('device:/dev/sdb') && rows.includes('region:/dev/sda:1:2'));
+assert(rows.includes('fillProvisionTarget('), 'candidates fill the approval field instead of requiring retyping');
 const evil = vm.runInContext(`hostCandidateRows({vgFree:{'<vg>':1},spares:[],freeRegions:[]})`, context);
 assert(!evil.includes('<vg>'), 'candidate names are escaped');
 console.log('Host storage UI: sidebar view, escaped candidates and approval-shaped targets: OK');
