@@ -396,6 +396,16 @@ async function loadRemediations(failed) {
     if (seq === remediateSeq && currentApp === appId) { card.style.display = 'none'; box.innerHTML = ''; }
   }
 }
+async function loadDeployLog() {
+  if (!currentApp) return;
+  const box = document.getElementById('deployFullLog');
+  if (!box) return;
+  box.style.display = 'block';
+  box.textContent = 'loading…';
+  try {
+    box.textContent = await (await fetch(`/api/apps/${currentApp}/build-log?tail=500`)).text();
+  } catch { box.textContent = 'log unavailable'; }
+}
 async function applyRemediation(i) {
   const s = remediateCache[i];
   if (!s || !currentApp) return;

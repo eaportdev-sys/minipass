@@ -1145,7 +1145,14 @@ async function deployNow(id, opts = {}) {
     await sh(`${composeCmd} build${scopeSuffix} > "${buildLog}" 2>&1`, dir);
   } catch (e) {
     let tail = '';
-    try { tail = fs.readFileSync(buildLog, 'utf8').split('\n').slice(-25).join('\n'); } catch {}
+    try {
+      const lines = fs.readFileSync(buildLog, 'utf8').split('\n');
+      // The last lines are usually just the summary; the cause (npm error
+      // codes, tsc errors, ELIFECYCLE) sits above. Prefer cause lines so the
+      // Deploy tab names the failure without SSH.
+      const cause = lines.filter(l => /(npm error( code)?|error TS\d+|ELIFECYCLE|ERESOLVE|EJSONPARSE|failed to solve|COPY failed|can't stat|no such file)/i.test(l));
+      tail = (cause.length ? cause.slice(-8) : lines.slice(-25)).join('\n');
+    } catch {}
     await recordDeploy(id, { sha, at: stamp(), status: 'error', error: ('build failed - running containers untouched: ' + (tail || e.message)).trim().slice(-500) });
     throw new Error('build failed - running containers untouched: ' + (tail || e.message).trim().split('\n').slice(-3).join(' '));
   }

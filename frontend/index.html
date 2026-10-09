@@ -216,8 +216,9 @@
             <div id="deployProg" class="deploy-progress" style="display:none"><div class="deploy-progress-head"><span id="deployStage">deploying…</span><span><b id="deployPct"></b> <span id="deployTime"></span></span></div><div class="progress"><div id="deployBar"></div></div><pre id="deployTail"></pre></div>
           </div>
           <div class="card deploy-history-card">
-            <div class="sectionhead"><div><b>Recent deployments</b><div class="meta">Latest five attempts from every source.</div></div></div>
+            <div class="sectionhead"><div><b>Recent deployments</b><div class="meta">Latest five attempts from every source.</div></div><div class="actions"><button onclick="loadDeployLog()">full log</button></div></div>
             <div id="deployHist" class="deploy-history"></div>
+            <pre id="deployFullLog" class="compact-output" style="display:none" aria-live="polite"></pre>
           </div>
         </div>
         <div class="deploy-source-grid">
