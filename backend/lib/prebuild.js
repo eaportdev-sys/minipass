@@ -117,4 +117,4 @@ async function ensureBuilderImage(run) {
   catch { await run(['image', 'pull', BUILDER_IMAGE]); }
 }
 
-module.exports = { BUILDER_IMAGE, OUTPUT_DIRS, plan, argv, ensureBuilderImage, expectedOutputs, buildsItself, isPanelSeeded };
+module.exports = { BUILDER_IMAGE, OUTPUT_DIRS, plan, argv, ensureBuilderImage, expectedOutputs, buildsItself, isPanelSeeded, packageManager };

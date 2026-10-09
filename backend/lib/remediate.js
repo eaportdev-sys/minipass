@@ -4,6 +4,7 @@
 // customer code on its own.
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const prebuild = require('./prebuild');
 
 const VALID_KEY = /^[a-z-]+:[A-Za-z0-9_.\/-]{1,120}$/;
@@ -15,6 +16,14 @@ function inside(ctxDir, rel) {
 
 function readText(p) {
   try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
+}
+
+function regularText(file) {
+  try { return fs.lstatSync(file).isFile() ? fs.readFileSync(file, 'utf8') : null; }
+  catch { return null; }
+}
+function restoreRevision(current, original) {
+  return crypto.createHash('sha256').update(JSON.stringify([current, original])).digest('hex');
 }
 
 // TS2307 entries: file(line,col): error TS2307: Cannot find module 'X'
@@ -71,7 +80,7 @@ function stubPreview(names) {
     names.map(n => `export const ${n} = undefined as any;`).join('\n') + '\n';
 }
 
-function suggest(ctxDir, errorText, templateDockerfile) {
+function suggest(ctxDir, errorText, templateDockerfile, latestError = errorText) {
   const suggestions = [];
   const seen = new Set();
   for (const { file, request } of missingModules(errorText)) {
@@ -90,27 +99,44 @@ function suggest(ctxDir, errorText, templateDockerfile) {
       preview: stubPreview(names)
     });
   }
-  // Dockerfile that expects uncompiled output: offer the standard build recipe
-  // with the current file kept as a backup. Only when the repo has a build
-  // script (otherwise there is nothing standard to run).
+  // Never replace a repository Dockerfile merely because it expects dist/.
+  // The pre-build already handles that without changing the build recipe.
+  // An earlier panel replacement can be undone, but only from an actual backup
+  // while the current file still exactly matches the panel recipe.
+  const npmCrash = /Cannot read properties of null\s*\(reading ['"]edgesOut['"]\)/i.test(String(latestError || ''));
+  let restore = null;
   try {
     const files = fs.readdirSync(ctxDir);
     const dfName = files.find(f => /^dockerfile$/i.test(f));
     if (dfName) {
-      const df = fs.readFileSync(path.join(ctxDir, dfName), 'utf8');
-      const item = prebuild.plan(ctxDir);
-      if ((item && (item.outputDir || item.blocked)) && !prebuild.buildsItself(df) && !prebuild.isPanelSeeded(df) && templateDockerfile) {
-        suggestions.push({
-          key: 'dockerfile-replace:Dockerfile',
-          kind: 'dockerfile-replace',
-          title: 'Replace Dockerfile with the standard build recipe',
-          detail: `This Dockerfile expects '${(item.outputDir || 'dist')}/' without building it. The current file is kept as ${dfName}.minipass-bak; the standard recipe compiles the repo (lockfile toolchain) then serves the output. Review the diff in Files, then redeploy.`,
-          files: [dfName, dfName + '.minipass-bak'],
-          preview: templateDockerfile
-        });
+      const df = regularText(path.join(ctxDir, dfName));
+      const backup = regularText(path.join(ctxDir, dfName + '.minipass-bak'));
+      const pkg = JSON.parse(readText(path.join(ctxDir, 'package.json')) || '{}');
+      const normalize = text => String(text || '').replace(/\r\n/g, '\n').trim();
+      const repoBuild = pkg && pkg.scripts && typeof pkg.scripts.build === 'string' && pkg.scripts.build.trim();
+      if (npmCrash && df && backup && templateDockerfile && normalize(df) === normalize(templateDockerfile) &&
+          !prebuild.isPanelSeeded(backup) && !prebuild.buildsItself(backup) &&
+          prebuild.expectedOutputs(backup).length && repoBuild) {
+        const manager = prebuild.packageManager(ctxDir).replace('npm-ci', 'npm');
+        restore = {
+          key: 'dockerfile-restore:' + dfName,
+          kind: 'dockerfile-restore',
+          title: 'Restore the backed-up repository Dockerfile',
+          detail: `npm crashed internally during dependency installation (edgesOut). The current Dockerfile matches the panel's replacement; ${dfName}.minipass-bak contains the previous output-serving recipe. Restore that exact backup; Minipass can pre-build missing output using ${manager} and the repository's build script. This does not establish npm's exact crash trigger or guarantee a successful build. Source files and lockfiles are untouched. Use local rebuild afterwards to preserve box edits.`,
+          files: [dfName, dfName + '.minipass-replaced'],
+          preview: backup,
+          revision: restoreRevision(df, backup),
+          nextDeploy: 'local'
+        };
+        suggestions.push(restore);
       }
     }
   } catch {}
+  if (npmCrash && !restore) suggestions.push({
+    kind: 'diagnostic', title: 'npm dependency installer crashed (edgesOut)',
+    detail: 'npm failed internally while resolving dependencies, before the application build. This summary does not establish the exact trigger. No verified Dockerfile backup recovery is available here; Minipass will not delete lockfiles, force dependencies or overwrite a custom Dockerfile.',
+    files: [], preview: ''
+  });
   return suggestions;
 }
 
@@ -125,14 +151,25 @@ function apply(ctxDir, suggestion) {
     fs.writeFileSync(dest, suggestion.preview);
     return { applied: [path.relative(ctxDir, dest).split(path.sep).join('/')] };
   }
-  if (suggestion.kind === 'dockerfile-replace') {
+  if (suggestion.kind === 'dockerfile-restore') {
     const dfName = (suggestion.files && suggestion.files[0]) || 'Dockerfile';
     const dfPath = inside(ctxDir, dfName);
     if (!dfPath || path.resolve(path.dirname(dfPath)) !== path.resolve(ctxDir)) throw new Error('remediation path escapes the build folder');
-    if (!fs.existsSync(dfPath)) throw new Error('Dockerfile is gone - re-run suggestions');
-    fs.copyFileSync(dfPath, dfPath + '.minipass-bak');
-    fs.writeFileSync(dfPath, suggestion.preview);
-    return { applied: [dfName, dfName + '.minipass-bak'] };
+    const current = regularText(dfPath);
+    const original = regularText(dfPath + '.minipass-bak');
+    if (!current || !original || original !== suggestion.preview ||
+        restoreRevision(current, original) !== suggestion.revision) throw new Error('Dockerfile or backup changed - refresh the preview');
+    // Preserve both the original backup and the replaced recipe. Never overwrite
+    // an older recovery copy or follow a symlink to another file.
+    const temp = dfPath + '.minipass-restore-' + crypto.randomBytes(8).toString('hex');
+    try {
+      fs.writeFileSync(temp, original, { flag: 'wx', mode: fs.statSync(dfPath).mode });
+      fs.copyFileSync(dfPath, dfPath + '.minipass-replaced', fs.constants.COPYFILE_EXCL);
+      fs.renameSync(temp, dfPath);
+    } finally {
+      try { fs.unlinkSync(temp); } catch {}
+    }
+    return { applied: [dfName, dfName + '.minipass-replaced'], nextDeploy: 'local' };
   }
   throw new Error('unknown remediation');
 }

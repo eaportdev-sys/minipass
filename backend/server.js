@@ -1843,6 +1843,12 @@ app.post('/api/apps/:id/services/dockerfile', async (req, res) => {
 });
 // Suggested fixes for the latest failed deploy. Detection is automatic; every
 // fix needs an explicit POST (previewed in the UI) and touches box files only.
+function remediationContext(dir, subdir) {
+  const root = fs.realpathSync(path.join(dir, 'code'));
+  const context = fs.realpathSync(path.resolve(dir, 'code', subdir || ''));
+  if (context !== root && !context.startsWith(root + path.sep)) throw lifecycleError('build folder must stay inside the repository', 400);
+  return context;
+}
 function remediationSuggestions(meta, dir) {
   const out = [];
   const last = meta.lastDeploy && meta.lastDeploy.status !== 'ok' ? String(meta.lastDeploy.error || '') : '';
@@ -1856,10 +1862,10 @@ function remediationSuggestions(meta, dir) {
   } catch {}
   for (const s of svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false)) {
     if (/^db(-|$)/.test(s.name || '')) continue;
-    const ctxDir = path.join(dir, 'code', s.subdir || '');
+    const ctxDir = remediationContext(dir, s.subdir);
     let template = null;
     try { template = fs.readFileSync(path.join(TEMPLATES_DIR, s.type, 'Dockerfile'), 'utf8'); } catch {}
-    for (const suggestion of remediate.suggest(ctxDir, evidence, template)) {
+    for (const suggestion of remediate.suggest(ctxDir, evidence, template, last)) {
       out.push({ service: s.name, subdir: s.subdir || '', ...suggestion });
     }
   }
@@ -1881,13 +1887,16 @@ app.post('/api/apps/:id/remediate', async (req, res) => {
       if (!meta) throw lifecycleError('unknown app', 404);
       const dir = appDir(APPS_DIR, meta.id);
       // Recompute server-side; the client preview is never trusted.
-      const match = remediationSuggestions(meta, dir).find(s => s.key === key);
-      if (!match) throw lifecycleError('remediation no longer applies - refresh suggestions', 409);
-      const ctxDir = path.join(dir, 'code', match.subdir || '');
+      const requestedService = String((req.body && req.body.service) || '');
+      const matches = remediationSuggestions(meta, dir).filter(s => s.key === key && (!requestedService || s.service === requestedService));
+      if (matches.length !== 1) throw lifecycleError('remediation no longer applies or is ambiguous - refresh suggestions', 409);
+      const match = matches[0];
+      if (match.kind === 'dockerfile-restore' && match.revision !== (req.body && req.body.revision)) throw lifecycleError('Dockerfile or backup changed - refresh the preview before applying', 409);
+      const ctxDir = remediationContext(dir, match.subdir);
       const result = remediate.apply(ctxDir, match);
       try { panelLog.logEvent({ level: 'warn', area: 'remediate', site: meta.id, message: `applied ${key}: ${result.applied.join(', ')}` }); } catch {}
       await markDirty(meta.id, 'remediation applied: ' + key);
-      res.json({ ok: true, ...result, note: 'box-local change - redeploy to build it; commit to the repo to keep it' });
+      res.json({ ok: true, saved: true, ...result, note: 'box-local change - use local rebuild to preserve box edits; commit to the repo to keep it' });
     });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });

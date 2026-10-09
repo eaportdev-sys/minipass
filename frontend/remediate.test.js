@@ -33,10 +33,34 @@ async function main() {
   assert(element('remediateCard').style.display === 'block');
   assert(html.includes('Create &lt;stub&gt;') && html.includes('export const x = &lt;any&gt;;'));
   assert(!html.includes('<stub>'), 'suggestion content is HTML-escaped');
-  // apply confirms with file list, posts the key, toasts redeploy
+  // apply confirms with file list and recommends local rebuild, not a repo pull
   await run('applyRemediation(0)');
   assert(confirmed.title === 'Apply fix?' && confirmed.body.includes('src/common/utils.ts'));
-  assert(toasts.at(-1).text.includes('redeploy to build') && toasts.at(-1).ok === true);
+  assert(toasts.at(-1).text.includes('local rebuild') && toasts.at(-1).ok === true);
+  const restore = { key: 'dockerfile-restore:Dockerfile', kind: 'dockerfile-restore', service: 'web', revision: 'verified-revision',
+    title: 'Restore the original', detail: 'Preserve box edits', files: ['Dockerfile'], preview: 'FROM nginx' };
+  let posted;
+  context.fetch = async (url, opts) => {
+    if (opts) posted = { url, body: JSON.parse(opts.body) };
+    return { json: async () => opts ? { ok: true, applied: ['Dockerfile'] } : [restore] };
+  };
+  await run('loadRemediations(true)');
+  assert(element('remediateBox').innerHTML.includes('restore original Dockerfile'));
+  await run('applyRemediation(0)');
+  assert.equal(posted.url, '/api/apps/demo/remediate');
+  assert.deepEqual(posted.body, { key: restore.key, service: restore.service, revision: restore.revision });
+  assert(confirmed.body.includes('local rebuild'));
+
+  // Navigating away while the confirmation is open cannot apply to another site.
+  posted = null;
+  context.uiConfirm = async () => { context.currentApp = 'other'; return true; };
+  await run('applyRemediation(0)');
+  assert.equal(posted, null);
+  context.currentApp = 'demo';
+  context.fetch = async () => ({ json: async () => [{ kind: 'diagnostic', title: 'npm edgesOut', detail: 'Exact trigger unknown' }] });
+  await run('loadRemediations(true)');
+  assert(element('remediateBox').innerHTML.includes('npm edgesOut'));
+  assert(!element('remediateBox').innerHTML.includes('<button'), 'diagnosis without a verified repair has no apply button');
   // no failure hides the card without fetching
   let fetched = false;
   context.fetch = async () => { fetched = true; return { json: async () => [] }; };
@@ -51,6 +75,13 @@ async function main() {
   finish();
   await pending;
   assert(element('remediateCard').style.display === 'none');
-  console.log('Remediation UI: escaped suggestion cards, confirm-with-files, redeploy toast and stale guards: OK');
+  // A success on the same site also invalidates an in-flight failed-state load.
+  context.currentApp = 'demo';
+  const stale = run('loadRemediations(true)');
+  await run('loadRemediations(false)');
+  finish();
+  await stale;
+  assert(element('remediateCard').style.display === 'none');
+  console.log('Remediation UI: escaped recovery preview, service/revision POST, local rebuild guidance, read-only diagnosis and stale/navigation guards: OK');
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

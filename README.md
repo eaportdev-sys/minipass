@@ -21,10 +21,13 @@ minipass turns a folder or git repo into a running site with one flow:
   `out/`) without compiling it, the repo's own `build` script runs first in a
   disposable container (lockfile picks npm/pnpm/yarn) — the Dockerfile itself
   is never modified. Dockerfiles that build themselves are untouched.
-- Failed deploys propose one-click fixes on the Deploy tab (missing TypeScript
-  modules get previewed stubs, broken Dockerfiles get the standard recipe with
-  the original kept as backup). Detection is automatic; applying is explicit,
-  box-files-only, and never committed anywhere.
+- Failed deploys show diagnosis and recovery on the Deploy tab. An npm `edgesOut`
+  crash after the earlier panel Dockerfile replacement can offer restoration
+  from its original backup, only while the current recipe still exactly matches
+  the panel template. Both recipes are kept; source files and lockfiles stay intact.
+  Repository Dockerfiles expecting prebuilt output are no longer replaced by a
+  generic recipe. Use **local rebuild** after restoring to preserve box edits.
+  Recovery is previewed and explicit, and never committed or pushed automatically.
   A taken host port is automatically rebound to the next free one before the build.
   **Redeploy** pulls the repo first (recovery path for broken box edits);
   **local rebuild** skips the pull and builds the box files as-is.

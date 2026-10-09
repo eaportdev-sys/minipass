@@ -379,18 +379,18 @@ async function loadRemediations(failed) {
   const card = document.getElementById('remediateCard');
   const box = document.getElementById('remediateBox');
   if (!card || !box) return;
-  if (!currentApp || !failed) { card.style.display = 'none'; box.innerHTML = ''; return; }
-  const appId = currentApp;
   const seq = ++remediateSeq;
+  if (!currentApp || !failed) { remediateCache = []; card.style.display = 'none'; box.innerHTML = ''; return; }
+  const appId = currentApp;
   try {
     const list = await (await fetch(`/api/apps/${appId}/remediations`)).json();
     if (seq !== remediateSeq || currentApp !== appId) return;
     remediateCache = Array.isArray(list) ? list : [];
     card.style.display = remediateCache.length ? 'block' : 'none';
     box.innerHTML = remediateCache.map((s, i) =>
-      `<div class="remediate-item"><b>${safeHtml(s.title)}</b><div class="meta">${safeHtml(s.detail)}</div>` +
-      `<pre class="compact-output">${safeHtml(s.preview || '')}</pre>` +
-      `<div class="appcard-actions"><button class="btn primary" onclick="applyRemediation(${i})">apply fix</button></div></div>`
+      `<div class="remediate-item"><b>${safeHtml(s.title)}</b><div class="meta">Service: ${safeHtml(s.service || 'app')} · ${safeHtml(s.subdir || 'repository root')}</div><div class="meta">${safeHtml(s.detail)}</div>` +
+      (s.preview ? `<pre class="compact-output">${safeHtml(s.preview)}</pre>` : '') +
+      (s.key ? `<div class="appcard-actions"><button class="btn primary" onclick="applyRemediation(${i})">${s.kind === 'dockerfile-restore' ? 'restore original Dockerfile' : 'apply fix'}</button></div>` : '') + '</div>'
     ).join('');
   } catch {
     if (seq === remediateSeq && currentApp === appId) { card.style.display = 'none'; box.innerHTML = ''; }
@@ -408,19 +408,20 @@ async function loadDeployLog() {
 }
 async function applyRemediation(i) {
   const s = remediateCache[i];
-  if (!s || !currentApp) return;
+  if (!s || !s.key || !currentApp) return;
+  const appId = currentApp;
   const ok = await uiConfirm({
     title: 'Apply fix?',
-    body: `${s.title}. Writes box files only (${(s.files || []).join(', ')}) — redeploy afterwards to build. Your repo stays untouched until you commit.`,
+    body: `${s.title}. Writes box files only (${(s.files || []).join(', ')}) — use local rebuild afterwards to preserve box edits. Your remote repo stays untouched until you commit.`,
     confirmLabel: 'Apply fix'
   });
-  if (!ok) return;
+  if (!ok || currentApp !== appId) return;
   try {
-    const r = await (await fetch(`/api/apps/${currentApp}/remediate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: s.key }) })).json();
-    toast(r.ok ? `fix applied (${(r.applied || []).join(', ')}) — redeploy to build` : (r.error || 'failed'), !!r.ok);
+    const r = await (await fetch(`/api/apps/${appId}/remediate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: s.key, service: s.service, revision: s.revision }) })).json();
+    toast(r.ok ? `saved (${(r.applied || []).join(', ')}) — use local rebuild to apply` : (r.error || 'failed'), !!r.ok);
   } catch (e) { toast('apply failed: ' + e.message, false); }
   await refresh();
-  loadDeployStatus();
+  if (currentApp === appId) loadDeployStatus();
 }
 function deployLastMarkup(label, h) {
   if (!h) return `<div class="source-last-empty">${safeHtml(label)}: no deployment recorded</div>`;
