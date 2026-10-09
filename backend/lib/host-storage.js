@@ -93,7 +93,7 @@ function requestProvision({ target, confirm }) {
   const approval = { target: t, requestedAt: new Date().toISOString(), status: 'pending-host' };
   fs.mkdirSync(dataDir(), { recursive: true });
   fs.writeFileSync(provisionFile(), JSON.stringify(approval, null, 2), { mode: 0o600 });
-  return { ...approval, hostCommand: `sudo MINIPASS_USE_FREE_SPACE=1 bash install-linux.sh --provision-storage=${t}` };
+  return { ...approval, hostCommand: `sudo bash install-linux.sh --provision-storage=${t}` };
 }
 function provisionStatus() {
   try { return JSON.parse(fs.readFileSync(provisionFile(), 'utf8')); } catch { return null; }

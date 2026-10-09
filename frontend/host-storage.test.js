@@ -25,6 +25,7 @@ const blocked = vm.runInContext(`hostCapacityMarkup({bridge:{},quota:{ready:fals
 assert(blocked.includes('Site files exist') && !blocked.includes('generic quota error'), 'specific installer status replaces the generic quota error');
 assert(blocked.includes('stop every running site') && blocked.includes('docker compose -p minipass down'), 'running-container blocker has concrete shutdown steps');
 assert(blocked.includes('approved installer command'), 'instructions tell the operator to preserve and rerun the approved command');
+assert(!blocked.includes('MINIPASS_USE_FREE_SPACE'), 'panel command does not bypass the sudo installer confirmation');
 assert(!html.includes('50 GB free recommended at install'), 'obsolete install-size note is not shown in Storage');
 assert(source.includes('function showRemoteSetup(') && source.includes('onclick="showRemoteSetup('), 'remotes have a connect flow with host steps');
 console.log('Host storage UI: sidebar view, escaped candidates and approval-shaped targets: OK');

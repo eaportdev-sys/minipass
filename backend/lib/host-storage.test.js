@@ -27,6 +27,10 @@ async function main() {
   // Provision approval requires repeating the exact target; returns host command.
   const approval = hostStorage.requestProvision({ target: 'vg:ubuntu-vg', confirm: 'vg:ubuntu-vg' });
   assert(approval.hostCommand.includes('--provision-storage=vg:ubuntu-vg'), 'browser never formats; host command does');
+  assert(!approval.hostCommand.includes('MINIPASS_USE_FREE_SPACE'), 'panel command leaves final approval to the sudo installer prompt');
+  const installer = fs.readFileSync(path.join(__dirname, '../../install-linux.sh'), 'utf8');
+  const targetSetup = installer.match(/if \[ -n "\$PROVISION_TARGET" \]; then[^\n]*/);
+  assert(targetSetup && !targetSetup[0].includes('MINIPASS_USE_FREE_SPACE'), 'selecting a target does not silently approve its use');
   assert.throws(() => hostStorage.requestProvision({ target: 'vg:ubuntu-vg', confirm: 'vg:other' }), /exact target/);
   assert.throws(() => hostStorage.requestProvision({ target: '/dev/sda', confirm: '/dev/sda' }), /provision target/);
   assert.equal(hostStorage.provisionStatus().target, 'vg:ubuntu-vg');

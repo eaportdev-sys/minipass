@@ -214,8 +214,10 @@ After a basic install, open the sidebar **Storage** view: it shows quota
 status, unallocated VG space, spare disks/partitions and free disk regions
 (read-only discovery through the root-only bridge), plus a typed approval that
 records the exact target and prints the host command
-(`sudo MINIPASS_USE_FREE_SPACE=1 bash install-linux.sh --provision-storage=<target>`).
-Formatting still happens on the host only — the browser never formats disks.
+(`sudo bash install-linux.sh --provision-storage=<target>`). The privileged
+installer describes the operation and waits for a final `y/N` answer before it
+uses the selected space. Formatting still happens on the host only — the
+browser never formats disks.
 Additional/remote storage (NFS, SMB, SSHFS, Google Drive, OneDrive, other) can
 be registered there for backups/archives; remotes are **never quota-capable**
 because project quotas require local ext4 block storage, and stored passwords

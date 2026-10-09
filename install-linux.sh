@@ -19,9 +19,8 @@ for arg in "$@"; do
   esac
 done
 if [ "$USE_FREE_SPACE" = 1 ]; then export MINIPASS_USE_FREE_SPACE=1; fi
-if [ -n "$PROVISION_TARGET" ]; then export MINIPASS_STORAGE_TARGET="$PROVISION_TARGET"; export MINIPASS_USE_FREE_SPACE=1; fi
-if [ "$BASIC_INSTALL" = 1 ]; then export MINIPASS_BASIC=1; fi
 if [ -n "$PROVISION_TARGET" ]; then export MINIPASS_STORAGE_TARGET="$PROVISION_TARGET"; fi
+if [ "$BASIC_INSTALL" = 1 ]; then export MINIPASS_BASIC=1; fi
 
 # 0. minimum free space: 50 GB warning (never a hard failure).
 # Basic installs check but continue so small test boxes stay usable.
@@ -163,7 +162,7 @@ if command -v pgrep >/dev/null 2>&1 && pgrep -f pull-db-images.sh >/dev/null 2>&
   msg "database admin image download already running in background (log: $DBIMG_LOG)"
 else
   nohup /usr/local/lib/minipass/pull-db-images.sh >>"$DBIMG_LOG" 2>&1 &
-  msg "basic install continues now; database admin images download in background (log: $DBIMG_LOG)"
+  msg "installation continues; database admin images download in background (log: $DBIMG_LOG)"
 fi
 
 # 4. optional host Node (only for running backend without docker). Pass --with-node.

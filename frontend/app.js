@@ -1465,7 +1465,7 @@ function hostCapacityMarkup(d, approval) {
 
   const status = setup.message || q.error || 'Quota enforcement is not active on /srv/apps.';
   const target = approval && approval.target;
-  const command = target ? `sudo MINIPASS_USE_FREE_SPACE=1 bash install-linux.sh --provision-storage=${target}` : '';
+  const command = target ? `sudo bash install-linux.sh --provision-storage=${target}` : '';
   let next = '';
   if (/containers are running/i.test(status)) {
     next = `<div class="meta"><b>Finish setup:</b><br>` +
@@ -1498,7 +1498,7 @@ async function loadHostStorage() {
     if (state) { state.textContent = q.ready ? 'quotas active' : 'unenforced'; state.className = 'panel-state ' + (q.ready ? 'is-ok' : 'is-busy'); }
     if (box) box.innerHTML = hostCapacityMarkup(d, p && p.approval);
     if (list) list.innerHTML = hostCandidateRows(d.bridge);
-    if (p && p.approval) document.getElementById('provisionOut').textContent = `Pending host approval: ${p.approval.target} — run: sudo MINIPASS_USE_FREE_SPACE=1 bash install-linux.sh --provision-storage=${p.approval.target}`;
+    if (p && p.approval) document.getElementById('provisionOut').textContent = `Selected target: ${p.approval.target} — run: sudo bash install-linux.sh --provision-storage=${p.approval.target} — then answer the installer's confirmation prompt.`;
     loadRemotes();
   } catch { if (box) box.textContent = 'Storage discovery unavailable.'; }
 }
@@ -1540,12 +1540,12 @@ async function removeRemote(id) {
 async function requestProvision() {
   const target = document.getElementById('provisionTarget').value.trim();
   const out = document.getElementById('provisionOut');
-  const ok = await uiConfirm({ title: 'Approve host storage setup?', body: `This records approval to format/use ${target} on the host. Formatting destroys anything on it. The host installer still performs the change — nothing is formatted from this browser.`, requireText: target, confirmLabel: 'Approve', danger: true });
+  const ok = await uiConfirm({ title: 'Prepare host storage setup?', body: `This records ${target} as the exact target and creates the host command. Nothing is formatted from this browser. The sudo installer will describe the operation and wait for your final yes/no answer.`, requireText: target, confirmLabel: 'Prepare', danger: true });
   if (!ok) return;
   try {
     const r = await (await fetch('/api/panel/storage/provision', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target, confirm: target }) })).json();
-    out.textContent = r.error || `Approved. On the host run: ${r.hostCommand}`;
-    toast(r.error || 'approval recorded — run the host command', !r.error);
+    out.textContent = r.error || `On the host run: ${r.hostCommand} — then answer the installer's confirmation prompt.`;
+    toast(r.error || 'host command ready — run it and answer the prompt', !r.error);
   } catch (e) { out.textContent = 'approval failed: ' + e.message; }
 }
 function panelErrorText(e) {
