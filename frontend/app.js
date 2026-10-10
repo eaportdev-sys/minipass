@@ -1185,8 +1185,11 @@ function showSiteTab(t, remember = true) {
   if (t === 'files') listFiles('');
   if (t === 'logs') showLogs();
 }
-async function createApp() {
+async function createApp(options = {}) {
   const session = createModalSession;
+  // Snapshot one-click approvals before awaiting prior-modal cleanup. Detection
+  // or reset work finishing during that await must not erase the user's click.
+  const approvedStandardDockerfile = options.standardDockerfile === true || createStandardDockerfile;
   await createCleanupPromise.catch(() => {});
   if (session !== createModalSession) return;
   const v = id => document.getElementById(id).value.trim();
@@ -1199,7 +1202,7 @@ async function createApp() {
   const body = {
     name: v('name'), type: typeEl ? typeEl.value : 'static', dbs, storageGB,
     repoUrl: v('repo'), domain: access === 'domain' ? v('domain') : '',
-    subdir: v('subdir'), standardDockerfile: createStandardDockerfile,
+    subdir: v('subdir'), standardDockerfile: approvedStandardDockerfile,
     modernizeBuild: document.getElementById('createModernBuild').checked
   };
   if (createPendingId) body.pendingId = createPendingId;
@@ -1670,7 +1673,7 @@ function resetCreateForm() {
 function useCreateStandardDockerfile() {
   createStandardDockerfile = true;
   document.getElementById('createDockerAction').style.display = 'none';
-  createApp();
+  return createApp({ standardDockerfile: true });
 }
 function closeCreate(created = false) {
   const id = createPendingId;

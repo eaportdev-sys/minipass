@@ -16,6 +16,7 @@ const section = (start, end) => source.slice(source.indexOf(start), source.index
 vm.runInContext('let createModalSession=1, createCleanupPromise=Promise.resolve(), createPendingId=null, createStandardDockerfile=false, createConnectRequest=0, createDetectRequest=0, createDetectRepo="", createStorageAvailable=null, modalLogin=null;\n' +
   section('async function createApp(', 'async function detectType(') +
   section('function resetCreateForm(', 'function useCreateStandardDockerfile(') +
+  section('function useCreateStandardDockerfile(', 'function closeCreate(') +
   section('function closeCreate(', 'function toggleTheme('), context);
 const run = code => vm.runInContext(code, context);
 function form() { element('name').value = 'Same display name'; element('createStorageGB').value = '1'; }
@@ -30,9 +31,9 @@ async function main() {
   await run('createApp()');
   assert.equal(run('createPendingId'), id);
   assert(!calls[0].body.pendingId, 'first build has no name-derived id');
-  run('createStandardDockerfile=true');
-  await run('createApp()');
+  await run('useCreateStandardDockerfile()');
   assert.equal(calls[1].body.pendingId, id, 'explicit retry reuses only server-issued pending identity');
+  assert.equal(calls[1].body.standardDockerfile, true, 'standard Dockerfile approval reaches the retry request');
   context.fetch = async (url, options) => { calls.push({ url, method: options.method }); return { json: async () => ({ ok: true }) }; };
   run('closeCreate()');
   await run('createCleanupPromise');
