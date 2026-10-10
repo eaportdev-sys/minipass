@@ -108,6 +108,34 @@ try {
   fs.writeFileSync(path.join(root, 'Dockerfile'), 'FROM node:20-alpine\n' + '# filler\n'.repeat(20000));
   fix.noteEvidence(root, ENGINE_ERROR);
   assert.equal(fix.suggest(root).length, 0, 'oversized recipes are refused');
+
+  // Prisma-style failure: install scripts need DATABASE_URL at build time.
+  const PRISMA_ERROR = 'Failed to load config file "/app" as a TypeScript/JavaScript module. Error: PrismaConfigEnvError: Cannot resolve environment variable: DATABASE_URL.\n' +
+    'npm error command failed\nnpm error command sh -c prisma generate\n#9 ERROR: process "/bin/sh -c npm install" did not complete successfully: exit code: 1';
+  const PRISMA_DF = 'FROM node:24-alpine AS build\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install\nCOPY . .\nRUN npm run build\n';
+  const PRISMA_PKG = JSON.stringify({ scripts: { build: 'prisma generate && vite build', postinstall: 'prisma generate' } });
+  const PRISMA_SCHEMA = 'datasource db {\n  provider = "postgresql"\n  url = env("DATABASE_URL")\n}\n';
+  root = fixture({ Dockerfile: PRISMA_DF, 'package.json': PRISMA_PKG, 'prisma/schema.prisma': PRISMA_SCHEMA });
+  fix.noteEvidence(root, PRISMA_ERROR);
+  const prisma = fix.suggest(root)[0];
+  assert(prisma && prisma.kind === 'dockerfile-fix', 'build-time env failure proposes an adaptation');
+  assert(prisma.preview.includes('+ ARG DATABASE_URL=postgresql://build:build@localhost:5432/build_placeholder'));
+  assert(!prisma.preview.includes('node:'), 'no base bump without engine evidence');
+  assert(prisma.detail.includes('running container keeps the site'), 'placeholder is build-time only');
+  const prismaApplied = fix.apply(root, prisma);
+  assert(prismaApplied.applied.includes('Dockerfile'));
+  const prismaText = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8');
+  assert(prismaText.indexOf('ARG DATABASE_URL=') < prismaText.indexOf('RUN npm install'), 'placeholder is declared before install');
+  assert.equal(fix.suggest(root).length, 0, 'declared ARG satisfies the proposal');
+
+  // Unknown provider: URL placeholders are refused, guidance instead.
+  root = fixture({ Dockerfile: PRISMA_DF, 'package.json': PRISMA_PKG });
+  fix.noteEvidence(root, PRISMA_ERROR);
+  assert.equal(fix.suggest(root)[0].kind, 'diagnostic', 'no provider means no guessed connection string');
+  root = fixture({ Dockerfile: PRISMA_DF, 'package.json': JSON.stringify({ scripts: { postinstall: 'node ./scripts/seed.js' } }) });
+  fix.noteEvidence(root, 'Cannot resolve environment variable: SEED_MODE\nnpm error command failed');
+  const plain = fix.suggest(root)[0];
+  assert(plain.preview.includes('+ ARG SEED_MODE=minipass-build-placeholder'), 'non-URL vars need no provider');
   console.log('Dockerfile fix: node bump + git insertion, variants, evidence gating, refusals and atomic backup: OK');
 } finally {
   for (const root of dirs) fs.rmSync(root, { recursive: true, force: true });

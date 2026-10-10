@@ -38,10 +38,14 @@ minipass turns a folder or git repo into a running site with one flow:
   Ambiguous candidates, incomplete scans and unsupported imports get guidance,
   not guessed edits. Matching exports cannot prove intended behavior; review the
   proposed destination. When a repository Dockerfile itself blocks the build —
-  a stale Node.js base image the package engines reject, or install lifecycle
-  scripts needing a git binary the image lacks — the Deploy tab can propose a
-  minimal build-environment adaptation (base image tag bump plus build-tool
-  installation before package install). Only the build recipe changes;
+  a stale Node.js base image the package engines reject, install lifecycle
+  scripts needing a git binary the image lacks, or client generation
+  (e.g. `prisma generate`) needing an environment variable that only exists at
+  runtime — the Deploy tab can propose a minimal build-environment adaptation
+  (base image tag bump, build-tool installation, or build-time `ARG`
+  placeholders declared above the install step). Placeholder values are
+  provider-derived dummies for client generation during build only; the running
+  container keeps the site's real environment. Only the build recipe changes;
   application source, lockfiles and the remote repository stay untouched, and
   the exact diff is previewed for approval. Fixing the repository itself is the
   last resort if the adaptation cannot cover a failure.

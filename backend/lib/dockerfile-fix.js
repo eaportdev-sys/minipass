@@ -54,7 +54,46 @@ function signals(errorText) {
   if (req) requiredMajor = parseInt(req[1], 10);
   if (cur) currentMajor = parseInt(cur[1], 10);
   const engineMismatch = !!(requiredMajor && currentMajor && requiredMajor > currentMajor);
-  return { gitMissing, engineMismatch, requiredMajor };
+  const envVars = [...new Set([...text.matchAll(/Cannot resolve environment variable:\s*([A-Z_][A-Z0-9_]*)/g)].map(m => m[1]))].slice(0, 5);
+  const scriptFailure = /(prisma\s+generate|npm\s+error\s+command\s+(failed|sh -c)|error\s+command\s+failed)/i.test(text);
+  const missingEnv = envVars.length > 0 && scriptFailure;
+  return { gitMissing, engineMismatch, requiredMajor, missingEnv, envVars };
+}
+// Datasource provider from the repo's prisma schema (bounded scan), so a
+// build-time placeholder URL has a valid scheme. Null when unknown.
+function prismaProvider(ctxDir) {
+  const found = [];
+  const walk = (dir, depth = 0) => {
+    if (depth > 6 || found.length >= 5) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name === '.git') continue;
+      const full = path.join(dir, e.name);
+      if (e.isSymbolicLink()) continue;
+      if (e.isDirectory()) walk(full, depth + 1);
+      else if (e.isFile() && e.name.toLowerCase().endsWith('.prisma')) found.push(full);
+    }
+  };
+  walk(ctxDir);
+  for (const file of found) {
+    try {
+      const stat = fs.statSync(file);
+      if (stat.size > MAX_BYTES) continue;
+      const m = fs.readFileSync(file, 'utf8').match(/provider\s*=\s*"(\w+)"/);
+      if (m) return m[1].toLowerCase();
+    } catch {}
+  }
+  return null;
+}
+function placeholderFor(name, provider) {
+  if (!/url$/i.test(name)) return 'minipass-build-placeholder';
+  if (provider === 'mysql') return 'mysql://build:build@localhost:3306/build_placeholder';
+  if (provider === 'sqlite') return 'file:/tmp/minipass-build-placeholder.db';
+  if (provider === 'sqlserver') return 'sqlserver://localhost:1433;database=build_placeholder;user=build;password=build;encrypt=true';
+  if (provider === 'mongodb') return 'mongodb://localhost:27017/build_placeholder';
+  if (provider === 'cockroachdb') return 'postgresql://build:build@localhost:26257/build_placeholder';
+  return 'postgresql://build:build@localhost:5432/build_placeholder';
 }
 function nodeFroms(lines) {
   const out = [];
@@ -86,18 +125,30 @@ function panelSeeded(text) {
 // A proposal with _plan, or { diagnostic } when no verified edit applies.
 function propose(ctxDir, errorText) {
   const sig = signals(errorText);
-  if (!sig.gitMissing && !sig.engineMismatch) return null;
+  if (!sig.gitMissing && !sig.engineMismatch && !sig.missingEnv) return null;
   const df = readDockerfile(ctxDir);
   if (!df) return null;
   if (panelSeeded(df.text)) return null; // panel-owned files use their own flow
   const lines = df.text.split('\n');
   const froms = nodeFroms(lines);
   if (!froms.length) {
-    return { diagnostic: 'The build needs a newer Node.js runtime or a git binary, but this Dockerfile pins no node base image. Review its FROM lines manually; Minipass will not guess the intended image.' };
+    return { diagnostic: 'The build needs a newer Node.js runtime, a git binary or build-time environment, but this Dockerfile pins no node base image. Review its FROM lines manually; Minipass will not guess the intended image.' };
   }
   const needBump = sig.engineMismatch && froms.some(f => f.major < sig.requiredMajor);
   const needGit = sig.gitMissing && !froms.every(f => hasGit(lines, f.suffix));
-  if (!needBump && !needGit) return null;
+  const provider = sig.missingEnv ? prismaProvider(ctxDir) : null;
+  // URL placeholders need a valid scheme: only emit them when the schema
+  // provider is known, otherwise warn and leave that variable alone.
+  const placeable = [], skipped = [];
+  for (const v of (sig.missingEnv ? sig.envVars.filter(v => !lines.some(l => new RegExp(`^\\s*ARG\\s+${v}=`).test(l))) : [])) {
+    if (/url$/i.test(v) && !provider) skipped.push(v);
+    else placeable.push(v);
+  }
+  const needEnv = placeable;
+  if (!needBump && !needGit && !needEnv.length && !skipped.length) return null;
+  if (!needBump && !needGit && !needEnv.length) {
+    return { diagnostic: `The build needs environment variable(s) ${skipped.join(', ')} but no datasource provider was found in the repository's schema files, so no valid placeholder value can be derived. Declare the value or add the schema, then rebuild; Minipass will not guess connection strings.` };
+  }
   const targetMajor = sig.requiredMajor || Math.max(...froms.map(f => f.major));
   const replacements = [];
   const after = lines.slice();
@@ -118,12 +169,23 @@ function propose(ctxDir, errorText) {
     const suffix = froms[0].suffix;
     if (!hasGit(after, suffix)) insertion = { at, line: gitLine(suffix) };
   }
+  // Build-time placeholders for install-script environment (e.g. Prisma
+  // client generation). Declared as ARG directly above the install step so
+  // they never reach runtime; the running container keeps the site's real env.
+  const envArgs = [];
+  if (needEnv.length) {
+    const at = installIndex(after);
+    if (at < 0) return { diagnostic: 'The build needs environment for install lifecycle scripts, but no package-install step was found to attach it to. Review the Dockerfile manually.' };
+    for (const v of needEnv) envArgs.push({ at, line: `ARG ${v}=${placeholderFor(v, provider)}` });
+  }
   const before = lines.join('\n');
-  if (insertion) after.splice(insertion.at, 0, insertion.line);
+  // Insert from the bottom so earlier indices stay valid.
+  const insertions = [...(insertion ? [insertion] : []), ...envArgs].sort((a, b) => b.at - a.at);
+  for (const ins of insertions) after.splice(ins.at, 0, ins.line);
   const fixed = after.join('\n');
   if (before === fixed) return null;
   const diff = [`--- a/${df.name}`, `+++ b/${df.name}`];
-  const events = [...replacements.map(r => ({ ...r, insert: false })), ...(insertion ? [{ ...insertion, insert: true }] : [])]
+  const events = [...replacements.map(r => ({ ...r, insert: false })), ...insertions.map(i => ({ ...i, insert: true }))]
     .sort((a, b) => (a.insert ? a.at : a.index) - (b.insert ? b.at : b.index));
   for (const e of events) {
     if (e.insert) diff.push(`+ ${e.line}`);
@@ -134,15 +196,19 @@ function propose(ctxDir, errorText) {
   const prepare = ['prepare', 'preinstall', 'postinstall'].filter(k => typeof scripts[k] === 'string' && scripts[k].trim()).map(k => `${k}: ${scripts[k].trim()}`);
   const warnings = [];
   if (prepare.length && gitIgnored(ctxDir)) warnings.push(`Install lifecycle scripts (${prepare.join('; ')}) need repository metadata, but .dockerignore excludes .git from the build context. git alone may not satisfy them; a follow-up failure will say so exactly.`);
+  if (skipped.length) warnings.push(`No placeholder was derived for ${skipped.join(', ')}: no datasource provider found in the repository's schema files.`);
+  const changes = [bumped.length ? 'base image ' + bumped.join(', ') : null, insertion ? 'build-tool git before package install' : null,
+    envArgs.length ? 'build-time ' + envArgs.map(e => e.line.split('=')[0].replace('ARG ', '')).join(', ') : null].filter(Boolean);
   return {
-    key, kind: 'dockerfile-fix', title: `Adapt the repository Dockerfile build environment${bumped.length ? ` (${bumped.join(', ')})` : ''}${insertion ? ' + git' : ''}`,
-    detail: `Build evidence: ${[sig.engineMismatch ? `package engines require node >= ${sig.requiredMajor}` : null, sig.gitMissing ? 'install lifecycle scripts need a git binary' : null].filter(Boolean).join('; ')}. ` +
-      `Only the build recipe changes (${[bumped.length ? 'base image ' + bumped.join(', ') : null, insertion ? 'build-tool git before package install' : null].filter(Boolean).join('; ')}). ` +
+    key, kind: 'dockerfile-fix', title: `Adapt the repository Dockerfile build environment${bumped.length ? ` (${bumped.join(', ')})` : ''}${insertion ? ' + git' : ''}${envArgs.length ? ' + build env' : ''}`,
+    detail: `Build evidence: ${[sig.engineMismatch ? `package engines require node >= ${sig.requiredMajor}` : null, sig.gitMissing ? 'install lifecycle scripts need a git binary' : null, needEnv.length ? `install scripts need build-time ${needEnv.join(', ')}` : null].filter(Boolean).join('; ')}. ` +
+      `Only the build recipe changes (${changes.join('; ')}). ` +
+      `Placeholders are ARG defaults for client generation during build only; the running container keeps the site's real environment, and the value is never read from your stored secrets. ` +
       `Application source, lockfiles and the remote repository stay untouched. Approval is retained outside the checkout and revalidated on redeploy; upstream Dockerfile changes stop deployment for review. ` +
       (warnings.length ? warnings.join(' ') + ' ' : '') +
       `Fixing the repository itself remains the last resort if this adaptation cannot cover a failure.`,
     files: [df.name], preview: diff.slice(0, 60).join('\n'), revision: hash([before, fixed]), nextDeploy: 'local',
-    _plan: { name: df.name, base: before, fixed, fromTag: froms.map(f => `node:${f.major}${f.suffix}`).join(','), toMajor: targetMajor, gitAdded: insertion ? insertion.line : null }
+    _plan: { name: df.name, base: before, fixed, fromTag: froms.map(f => `node:${f.major}${f.suffix}`).join(','), toMajor: targetMajor, gitAdded: insertion ? insertion.line : null, envAdded: envArgs.map(e => e.line) }
   };
 }
 // Evidence seen per build folder so apply() can re-derive without trusting
@@ -165,7 +231,7 @@ function suggest(ctxDir) {
 }
 function approval(plan) {
   return { key: plan.key, revision: plan.revision, name: plan._plan.name, base: plan._plan.base, fixed: plan._plan.fixed,
-    fromTag: plan._plan.fromTag, toMajor: plan._plan.toMajor, gitAdded: plan._plan.gitAdded, files: plan.files };
+    fromTag: plan._plan.fromTag, toMajor: plan._plan.toMajor, gitAdded: plan._plan.gitAdded, envAdded: plan._plan.envAdded || [], files: plan.files };
 }
 function apply(ctxDir, suggestion, { backupRoot, beforeApply } = {}) {
   const plan = plans(ctxDir).find(p => p.key === suggestion.key);

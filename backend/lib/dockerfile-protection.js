@@ -53,6 +53,8 @@ function readRecord(file) {
   try { record = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { throw conflict('Saved Dockerfile approval is unreadable'); }
   if (record.version !== 1 || typeof record.key !== 'string' || typeof record.base !== 'string' || typeof record.fixed !== 'string' ||
       typeof record.name !== 'string' || typeof record.subdir !== 'string' || typeof record.toMajor !== 'number') throw conflict('Invalid saved Dockerfile approval');
+  if (record.envAdded !== undefined && (!Array.isArray(record.envAdded) || record.envAdded.some(l => typeof l !== 'string'))) throw conflict('Invalid saved Dockerfile approval');
+  record.envAdded = record.envAdded || [];
   return record;
 }
 function list(siteDir, service) {
@@ -116,7 +118,8 @@ function classify(ctxDir, record) {
   if (text === record.base) return 'base';
   fix.noteEvidence(ctxDir, evidenceFor(record));
   const fresh = fix.plans(ctxDir).find(p => p.key === record.key);
-  if (fresh && fresh._plan.toMajor === record.toMajor && fresh._plan.gitAdded === record.gitAdded) {
+  const sameEnv = JSON.stringify((fresh && fresh._plan.envAdded) || []) === JSON.stringify(record.envAdded);
+  if (fresh && fresh._plan.toMajor === record.toMajor && fresh._plan.gitAdded === record.gitAdded && sameEnv) {
     record.base = fresh._plan.base;
     record.fixed = fresh._plan.fixed;
     record.revision = fresh.revision;
@@ -130,6 +133,10 @@ function evidenceFor(record) {
   const parts = [];
   if (record.gitAdded) parts.push('Error: exec: "git": executable file not found in $PATH');
   if (record.toMajor) parts.push(`required: { node: '>=${record.toMajor}' } current: { node: 'v0.0.0' }`);
+  for (const line of record.envAdded) {
+    const m = line.match(/^ARG\s+([A-Z_][A-Z0-9_]*)=/);
+    if (m) parts.push(`Cannot resolve environment variable: ${m[1]}\nnpm error command failed`);
+  }
   return parts.join('\n');
 }
 function writeFile(file, text) {

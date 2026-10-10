@@ -102,6 +102,24 @@ try {
   fs.writeFileSync(path.join(g.code, 'Dockerfile'), read(g) + '# hand edit\n');
   assert.throws(() => protection.run(g.site, [{ ...service }], g.code, 'replay'), /no longer matches/);
 
+  // Build-time env approvals replay across pulls the same way.
+  const p = fixture();
+  fs.writeFileSync(path.join(p.code, 'Dockerfile'), 'FROM node:24-alpine AS build\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install\nCOPY . .\n');
+  fs.writeFileSync(path.join(p.code, 'package.json'), JSON.stringify({ scripts: { postinstall: 'prisma generate' } }));
+  fs.mkdirSync(path.join(p.code, 'prisma'));
+  fs.writeFileSync(path.join(p.code, 'prisma/schema.prisma'), 'datasource db {\n  provider = "postgresql"\n  url = env("DATABASE_URL")\n}\n');
+  init(p);
+  const PRISMA_ERROR = 'Cannot resolve environment variable: DATABASE_URL.\nnpm error command failed\nnpm error command sh -c prisma generate';
+  fix.noteEvidence(p.code, PRISMA_ERROR);
+  const pProposal = fix.suggest(p.code).find(s => s.key);
+  fix.apply(p.code, pProposal, { backupRoot: path.join(p.site, '.remediation-backups', 'app'),
+    beforeApply: approval => protection.save(p.site, 'app', '', approval) });
+  assert(fs.readFileSync(path.join(p.code, 'Dockerfile'), 'utf8').includes('ARG DATABASE_URL=postgresql://'));
+  assert.deepEqual(protection.run(p.site, [service], p.code, 'replay'), [], 'already-applied env needs no rewrite');
+  protection.run(p.site, [service], p.code, 'suspend');
+  assert(!fs.readFileSync(path.join(p.code, 'Dockerfile'), 'utf8').includes('ARG DATABASE_URL='), 'suspend removes only the approved ARG');
+  assert.deepEqual(protection.run(p.site, [service], p.code, 'replay'), ['app']);
+
   // Symlinked registry or checkout is refused.
   const h = fixture();
   init(h);
