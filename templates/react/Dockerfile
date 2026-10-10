@@ -1,7 +1,8 @@
 # minipass template
 # Universal React/Vite/CRA/Next (static export) template.
-# Build stage includes all tools + git + generator placeholders.
+# Build stage includes BuildKit cache mount + git + generator placeholders.
 # Serve stage is pure nginx - no Node in production image.
+# syntax = docker/dockerfile:1.4
 FROM node:22-alpine AS build
 
 # Build tools stay in this stage; the serving image remains nginx-only.
@@ -19,8 +20,13 @@ ARG DIRECT_URL
 # Copy package manifests first for optimal layer caching.
 COPY package*.json ./
 
-# Install dependencies. npm ci is faster and reproducible when lockfile exists.
-RUN if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then npm ci; else npm install; fi
+# Install dependencies with BuildKit npm cache mount.
+RUN --mount=type=cache,target=/root/.npm \
+    if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then \
+      npm ci --prefer-offline; \
+    else \
+      npm install --prefer-offline; \
+    fi
 
 # Copy source after install so lifecycle scripts have schemas/configs.
 COPY . .

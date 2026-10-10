@@ -1,6 +1,7 @@
 # minipass template
 # Universal Node.js template: works for Express, Fastify, NestJS, plain Node, etc.
-# Build tools + git + build-time generator placeholders included.
+# BuildKit cache mount + git + build-time ARGs + correct layer order.
+# syntax = docker/dockerfile:1.4
 FROM node:22-alpine
 
 # Native npm modules can fall back to compiling when no Alpine binary exists.
@@ -18,8 +19,15 @@ ARG DIRECT_URL
 # Copy package manifests first for optimal layer caching.
 COPY package*.json ./
 
-# Install dependencies. npm ci is faster and reproducible when lockfile exists.
-RUN if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then npm ci; else npm install; fi
+# Install dependencies with BuildKit npm cache mount.
+# Caches ~/.npm across builds — first build downloads, subsequent builds reuse.
+# --prefer-offline uses cache when available, falls back to network.
+RUN --mount=type=cache,target=/root/.npm \
+    if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then \
+      npm ci --prefer-offline; \
+    else \
+      npm install --prefer-offline; \
+    fi
 
 # Copy source after install so lifecycle scripts (prepare, postinstall) have schemas/configs.
 COPY . .

@@ -6,6 +6,7 @@ services:
       dockerfile: backend/Dockerfile
       args:
         GIT_SHA: ${GIT_SHA:-dev}
+        BUILDKIT_INLINE_CACHE: 1
     restart: unless-stopped
     env_file:
       - path: ./backend/.env
@@ -15,6 +16,8 @@ services:
       - APPS_DIR=/srv/apps
       - DATA_FILE=/data/apps.json
       - PORT=3001
+      - DOCKER_BUILDKIT=1
+      - COMPOSE_DOCKER_CLI_BUILD=1
     volumes:
       - /srv/apps:/srv/apps
       - /srv/panel-data:/data

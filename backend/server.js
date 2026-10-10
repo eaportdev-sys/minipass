@@ -716,14 +716,15 @@ async function rollbackImages(dir, snaps) {
   await sh(`${COMPOSE_BIN} up -d --remove-orphans`, dir);
 }
 // Health gate: every enabled app service running (not restarting/exited) twice in a
-// row, 5s apart, within ~60s. DB services excluded - slow first initdb is normal.
+// row, 3s apart, within ~30s. DB services excluded - slow first initdb is normal.
 // `only` scopes the gate to just-rebuilt services (others keep whatever state they had).
+// Fast path: if all services report healthy immediately, exit early.
 async function waitStable(id, dir, meta, only = null) {
   const all = svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false);
   const names = new Set((only && only.length ? all.filter(s => only.includes(s.name)) : all).map(s => s.name));
   let steady = 0;
-  for (let i = 0; i < 12; i++) {
-    if (i) await new Promise(r => setTimeout(r, 5000));
+  for (let i = 0; i < 10; i++) {
+    if (i) await new Promise(r => setTimeout(r, 3000));
     checkCancelled(id); // stop mid-verify aborts before any rollback restart
     let cs = [];
     try { cs = await appContainers(id); } catch { continue; }
