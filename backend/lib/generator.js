@@ -344,15 +344,13 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
 // One app-service block. Primary ('app') renders exactly the legacy shape;
 // secondaries add a PORT override from their own PORT_<NAME> env key.
 // Build arg for BuildKit inline cache (helps cache import/export on rebuild).
-// Uses minipass base images for faster builds.
 function serviceBlock({ svcName, ctx, port, host, portEnv, type }) {
   const build = ctx === './code'
-    ? '    build: ./code\n'
-    : `    build:\n      context: ./${ctx}\n      dockerfile: Dockerfile\n`;
-  const buildArgs = '    build:\n      args:\n        BUILDKIT_INLINE_CACHE: 1\n';
+    ? `    build:\n      context: ./code\n      args:\n        BUILDKIT_INLINE_CACHE: 1\n`
+    : `    build:\n      context: ./${ctx}\n      dockerfile: Dockerfile\n      args:\n        BUILDKIT_INLINE_CACHE: 1\n`;
   const env = portEnv ? `    environment:\n      PORT: \${${portEnv}}\n` : '';
   const ports = host ? `    ports:\n      - "${host}:${port}"\n` : '';
-  return `  ${svcName}:\n${build}${buildArgs}    restart: unless-stopped\n    env_file: .env\n${env}${ports}    expose:\n      - "${port}"\n`;
+  return `  ${svcName}:\n${build}    restart: unless-stopped\n    env_file: .env\n${env}${ports}    expose:\n      - "${port}"\n`;
 }
 
 // nginx for static/react frontends. With a proxy target it forwards same-origin

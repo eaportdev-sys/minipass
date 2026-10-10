@@ -159,7 +159,8 @@ function renderProject({ dir, templatesDir, meta }) {
       ctx: s.subdir ? `./code/${s.subdir}` : './code',
       port: parseInt(s.port, 10) || 3000,
       host: s.hostPort || null,
-      portEnv: penv
+      portEnv: penv,
+      type: s.type
     }));
   }
   let out = `services:\n${chunks.join('')}`;
