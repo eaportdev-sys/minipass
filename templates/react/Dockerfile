@@ -1,16 +1,39 @@
 # minipass template
-# build stage + serve (vite emits dist/, CRA emits build/ - normalized to dist/)
+# Universal React/Vite/CRA/Next (static export) template.
+# Build stage includes all tools + git + generator placeholders.
+# Serve stage is pure nginx - no Node in production image.
 FROM node:22-alpine AS build
+
 # Build tools stay in this stage; the serving image remains nginx-only.
-RUN apk add --no-cache python3 build-base autoconf automake libtool nasm pkgconf
+# git is required for Husky, Lefthook, and private registry auth during install.
+RUN apk add --no-cache python3 build-base autoconf automake libtool nasm pkgconf git
+
 WORKDIR /app
+
+# Build-time environment for generator scripts (prisma generate, etc.).
+# These are ARG defaults only; the running container uses the site's real env.
+ARG DATABASE_URL=postgresql://build:build@localhost:5432/build_placeholder
+ARG SHADOW_DATABASE_URL=postgresql://build:build@localhost:5432/build_placeholder_shadow
+ARG DIRECT_URL
+
+# Copy package manifests first for optimal layer caching.
+COPY package*.json ./
+
+# Install dependencies. npm ci is faster and reproducible when lockfile exists.
+RUN if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then npm ci; else npm install; fi
+
+# Copy source after install so lifecycle scripts have schemas/configs.
 COPY . .
-# Copy source before install because repository lifecycle scripts may need
-# Prisma schemas, generator configs, workspace files, or other project assets.
-RUN npm install
+
+# Build the production bundle. Vite emits dist/, CRA emits build/.
+# Normalize to dist/ for the nginx stage.
 RUN npm run build && (test -d dist || (test -d build && mv build dist) || (echo "BUILD PRODUCED NO dist/ or build/ - add a build script emitting one of them or pick another type" && exit 1))
+
+# Serve stage: pure nginx, no Node.js
 FROM nginx:alpine
-# vite default (+ SPA fallback so deep links like /signup/warehouse load directly):
+
+# SPA fallback so deep links like /signup/warehouse load directly.
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
+
 EXPOSE 80
