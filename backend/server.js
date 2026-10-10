@@ -789,7 +789,7 @@ function createLocalPushStage(dir, meta, pushedSha, pushedBranch) {
         const nc = path.join(ctxDir, 'nginx.conf');
         if (!fs.existsSync(nc)) fs.writeFileSync(nc, nginxConf(null));
       }
-      lines.push(`  ${s.name}:`, '    build:', `      context: ${JSON.stringify(ctxDir.replace(/\\/g, '/'))}`, '      dockerfile: Dockerfile');
+      lines.push(`  ${s.name}:`, `    build:\n      context: ${JSON.stringify(ctxDir.replace(/\\/g, '/'))}\n      dockerfile: Dockerfile\n      args:\n        BUILDKIT_INLINE_CACHE: 1`);
     }
     const override = path.join(stageRoot, 'compose.override.yml');
     fs.writeFileSync(override, lines.join('\n') + '\n');

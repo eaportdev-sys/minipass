@@ -102,7 +102,7 @@ async function main() {
     assert(!fake.calls.some(c => ['system', 'volume'].includes(c.args[0]) && c.args.includes('prune')));
     for (const failure of ['down', 'image', 'cache']) {
       dir = setup(); fake = fakeDocker(); fake.fail = failure;
-      await assert.rejects(() => trash.destroySite({ record, trashRoot: root, run: fake.run }), /failed; Trash entry kept/);
+      await assert.rejects(() => trash.destroySite({ record, trashRoot: root, run: fake.run }), /failed after \d+ attempts/);
       assert(fs.existsSync(path.join(dir, 'private-data')), 'failures keep source files for retry');
       fake.fail = '';
       await trash.destroySite({ record, trashRoot: root, run: fake.run });
