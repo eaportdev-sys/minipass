@@ -7,7 +7,9 @@ const templates = path.resolve(__dirname, '../../templates');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-native-build-'));
 try {
   for (const type of ['node', 'react']) {
-    const template = fs.readFileSync(path.join(templates, type, 'Dockerfile'), 'utf8');
+    // Scaffolding only: normalize checkout line endings so the derived legacy
+    // fixture matches on Windows (CRLF) exactly as on Linux (LF).
+    const template = fs.readFileSync(path.join(templates, type, 'Dockerfile'), 'utf8').replace(/\r\n/g, '\n');
     assert(template.startsWith('# minipass template'));
     assert(template.includes('FROM node:22-alpine'), 'standard Node build uses the supported Node 22 line');
     for (const tool of ['python3', 'build-base', 'autoconf', 'automake', 'libtool', 'nasm']) assert(template.includes(tool));
@@ -25,14 +27,14 @@ try {
     assert.equal(refreshStandardDockerfile(folder, type, templates), 'missing');
     fs.writeFileSync(file, old.replace(/\r?\n/g, '\r\n'));
     assert.equal(refreshStandardDockerfile(folder, type, templates), 'updated', 'legacy files upgrade regardless of Windows line endings');
-    assert.equal(fs.readFileSync(file, 'utf8'), template);
+    assert.equal(fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n'), template);
     assert.equal(refreshStandardDockerfile(folder, type, templates), 'current', 'upgrade is idempotent');
     const previous = template
       .replace('FROM node:22-alpine', 'FROM node:20-alpine')
       .replace('COPY . .\n# Copy source before install because repository lifecycle scripts may need\n# Prisma schemas, generator configs, workspace files, or other project assets.\nRUN npm install', 'COPY package*.json ./\nRUN npm install\nCOPY . .');
     fs.writeFileSync(file, previous);
     assert.equal(refreshStandardDockerfile(folder, type, templates), 'updated', 'previous panel template upgrades for Node 22 and lifecycle build context');
-    assert.equal(fs.readFileSync(file, 'utf8'), template);
+    assert.equal(fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n'), template);
     const custom = template + '\nRUN echo custom-build\n';
     fs.writeFileSync(file, custom);
     assert.equal(refreshStandardDockerfile(folder, type, templates), 'custom', 'retained marker does not authorize rewriting custom files');

@@ -1805,7 +1805,7 @@ async function stopApp(id) {
   toast('stopping ' + id + '…');
   try {
     const r = await (await fetch('/api/apps/' + id + '/stop', { method: 'POST' })).json();
-    toast(r.ok ? id + ' stopped' : ('stop failed: ' + (r.error || 'unknown')), !!r.ok);
+    toast(r.ok ? id + ' stopped' + (r.cancelledDeploy ? ' (in-flight deploy cancelled)' : '') : ('stop failed: ' + (r.error || 'unknown')), !!r.ok);
   } catch (e) { toast('stop failed: ' + e.message, false); }
   await refresh();
   if (id === currentApp) await loadDeployStatus();

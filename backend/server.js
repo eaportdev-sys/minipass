@@ -705,6 +705,7 @@ async function waitStable(id, dir, meta, only = null) {
   let steady = 0;
   for (let i = 0; i < 12; i++) {
     if (i) await new Promise(r => setTimeout(r, 5000));
+    checkCancelled(id); // stop mid-verify aborts before any rollback restart
     let cs = [];
     try { cs = await appContainers(id); } catch { continue; }
     const rel = cs.filter(c => names.has(c.service));
@@ -1257,8 +1258,13 @@ async function deployNow(id, opts = {}) {
     }
   }
   try {
+    checkCancelled(id); // a stop during the build wins: never start containers afterwards
     await sh(`${composeCmd} up -d --remove-orphans${scopeSuffix} >> "${buildLog}" 2>&1`, dir);
   } catch (e) {
+    if (deployOps.get(id) && deployOps.get(id).cancelled) {
+      await recordDeploy(id, { sha, at: stamp(), status: 'error', error: 'deploy cancelled - the site was stopped mid-deploy; containers stay stopped' });
+      throw new Error('deploy cancelled - the site was stopped mid-deploy; containers stay stopped');
+    }
     await recordDeploy(id, { sha, at: stamp(), status: 'error', error: String(e.message).slice(-500) });
     throw e;
   }
@@ -2704,7 +2710,11 @@ app.post('/api/apps/:id/sync-github', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/stop', async (req, res) => {
-  try { await siteLifecycle(req.params.id, async () => { dbTools.stopAll(req.params.id); await sh(`${COMPOSE_BIN} stop`, appDir(APPS_DIR, req.params.id)); }); res.json({ ok: true }); }
+  try {
+    const cancelledDeploy = cancelDeploy(req.params.id);
+    await siteLifecycle(req.params.id, async () => { dbTools.stopAll(req.params.id); await sh(`${COMPOSE_BIN} stop`, appDir(APPS_DIR, req.params.id)); }, { allowDeploy: cancelledDeploy });
+    res.json({ ok: true, cancelledDeploy });
+  }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/start', async (req, res) => {
@@ -2962,8 +2972,23 @@ app.post('/api/apps/:id/env/defaults', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 function lifecycleError(message, status = 409) { return Object.assign(new Error(message), { status }); }
-async function siteLifecycle(id, action) {
-  if (creatingSites.has(id) || lifecycleLocks.has(id) || deployQueues.has(id) || deployLocks.has(id)) throw lifecycleError('wait for the current site operation to finish');
+// Stopping a site must work even mid-deploy: flag the in-flight deploy first,
+// then proceed. The deploy observes the flag at its next checkpoint (before
+// any container start/swap) and aborts, so stop wins instead of bouncing off
+// a busy queue. Only stop takes this path; destructive ops stay blocked.
+function cancelDeploy(id) {
+  const op = typeof deployOps !== 'undefined' ? deployOps.get(id) : null;
+  if (!op) return false;
+  op.cancelled = true;
+  return true;
+}
+function checkCancelled(id) {
+  const op = typeof deployOps !== 'undefined' ? deployOps.get(id) : null;
+  if (op && op.cancelled) throw new Error('deploy cancelled - the site was stopped mid-deploy; containers stay stopped');
+}
+async function siteLifecycle(id, action, opts = {}) {
+  const deployBusy = deployQueues.has(id) || deployLocks.has(id);
+  if (creatingSites.has(id) || lifecycleLocks.has(id) || (deployBusy && !opts.allowDeploy)) throw lifecycleError('wait for the current site operation to finish');
   lifecycleLocks.add(id);
   try { return await action(); } finally { lifecycleLocks.delete(id); }
 }
