@@ -29,6 +29,7 @@ const dockerfileProtection = require('./lib/dockerfile-protection');
 const siteIdentity = require('./lib/site-identity');
 const { refreshStandardDockerfile, standardDockerfileType } = require('./lib/dockerfiles');
 const { buildProfile, readBuildProfile, localBuildProfile, isJekyll } = require('./lib/build-profile');
+const preflight = require('./lib/preflight');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -1741,6 +1742,44 @@ app.get('/api/github/detect', async (req, res) => {
 app.post('/api/github/detect', async (req, res) => {
   try { res.json({ ...(await detectRepo(req.body.repo, { login: req.body.login, token: req.body.token, branch: req.body.branch })), via: 'token' }); }
   catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Preflight: static repository analysis before creation/deploy
+app.post('/api/github/preflight', async (req, res) => {
+  try {
+    const { repo, branch, token, type, subdir } = req.body;
+    if (!repo) return res.status(400).json({ error: 'repo required' });
+    // Clone to a temporary directory for analysis
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-preflight-'));
+    const isSsh = /^(git@|ssh:\/\/)/i.test(repo);
+    const url = isSsh ? repo : gh.authUrlFor(null, repo);
+    try {
+      execSync(`git clone --depth 1 ${branch ? `-b ${branch} ` : ''}${url} "${tmp}"`, { stdio: 'pipe', env: isSsh ? appGitEnv(tmp) : process.env });
+    } catch (e) {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      return res.status(400).json({ error: 'clone failed: ' + String(e.stderr || e.message).slice(-300) });
+    }
+    try {
+      const analysis = preflight.analyzeRepository(tmp, type, subdir);
+      const report = preflight.readinessReport(analysis);
+      res.json({ ...report, analysis });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Preflight for an existing site's code
+app.get('/api/apps/:id/preflight', (req, res) => {
+  try {
+    const meta = load().apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const dir = appDir(APPS_DIR, meta.id);
+    const codeDir = path.join(dir, 'code');
+    const analysis = preflight.analyzeRepository(codeDir, meta.type, meta.subdir);
+    const report = preflight.readinessReport(analysis);
+    res.json({ ...report, analysis });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/api/github/repos', async (req, res) => {
   // aggregate every connected account so 10 sites can live on 10 different githubs
