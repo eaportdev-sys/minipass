@@ -37,7 +37,7 @@ minipass turns a folder or git repo into a running site with one flow:
   every affected file and previews the exact import-only diff; approval is required.
   Ambiguous candidates, incomplete scans and unsupported imports get guidance,
   not guessed edits. Matching exports cannot prove intended behavior; review the
-  proposed destination. When a repository Dockerfile itself blocks the build —
+  proposed destination. When a repository or panel-managed Dockerfile blocks the build —
   a stale Node.js base image the package engines reject, install lifecycle
   scripts needing a git binary the image lacks, or client generation
   (e.g. `prisma generate`) needing an environment variable that only exists at

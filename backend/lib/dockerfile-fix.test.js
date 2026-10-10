@@ -128,6 +128,19 @@ try {
   assert(prismaText.indexOf('ARG DATABASE_URL=') < prismaText.indexOf('RUN npm install'), 'placeholder is declared before install');
   assert.equal(fix.suggest(root).length, 0, 'declared ARG satisfies the proposal');
 
+  // Panel-owned recipes use central upgrades for Node/tools, but still need a
+  // repository-specific, approved build placeholder for Prisma lifecycle work.
+  const PANEL_PRISMA_DF = '# minipass template\nFROM node:22-alpine\nWORKDIR /app\nCOPY . .\nRUN npm install\nRUN npm run build --if-present\n';
+  root = fixture({ Dockerfile: PANEL_PRISMA_DF, 'package.json': PRISMA_PKG, 'prisma/schema.prisma': PRISMA_SCHEMA });
+  fix.noteEvidence(root, PRISMA_ERROR);
+  const panelPrisma = fix.suggest(root)[0];
+  assert(panelPrisma && panelPrisma.kind === 'dockerfile-fix', 'panel recipe gets the evidence-backed env adaptation');
+  assert(panelPrisma.title.includes('panel-managed'));
+  assert(panelPrisma.preview.includes('+ ARG DATABASE_URL=postgresql://build:build@localhost:5432/build_placeholder'));
+  assert(!panelPrisma.preview.includes('node:24'), 'panel base-image changes stay in the central template flow');
+  fix.apply(root, panelPrisma);
+  assert(fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8').includes('ARG DATABASE_URL=postgresql://'));
+
   // Unknown provider: URL placeholders are refused, guidance instead.
   root = fixture({ Dockerfile: PRISMA_DF, 'package.json': PRISMA_PKG });
   fix.noteEvidence(root, PRISMA_ERROR);

@@ -128,14 +128,18 @@ function propose(ctxDir, errorText) {
   if (!sig.gitMissing && !sig.engineMismatch && !sig.missingEnv) return null;
   const df = readDockerfile(ctxDir);
   if (!df) return null;
-  if (panelSeeded(df.text)) return null; // panel-owned files use their own flow
+  const panelOwned = panelSeeded(df.text);
+  // Base-image/tool changes to panel templates belong in the central template
+  // upgrade flow. Build-time generator variables are repository-specific,
+  // though, so allow that one evidence-backed, previewed adaptation here.
+  if (panelOwned && !sig.missingEnv) return null;
   const lines = df.text.split('\n');
   const froms = nodeFroms(lines);
   if (!froms.length) {
     return { diagnostic: 'The build needs a newer Node.js runtime, a git binary or build-time environment, but this Dockerfile pins no node base image. Review its FROM lines manually; Minipass will not guess the intended image.' };
   }
-  const needBump = sig.engineMismatch && froms.some(f => f.major < sig.requiredMajor);
-  const needGit = sig.gitMissing && !froms.every(f => hasGit(lines, f.suffix));
+  const needBump = !panelOwned && sig.engineMismatch && froms.some(f => f.major < sig.requiredMajor);
+  const needGit = !panelOwned && sig.gitMissing && !froms.every(f => hasGit(lines, f.suffix));
   const provider = sig.missingEnv ? prismaProvider(ctxDir) : null;
   // URL placeholders need a valid scheme: only emit them when the schema
   // provider is known, otherwise warn and leave that variable alone.
@@ -200,11 +204,11 @@ function propose(ctxDir, errorText) {
   const changes = [bumped.length ? 'base image ' + bumped.join(', ') : null, insertion ? 'build-tool git before package install' : null,
     envArgs.length ? 'build-time ' + envArgs.map(e => e.line.split('=')[0].replace('ARG ', '')).join(', ') : null].filter(Boolean);
   return {
-    key, kind: 'dockerfile-fix', title: `Adapt the repository Dockerfile build environment${bumped.length ? ` (${bumped.join(', ')})` : ''}${insertion ? ' + git' : ''}${envArgs.length ? ' + build env' : ''}`,
+    key, kind: 'dockerfile-fix', title: `Adapt the ${panelOwned ? 'panel-managed' : 'repository'} Dockerfile build environment${bumped.length ? ` (${bumped.join(', ')})` : ''}${insertion ? ' + git' : ''}${envArgs.length ? ' + build env' : ''}`,
     detail: `Build evidence: ${[sig.engineMismatch ? `package engines require node >= ${sig.requiredMajor}` : null, sig.gitMissing ? 'install lifecycle scripts need a git binary' : null, needEnv.length ? `install scripts need build-time ${needEnv.join(', ')}` : null].filter(Boolean).join('; ')}. ` +
       `Only the build recipe changes (${changes.join('; ')}). ` +
       `Placeholders are ARG defaults for client generation during build only; the running container keeps the site's real environment, and the value is never read from your stored secrets. ` +
-      `Application source, lockfiles and the remote repository stay untouched. Approval is retained outside the checkout and revalidated on redeploy; upstream Dockerfile changes stop deployment for review. ` +
+      `Application source, lockfiles and the remote repository stay untouched. Approval is retained outside the checkout and revalidated on redeploy; ${panelOwned ? 'panel template or upstream Dockerfile' : 'upstream Dockerfile'} changes stop deployment for review. ` +
       (warnings.length ? warnings.join(' ') + ' ' : '') +
       `Fixing the repository itself remains the last resort if this adaptation cannot cover a failure.`,
     files: [df.name], preview: diff.slice(0, 60).join('\n'), revision: hash([before, fixed]), nextDeploy: 'local',
