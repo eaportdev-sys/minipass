@@ -3,13 +3,7 @@
 # Build stage includes BuildKit cache mount + git + generator placeholders.
 # Serve stage is pure nginx - no Node in production image.
 # syntax = docker/dockerfile:1.4
-FROM node:22-alpine AS build
-
-# Build tools stay in this stage; the serving image remains nginx-only.
-# git is required for Husky, Lefthook, and private registry auth during install.
-RUN apk add --no-cache python3 build-base autoconf automake libtool nasm pkgconf git
-
-WORKDIR /app
+FROM minipass/node:22 AS build
 
 # Build-time environment for generator scripts (prisma generate, etc.).
 # These are ARG defaults only; the running container uses the site's real env.
@@ -20,8 +14,9 @@ ARG DIRECT_URL
 # Copy package manifests first for optimal layer caching.
 COPY package*.json ./
 
-# Install dependencies with BuildKit npm cache mount.
-RUN --mount=type=cache,target=/root/.npm \
+# Install dependencies with SHARED npm cache mount (persistent across all sites/builds).
+# --prefer-offline uses cache when available, falls back to network.
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
     if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then \
       npm ci --prefer-offline; \
     else \

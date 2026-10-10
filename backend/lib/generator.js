@@ -344,7 +344,8 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
 // One app-service block. Primary ('app') renders exactly the legacy shape;
 // secondaries add a PORT override from their own PORT_<NAME> env key.
 // Build arg for BuildKit inline cache (helps cache import/export on rebuild).
-function serviceBlock({ svcName, ctx, port, host, portEnv }) {
+// Uses minipass base images for faster builds.
+function serviceBlock({ svcName, ctx, port, host, portEnv, type }) {
   const build = ctx === './code'
     ? '    build: ./code\n'
     : `    build:\n      context: ./${ctx}\n      dockerfile: Dockerfile\n`;

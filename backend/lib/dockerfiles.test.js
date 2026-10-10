@@ -103,11 +103,16 @@ try {
   for (const type of ['node', 'react']) {
     const template = fs.readFileSync(path.join(templates, type, 'Dockerfile'), 'utf8').replace(/\r\n/g, '\n');
     assert(template.startsWith('# minipass template'), `${type}: has marker`);
-    assert(template.includes('FROM node:22-alpine'), `${type}: uses Node 22`);
-    for (const tool of ['python3', 'build-base', 'autoconf', 'automake', 'libtool', 'nasm']) assert(template.includes(tool), `${type}: has ${tool}`);
-    assert(template.includes('git'), `${type}: has git`);
-    // Tools precede dependency installation
-    assert(template.indexOf('RUN apk add') < template.lastIndexOf('npm ci'), `${type}: tools precede dependency installation`);
+    if (type === 'node') {
+      assert(template.includes('FROM minipass/node:22'), 'node: uses minipass base image');
+      assert(template.includes('npm ci --prefer-offline'), 'node: uses npm ci with cache');
+      assert(template.includes('--mount=type=cache'), 'node: uses BuildKit cache mount');
+    } else {
+      assert(template.includes('FROM minipass/node:22 AS build'), 'react: uses minipass base image for build');
+      assert(template.includes('FROM nginx:alpine'), 'react: uses nginx for serving');
+      assert(template.includes('npm ci --prefer-offline'), 'react: uses npm ci with cache');
+    }
+    // Tools are in base image; template focuses on app build
     // Correct order: package manifests first, then install, then source (so lifecycle scripts have schemas)
     assert(template.indexOf('COPY package*.json') < template.lastIndexOf('npm ci'), `${type}: package manifests copied before install`);
     assert(template.lastIndexOf('npm ci') < template.indexOf('COPY . .'), `${type}: source copied after install for lifecycle scripts`);
@@ -118,9 +123,10 @@ try {
     assert(template.includes('ARG DIRECT_URL'), `${type}: has DIRECT_URL build arg`);
   }
 
-  // React-specific: runtime stage should not have apk add
+  // React-specific: runtime stage should use nginx for serving
   const reactTemplate = fs.readFileSync(path.join(templates, 'react', 'Dockerfile'), 'utf8').replace(/\r\n/g, '\n');
-  assert(!reactTemplate.split('FROM nginx:alpine')[1].includes('apk add'), 'React runtime does not contain the toolchain');
+  assert(reactTemplate.includes('FROM nginx:alpine'), 'React uses nginx for serving');
+  assert(reactTemplate.includes('COPY --from=build /app/dist'), 'React copies built assets');
   // React should have nginx.conf copy
   assert(reactTemplate.includes('COPY nginx.conf'), 'React template copies nginx.conf');
 
