@@ -339,7 +339,9 @@ function sh(cmd, cwd, env) {
 // reports the shell's reason instead of a bare exit code.
 function runOut(bin, args, opts = {}) {
   return new Promise((res, rej) => {
-    const p = spawn(bin, args, opts);
+    const { onSpawn, captureStderr, ...spawnOpts } = opts;
+    const p = spawn(bin, args, spawnOpts);
+    if (onSpawn) onSpawn(p);
     const chunks = [];
     const errChunks = [];
     let settled = false;
@@ -353,7 +355,7 @@ function runOut(bin, args, opts = {}) {
     };
     p.stdout.on('data', d => chunks.push(d));
     p.stderr.on('data', d => {
-      if (opts.captureStderr) chunks.push(d);
+      if (captureStderr) chunks.push(d);
       errChunks.push(d);
       if (errChunks.length > 32) errChunks.shift();
     });
@@ -668,17 +670,33 @@ const deployLocks = new Set();
 // Every trigger for one site goes through the same promise chain. A push that
 // arrives during a build waits its turn instead of failing with "already in progress".
 const deployQueues = new Map();
+// Stop invalidates every deploy already queued at that moment. A later,
+// explicit deploy captures the new epoch and may run normally.
+const deployEpochs = new Map();
+// Child processes owned by the active deploy. Kept separate from deployOps so
+// /status can serialize the public operation record without ChildProcess cycles.
+const deployChildren = new Map();
 // Live ops: id -> { source, startedAt } so the UI can show per-card progress
 // for server-side triggers (webhook/poll/local-push) with no browser involved.
 const deployOps = new Map();
 // Push receipts: id -> { phase, at }. The hook pings `received` before the
 // queued deploy starts so the UI immediately shows incoming work.
 const pushEvents = new Map();
+function deploySh(id, cmd, cwd, env) {
+  checkCancelled(id);
+  return new Promise((res, rej) => {
+    const child = exec(cmd, { cwd, env: env || process.env, maxBuffer: 10 * 1024 * 1024,
+      detached: process.platform !== 'win32' }, (e, stdout, stderr) => {
+      if (e) rej(new Error(stderr || e.message)); else res(stdout);
+    });
+    trackDeployChild(id, child);
+  });
+}
 // Container image IDs before a deploy, so a failed swap can retag + restart them.
-async function snapshotImages(dir) {
+async function snapshotImages(id, dir) {
   const snaps = [];
   try {
-    const out = await sh(`${COMPOSE_BIN} ps -q`, dir);
+    const out = await deploySh(id, `${COMPOSE_BIN} ps -q`, dir);
     for (const cid of out.trim().split('\n').filter(Boolean)) {
       try {
         const name = execSync(`docker inspect ${cid.trim()} --format '{{.Config.Image}}'`).toString().trim();
@@ -921,8 +939,12 @@ async function autodetectHome(id) {
 }
 function deploy(id, opts = {}) {
   if (lifecycleLocks.has(id)) return Promise.reject(new Error('site lifecycle operation in progress'));
+  const epoch = deployEpochs.get(id) || 0;
   const previous = deployQueues.get(id) || Promise.resolve();
-  const run = previous.catch(() => {}).then(() => deployNow(id, opts));
+  const run = previous.catch(() => {}).then(() => {
+    if ((deployEpochs.get(id) || 0) !== epoch) throw deployCancelledError();
+    return deployNow(id, opts);
+  });
   deployQueues.set(id, run);
   const clear = () => { if (deployQueues.get(id) === run) deployQueues.delete(id); };
   run.then(clear, clear);
@@ -938,7 +960,7 @@ async function rebindHostPorts(id, dir, meta, composeCmd) {
   const enabled = svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false && s.hostPort);
   if (!enabled.length) return [];
   let own = [];
-  try { own = String(await sh(`${composeCmd} ps -q`, dir)).split(/\s+/).map(s => s.trim()).filter(Boolean); }
+  try { own = String(await deploySh(id, `${composeCmd} ps -q`, dir)).split(/\s+/).map(s => s.trim()).filter(Boolean); }
   catch { own = []; }
   let bound;
   try {
@@ -997,6 +1019,7 @@ async function deployNow(id, opts = {}) {
       try { fs.appendFileSync(path.join(dir, 'deploy.log'), moved.map(u => `host port ${u.from} taken - ${u.service} moved to ${u.to}\n`).join('')); } catch {}
     }
   } catch (e) {
+    if (deployOps.get(id) && deployOps.get(id).cancelled) throw deployCancelledError();
     const shaRb = await currentSha(dir);
     await recordDeploy(id, { sha: shaRb, at: new Date().toISOString(), status: 'error', error: ('host port rebind failed - running containers untouched: ' + e.message).slice(-500) });
     throw e;
@@ -1042,7 +1065,7 @@ async function deployNow(id, opts = {}) {
       } else {
         let branch = (meta.github && meta.github.branch) || 'main';
         try { branch = execSync('git branch --show-current', { cwd: codeDir }).toString().trim() || branch; } catch {}
-        await sh(`git pull --ff-only "${url}" "${branch}"`, codeDir, env);
+        await deploySh(id, `git pull --ff-only "${url}" "${branch}"`, codeDir, env);
       }
     } catch (e) {
       let msg = redactUrl(e.stderr ? String(e.stderr) : e.message);
@@ -1052,6 +1075,7 @@ async function deployNow(id, opts = {}) {
         dockerfileProtection.run(dir, svc.fullServices(meta, dir), codeDir, 'replay', line => fs.appendFileSync(buildLog, line + '\n'));
       }
       catch (restoreError) { msg += '\nImport protection needs review: ' + restoreError.message; }
+      if (deployOps.get(id) && deployOps.get(id).cancelled) throw deployCancelledError();
       const sha0 = await currentSha(dir);
       await recordDeploy(id, { sha: sha0, at: new Date().toISOString(), status: 'error', error: ('git sync failed - running containers untouched: ' + msg).slice(-500) });
       throw new Error(msg);
@@ -1133,12 +1157,16 @@ async function deployNow(id, opts = {}) {
       prebuildService = s.name;
       if (item.blocked) throw new Error(`service '${s.name}' pre-build blocked - running containers untouched: ${item.blocked}`);
       fs.appendFileSync(buildLog, `--- pre-building service '${s.name}' folder '${s.subdir || '.'}' (${item.manager} run build) ${force ? 'after approved import correction' : `for missing '${item.outputDir}/'`} ---\n`);
+      const tracked = child => trackDeployChild(id, child);
       await prebuild.ensureBuilderImage(args => args[1] === 'pull'
-        ? runLogged(DOCKER_BIN, args, { cwd: dir, logFile: buildLog })
-        : runOut(DOCKER_BIN, args, { cwd: dir }));
-      await runLogged(DOCKER_BIN, prebuild.argv(ctxDir, item), { cwd: dir, logFile: buildLog });
+        ? runLogged(DOCKER_BIN, args, { cwd: dir, logFile: buildLog, detached: process.platform !== 'win32', onSpawn: tracked })
+        : runOut(DOCKER_BIN, args, { cwd: dir, detached: process.platform !== 'win32', onSpawn: tracked }));
+      checkCancelled(id);
+      await runLogged(DOCKER_BIN, prebuild.argv(ctxDir, item), { cwd: dir, logFile: buildLog,
+        detached: process.platform !== 'win32', onSpawn: tracked });
     }
   } catch (e) {
+    if (deployOps.get(id) && deployOps.get(id).cancelled) throw deployCancelledError();
     const shaPb = sourceSha || await currentSha(dir);
     const failure = panelLog.redact(`pre-build failed${prebuildService ? ` for service '${prebuildService}'` : ''} - running containers untouched: ` + e.message).slice(0, 2000);
     await recordDeploy(id, { sha: shaPb, at: new Date().toISOString(), status: 'error', service: prebuildService, error: failure });
@@ -1217,13 +1245,20 @@ async function deployNow(id, opts = {}) {
   const stamp = () => new Date().toISOString();
   // atomic deploy: snapshot running images, build WITHOUT touching containers,
   // swap only on success, health-gate the new containers, roll back on failure.
-  const snaps = await snapshotImages(dir);
+  const snaps = await snapshotImages(id, dir);
+  checkCancelled(id);
   const scopeSuffix = scope ? ` ${scope}` : '';
   fs.appendFileSync(buildLog, '--- Docker image build ---\n');
   const buildOffset = fs.statSync(buildLog).size;
   try {
-    await sh(`${composeCmd} build${scopeSuffix} >> "${buildLog}" 2>&1`, dir);
+    await deploySh(id, `${composeCmd} build${scopeSuffix} >> "${buildLog}" 2>&1`, dir);
   } catch (e) {
+    if (deployOps.get(id) && deployOps.get(id).cancelled) {
+      const cancelled = 'deploy cancelled - active build terminated and containers stay stopped';
+      try { fs.appendFileSync(buildLog, `\n--- ${cancelled} ---\n`); } catch {}
+      await recordDeploy(id, { sha, at: stamp(), status: 'error', error: cancelled });
+      throw deployCancelledError();
+    }
     let tail = '';
     try {
       const lines = fs.readFileSync(buildLog).subarray(buildOffset).toString('utf8').split('\n');
@@ -1247,9 +1282,12 @@ async function deployNow(id, opts = {}) {
     const migrateSvc = migrateTarget(meta, dir, meta.migrateSvc);
     const argv = migrateRunArgv(migrateSvc, meta.migrateDir || '', migrateCmd);
     try {
-      const out = await runOut(argv[0], argv.slice(1), { cwd: dir, captureStderr: true });
+      checkCancelled(id);
+      const out = await runOut(argv[0], argv.slice(1), { cwd: dir, captureStderr: true,
+        detached: process.platform !== 'win32', onSpawn: child => trackDeployChild(id, child) });
       try { fs.appendFileSync(buildLog, `\n--- migrate (${migrateSvc}) ---\n` + String(out).slice(-2000)); } catch {}
     } catch (e) {
+      if (deployOps.get(id) && deployOps.get(id).cancelled) throw deployCancelledError();
       const reason = migrationFailure(e);
       const failure = migrationResponse('migration failed - running containers untouched: ', e);
       try { fs.appendFileSync(buildLog, `\n--- migrate failed (${migrateSvc}) ---\n${reason}\n`); } catch {}
@@ -1259,7 +1297,7 @@ async function deployNow(id, opts = {}) {
   }
   try {
     checkCancelled(id); // a stop during the build wins: never start containers afterwards
-    await sh(`${composeCmd} up -d --remove-orphans${scopeSuffix} >> "${buildLog}" 2>&1`, dir);
+    await deploySh(id, `${composeCmd} up -d --remove-orphans${scopeSuffix} >> "${buildLog}" 2>&1`, dir);
   } catch (e) {
     if (deployOps.get(id) && deployOps.get(id).cancelled) {
       await recordDeploy(id, { sha, at: stamp(), status: 'error', error: 'deploy cancelled - the site was stopped mid-deploy; containers stay stopped' });
@@ -1289,13 +1327,19 @@ async function deployNow(id, opts = {}) {
     }
     throw e;
   } finally {
-    try {
-      const retained = load().apps.find(a => a.id === id);
-      if (retained) await trashLib.rememberImages({ id, dir: appDir(APPS_DIR, id), record: retained, docker: DOCKER_BIN, compose: composeArgv() });
-    } catch (e) { console.error(id, 'image inventory unavailable:', e.message); }
+    const cancelled = !!(deployOps.get(id) && deployOps.get(id).cancelled);
     if (localStage) localStage.cleanup();
+    deployChildren.delete(id);
     deployLocks.delete(id);
     deployOps.delete(id);
+    // Cancellation must clear live UI state immediately; no image was swapped,
+    // so the optional post-deploy inventory is unnecessary and must not delay Stop.
+    if (!cancelled) {
+      try {
+        const retained = load().apps.find(a => a.id === id);
+        if (retained) await trashLib.rememberImages({ id, dir: appDir(APPS_DIR, id), record: retained, docker: DOCKER_BIN, compose: composeArgv() });
+      } catch (e) { console.error(id, 'image inventory unavailable:', e.message); }
+    }
   }
 }
 
@@ -2972,19 +3016,56 @@ app.post('/api/apps/:id/env/defaults', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 function lifecycleError(message, status = 409) { return Object.assign(new Error(message), { status }); }
-// Stopping a site must work even mid-deploy: flag the in-flight deploy first,
-// then proceed. The deploy observes the flag at its next checkpoint (before
-// any container start/swap) and aborts, so stop wins instead of bouncing off
-// a busy queue. Only stop takes this path; destructive ops stay blocked.
+function deployCancelledError() {
+  return new Error('deploy cancelled - the site was stopped mid-deploy; containers stay stopped');
+}
+function trackDeployChild(id, child) {
+  if (!child) return child;
+  let children = deployChildren.get(id);
+  if (!children) { children = new Set(); deployChildren.set(id, children); }
+  children.add(child);
+  child.once('close', () => {
+    const current = deployChildren.get(id);
+    if (!current) return;
+    current.delete(child);
+    if (!current.size) deployChildren.delete(id);
+  });
+  // Stop may have raced the spawn by a few microtasks.
+  const op = deployOps.get(id);
+  if (op && op.cancelled) killProcessTree(child);
+  return child;
+}
+function killProcessTree(child) {
+  if (!child || !child.pid) return;
+  // Deploy commands run as their own process group on Linux. Killing the group
+  // terminates the shell, docker compose, and its active build client together.
+  if (process.platform !== 'win32') {
+    try { process.kill(-child.pid, 'SIGTERM'); } catch { try { child.kill('SIGTERM'); } catch {} }
+    const timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }, 2000);
+    if (timer.unref) timer.unref();
+  } else {
+    try { execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); }
+    catch { try { child.kill('SIGTERM'); } catch {} }
+  }
+}
+function killDeployChildren(id) {
+  for (const child of [...(deployChildren.get(id) || [])]) killProcessTree(child);
+}
+// Stopping a site must work even mid-deploy: invalidate queued work, terminate
+// active deploy processes, then stop containers. Only stop takes this path;
+// destructive operations remain blocked while deployment work drains.
 function cancelDeploy(id) {
-  const op = typeof deployOps !== 'undefined' ? deployOps.get(id) : null;
-  if (!op) return false;
-  op.cancelled = true;
+  const op = deployOps.get(id);
+  const busy = !!op || deployQueues.has(id) || deployLocks.has(id);
+  if (!busy) return false;
+  deployEpochs.set(id, (deployEpochs.get(id) || 0) + 1);
+  if (op) op.cancelled = true;
+  killDeployChildren(id);
   return true;
 }
 function checkCancelled(id) {
-  const op = typeof deployOps !== 'undefined' ? deployOps.get(id) : null;
-  if (op && op.cancelled) throw new Error('deploy cancelled - the site was stopped mid-deploy; containers stay stopped');
+  const op = deployOps.get(id);
+  if (op && op.cancelled) throw deployCancelledError();
 }
 async function siteLifecycle(id, action, opts = {}) {
   const deployBusy = deployQueues.has(id) || deployLocks.has(id);

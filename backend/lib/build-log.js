@@ -16,7 +16,7 @@ function failureSummary(text) {
   return [...new Set(causes.length ? causes : lines.slice(-12))].slice(0, 8)
     .map(line => line.slice(0, 500)).join('\n').slice(0, 1600);
 }
-function runLogged(bin, args, { cwd, env = process.env, logFile } = {}) {
+function runLogged(bin, args, { cwd, env = process.env, logFile, detached = false, onSpawn } = {}) {
   return new Promise((resolve, reject) => {
     let fd;
     let child;
@@ -53,7 +53,8 @@ function runLogged(bin, args, { cwd, env = process.env, logFile } = {}) {
     };
     try {
       fd = fs.openSync(logFile, 'a');
-      child = spawn(bin, args, { cwd, env });
+      child = spawn(bin, args, { cwd, env, detached });
+      if (onSpawn) onSpawn(child);
       child.stdout.on('data', data => receive(channels[0], data));
       child.stderr.on('data', data => receive(channels[1], data));
       child.on('error', finish);
