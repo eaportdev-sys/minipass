@@ -331,7 +331,8 @@ Tokens stay server-side; the API never echoes them back.
 
 - **Environment tab**: generated keys are managed (read-only except `DOMAIN`);
   custom keys are fully editable and save pending a redeploy. The panel privately
-  snapshots each service's `.env`/`.env.example` when first discovered;
+  snapshots each service's `.env`, `.env.example`, and recognized
+  `.env.<mode>.example` files when first discovered;
   **Load defaults** restores missing keys from that stable snapshot. It maps localhost frontend/API
   URLs to the correct published service and replaces JWT/session-style secret
   placeholders with cryptographically random values. Repository files, existing

@@ -18,6 +18,13 @@ try {
     'DEV_DB_PSW=development database password',
     'NODE_ENV=development'
   ].join('\n'));
+  fs.writeFileSync(path.join(tmp, 'server', '.env.dev.example'), [
+    'WHITE_LIST_URLS=http://localhost:3000,http://localhost:4000,http://localhost:5173',
+    'JWT_SECRET=replace-with-a-random-string-at-least-32-chars',
+    'MODE_VALUE=development',
+    'DEV_ONLY=available'
+  ].join('\n'));
+  fs.writeFileSync(path.join(tmp, 'server', '.env.production.example'), 'MODE_VALUE=production\n');
   fs.writeFileSync(path.join(tmp, 'client', '.env.example'), [
     'VITE_API_URL=http://localhost:3000/api',
     'REMOTE_ASSET_URL=https://cdn.example.test/assets',
@@ -36,6 +43,10 @@ try {
   const snapshot = envDefaults.snapshotDefaults(stateDir, tmp, services);
   assert(snapshot.sources.includes('server/.env'));
   assert(snapshot.sources.includes('server/.env.example'));
+  assert(snapshot.sources.includes('server/.env.dev.example'));
+  assert(snapshot.sources.includes('server/.env.production.example'));
+  assert.equal(snapshot.values.MODE_VALUE, 'production', 'production example wins overlapping development values');
+  assert.equal(snapshot.values.DEV_ONLY, 'available', 'mode-specific examples still fill unique keys');
   assert.equal(snapshot.values.FROM_REPO_ENV, 'kept-once');
   assert.equal(snapshot.values.API_SECRET, 'actual-local-secret');
   assert(snapshot.originals.API_SECRET.includes(''));
@@ -50,6 +61,7 @@ try {
   const runtime = { DB_HOST: 'db', DB_PORT: '3306', DB_NAME: 'sample', DB_USER: 'sample-user', DB_PASSWORD: 'generated-password' };
   const result = envDefaults.resolvedDefaults(tmp, services, origins, unchanged.values, unchanged.originals, runtime);
   assert.equal(result.values.CORS_ORIGIN, origins.frontend);
+  assert.equal(result.values.WHITE_LIST_URLS, origins.frontend, 'localhost allowlist entries collapse to the published frontend');
   assert.equal(result.values.APP_URL, origins.frontend);
   assert.equal(result.values.VITE_API_URL, origins.backend + '/api');
   assert.equal(result.values.ODD_SERVICE, origins.backend + '/v1');
@@ -71,6 +83,10 @@ try {
   assert.equal(envDefaults.correctedValue('JWT_SECRET', 'real-user-secret', result, origins), null);
   assert.equal(envDefaults.correctedValue('APP_URL', 'https://custom.example', result, origins), null);
   assert.equal(envDefaults.frontendOrigin([{ type: 'node', hostPort: 8002 }], '10.0.0.250', 'http'), null);
+  const backendOnlyOrigins = envDefaults.publishedOrigins([services[0]], '10.0.0.250', 'http');
+  const backendOnly = envDefaults.resolvedDefaults(tmp, [services[0]], backendOnlyOrigins, snapshot.values, snapshot.originals, runtime);
+  assert.equal(backendOnly.values.WHITE_LIST_URLS, 'http://10.0.0.250:8002', 'API-only allowlists use their published backend origin');
+  assert(envDefaults.exampleFiles(path.join(tmp, 'server')).includes('.env.dev.example'));
   console.log('repository environment defaults and frontend origins: OK');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });

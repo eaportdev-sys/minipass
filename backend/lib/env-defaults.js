@@ -9,10 +9,11 @@ const BUILT_INS = {
   TRUST_PROXY: '1'
 };
 
-const FRONTEND_ORIGIN_KEYS = /^(?:CORS_(?:ALLOWED_)?ORIGINS?|ALLOWED_ORIGINS?|FRONTEND_(?:URL|ORIGIN)|CLIENT_(?:URL|ORIGIN)|WEB_(?:URL|ORIGIN))$/i;
+const FRONTEND_ORIGIN_KEYS = /^(?:CORS_(?:ALLOWED_)?ORIGINS?|ALLOWED_ORIGINS?|WHITE_LIST_(?:URLS?|ORIGINS?)|FRONTEND_(?:URL|ORIGIN)|CLIENT_(?:URL|ORIGIN)|WEB_(?:URL|ORIGIN))$/i;
 const BACKEND_ORIGIN_KEYS = /(?:^|_)(?:API|BACKEND|SERVER)(?:_BASE)?_(?:URL|ORIGIN)$/i;
 const LOCAL_SECRET_KEYS = /^(?:(?:JWT|SESSION|COOKIE|AUTH|NEXTAUTH|CSRF|APP|ACCESS_TOKEN|REFRESH_TOKEN)(?:_[A-Z0-9]+)*_SECRET|SECRET_KEY|ENCRYPTION_KEY|SIGNING_KEY)$/i;
-const SECRET_PLACEHOLDER = /^(?:|secret|changeme|change[-_ ]?me|change[-_ ]?this.*|replace[-_ ]?me.*|your[-_ ].*(?:secret|key)|.*random[-_ ]?secret.*|.*secret[-_ ]?here)$/i;
+const SECRET_PLACEHOLDER = /^(?:|secret|changeme|change[-_ ]?me|change[-_ ]?this.*|replace[-_ ]?(?:me|with).*|your[-_ ].*(?:secret|key)|.*random[-_ ]?secret.*|.*secret[-_ ]?here)$/i;
+const MAX_SOURCE_BYTES = 256 * 1024;
 
 function parseExample(text) {
   const out = [];
@@ -27,7 +28,31 @@ function parseExample(text) {
   return out;
 }
 
-// Read every enabled service's own example. Runtime .env stays outside code/
+// Recognize conventional generic and mode-specific examples without scanning
+// nested files. Lower-priority development variants fill gaps; generic and
+// production variants win when the same key is declared more than once.
+function exampleFiles(dir) {
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  const rank = name => {
+    const m = name.match(/^\.env(?:\.([A-Za-z0-9_-]{1,32}))?\.example$/);
+    if (!m) return null;
+    const mode = String(m[1] || '').toLowerCase();
+    if (mode === 'dev' || mode === 'development') return 0;
+    if (mode === 'prod' || mode === 'production') return 3;
+    return mode ? 1 : 2;
+  };
+  return names.map(name => ({ name, rank: rank(name) })).filter(x => x.rank != null)
+    .filter(x => {
+      try {
+        const stat = fs.lstatSync(path.join(dir, x.name));
+        return stat.isFile() && !stat.isSymbolicLink() && stat.size <= MAX_SOURCE_BYTES;
+      } catch { return false; }
+    })
+    .sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name)).map(x => x.name);
+}
+
+// Read every enabled service's own examples. Runtime .env stays outside code/
 // and is never treated as a source of defaults; repository secrets should not
 // be copied merely because an operator clicked Load defaults.
 function exampleDefaults(codeDir, services) {
@@ -38,11 +63,11 @@ function exampleDefaults(codeDir, services) {
     const dir = path.resolve(codeDir, service.subdir || '');
     if (seenDirs.has(dir)) continue;
     seenDirs.add(dir);
-    try {
-      for (const item of parseExample(fs.readFileSync(path.join(dir, '.env.example'), 'utf8'))) {
-        if (!Object.prototype.hasOwnProperty.call(values, item.key)) values[item.key] = item.value;
-      }
-    } catch {}
+    for (const name of exampleFiles(dir)) {
+      try {
+        for (const item of parseExample(fs.readFileSync(path.join(dir, name), 'utf8'))) values[item.key] = item.value;
+      } catch {}
+    }
   }
   return values;
 }
@@ -69,12 +94,16 @@ function snapshotDefaults(appDir, codeDir, services) {
     const dir = path.resolve(codeDir, subdir);
     if (dir !== root && !dir.startsWith(root + path.sep)) continue;
     const discovered = {};
-    // Example first, then a repository .env wins within the same service.
-    for (const name of ['.env.example', '.env']) {
+    // Examples first (production-specific last), then repository .env wins
+    // within the same service. Each source path is captured at most once.
+    for (const name of [...exampleFiles(dir), '.env']) {
       const source = (subdir ? subdir + '/' : '') + name;
       if (seen.has(source)) continue;
       try {
-        for (const item of parseExample(fs.readFileSync(path.join(dir, name), 'utf8'))) {
+        const file = path.join(dir, name);
+        const stat = fs.lstatSync(file);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SOURCE_BYTES) continue;
+        for (const item of parseExample(fs.readFileSync(file, 'utf8'))) {
           discovered[item.key] = item.value;
           if (!Array.isArray(snapshot.originals[item.key])) snapshot.originals[item.key] = [];
           if (!snapshot.originals[item.key].includes(item.value)) snapshot.originals[item.key].push(item.value);
@@ -160,10 +189,11 @@ function rewriteDefault(key, value, origins) {
   const name = String(key || '');
   // CORS lists can contain more than one origin. Keep declared non-local
   // entries, replacing only local-development entries with the live frontend.
-  if (/^(?:CORS_(?:ALLOWED_)?ORIGINS?|ALLOWED_ORIGINS?)$/i.test(name) && origins.frontend) {
+  if (/^(?:CORS_(?:ALLOWED_)?ORIGINS?|ALLOWED_ORIGINS?|WHITE_LIST_(?:URLS?|ORIGINS?))$/i.test(name) && (origins.frontend || origins.backend)) {
+    const target = origins.frontend || origins.backend;
     let changed = false;
     const list = String(value || '').split(',').map(item => {
-      const next = rewriteUrl(item.trim(), origins.frontend, true);
+      const next = rewriteUrl(item.trim(), target, true);
       if (next) changed = true;
       return next || item.trim();
     });
@@ -249,4 +279,4 @@ function correctedValue(key, current, resolved, origins) {
   return originals.includes(value) && resolved.values[key] !== value ? resolved.values[key] : null;
 }
 
-module.exports = { BUILT_INS, parseExample, exampleDefaults, snapshotDefaults, frontendOrigin, publishedOrigins, pointsAtFrontend, secureDefault, databaseAlias, resolvedDefaults, correctedValue };
+module.exports = { BUILT_INS, parseExample, exampleFiles, exampleDefaults, snapshotDefaults, frontendOrigin, publishedOrigins, pointsAtFrontend, secureDefault, databaseAlias, resolvedDefaults, correctedValue };
