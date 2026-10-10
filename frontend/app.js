@@ -450,7 +450,7 @@ async function applyRemediation(i) {
     body: s.kind === 'import-repair'
       ? `${s.title}. Files: ${(s.files || []).join(', ')}. The approved import-only repair is retained outside Git and revalidated on redeploy. Changed or ambiguous source stops for review. Your remote repo stays untouched. Use local rebuild now.\n\n${s.preview || ''}`
       : s.kind === 'dockerfile-fix'
-      ? `${s.title}. Files: ${(s.files || []).join(', ')}. The approved build-environment adaptation is retained outside Git and revalidated on redeploy. Only the base image tag and build tools change; application source stays untouched. Your remote repo stays untouched. Use local rebuild now.\n\n${s.preview || ''}`
+      ? `${s.title}. Files: ${(s.files || []).join(', ')}. The approved build-environment adaptation is retained outside Git and revalidated on redeploy. Only the previewed build recipe changes (base image, build tools, or build-time placeholders); application source stays untouched. Your remote repo stays untouched. Use local rebuild now.\n\n${s.preview || ''}`
       : `${s.title}. Writes box files only (${(s.files || []).join(', ')}) — use local rebuild afterwards to preserve box edits. Your remote repo stays untouched until you commit.`,
     confirmLabel: s.kind === 'import-repair' ? 'Apply imports' : s.kind === 'dockerfile-fix' ? 'Apply Dockerfile fix' : 'Apply fix'
   });
