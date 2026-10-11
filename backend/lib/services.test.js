@@ -3,7 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { needsDockerfileOptIn } = require('./generator');
-const { fullServices } = require('./services');
+const { fullServices, renderProject } = require('./services');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-services-'));
 try {
@@ -22,6 +22,35 @@ try {
   const legacy = fullServices({ type: 'react' }, tmp);
   assert.equal(legacy[0].subdir, 'client', 'legacy ././code context retains its real subfolder');
   assert.equal(legacy[0].port, 80);
+
+  const bad = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-services-bad-compose-'));
+  try {
+    fs.mkdirSync(path.join(bad, 'code'), { recursive: true });
+    fs.writeFileSync(path.join(bad, 'code', 'Dockerfile'), 'FROM node:22-alpine\nEXPOSE 3000\n');
+    fs.writeFileSync(path.join(bad, '.env'), 'HOST_PORT=8012\n');
+    fs.writeFileSync(path.join(bad, 'docker-compose.yml'), `services:
+  app:
+    build: ./code
+    build:
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    ports:
+      - "8012:3000"
+    expose:
+      - "3000"
+  db-mariadb:
+    image: mariadb:11.8
+
+volumes:
+  dbdata-mariadb:
+`);
+    renderProject({ dir: bad, templatesDir: path.resolve(__dirname, '../../templates'), meta: { type: 'node', hostPort: 8012 } });
+    const repaired = fs.readFileSync(path.join(bad, 'docker-compose.yml'), 'utf8');
+    const appBlock = repaired.match(/  app:\n([\s\S]*?)(?:\n  [a-z0-9-]+:|\nvolumes:|$)/)[1];
+    assert.equal((appBlock.match(/^    build:/gm) || []).length, 1, 'renderProject repairs duplicate build keys');
+    assert(appBlock.includes('BUILDKIT_INLINE_CACHE: 1'), 'inline cache arg is retained inside the single build block');
+    assert(repaired.includes('  db-mariadb:'), 'database services are preserved while repairing app compose');
+  } finally { fs.rmSync(bad, { recursive: true, force: true }); }
 
   const api = path.join(tmp, 'code', 'server');
   fs.mkdirSync(api, { recursive: true });

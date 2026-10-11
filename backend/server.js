@@ -1005,6 +1005,21 @@ async function deployNow(id, opts = {}) {
   // One log per attempt. Clear before any preflight/pre-build output, not just
   // before Docker build (which used to erase successful pre-build evidence).
   fs.writeFileSync(buildLog, `--- deploy ${opSource} started ${new Date().toISOString()} ---\n`);
+  // Normalize/repair the persisted project compose before the first docker
+  // compose command. Older builds briefly wrote duplicate `build:` keys; if the
+  // bad file is already on disk, even harmless `compose ps` during port rebind
+  // fails before later service rendering can heal it.
+  try {
+    const ymlPath = path.join(dir, 'docker-compose.yml');
+    const before = fs.existsSync(ymlPath) ? fs.readFileSync(ymlPath, 'utf8') : '';
+    svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
+    const after = fs.existsSync(ymlPath) ? fs.readFileSync(ymlPath, 'utf8') : '';
+    if (before && before !== after) fs.appendFileSync(buildLog, '--- project compose normalized before deploy ---\n');
+  } catch (e) {
+    const sha = await currentSha(dir);
+    await recordDeploy(id, { sha, at: new Date().toISOString(), status: 'error', error: ('compose repair failed - running containers untouched: ' + e.message).slice(-500) });
+    throw e;
+  }
   await quotas.ensure(meta);
   if (meta.storageQuota) await quotas.verifyDatabases(meta.id, dir);
   let buildCodeDir = codeDir;
