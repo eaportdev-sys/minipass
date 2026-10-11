@@ -27,8 +27,28 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
 COPY . .
 
 # Build the production bundle. Vite emits dist/, CRA emits build/.
-# Normalize to dist/ for the nginx stage.
-RUN npm run build && (test -d dist || (test -d build && mv build dist) || (echo "BUILD PRODUCED NO dist/ or build/ - add a build script emitting one of them or pick another type" && exit 1))
+# Root build scripts for full-stack repos sometimes emit exactly one nested
+# frontend bundle (for example web/dist or client/build); normalize that too
+# instead of forcing a separate service when the repository already builds root.
+RUN npm run build && \
+    if [ -d dist ]; then \
+      true; \
+    elif [ -d build ]; then \
+      mv build dist; \
+    else \
+      outputs="$(find . \
+        -path './node_modules' -prune -o \
+        -path '*/node_modules' -prune -o \
+        -mindepth 3 -maxdepth 4 -type f \( -path '*/dist/index.html' -o -path '*/build/index.html' \) -print)"; \
+      count="$(printf '%s\n' "$outputs" | sed '/^$/d' | wc -l | tr -d ' ')"; \
+      if [ "$count" = "1" ]; then \
+        out="$(dirname "$(printf '%s\n' "$outputs" | sed '/^$/d' | head -n 1)")"; \
+        cp -a "$out" dist; \
+      else \
+        echo "BUILD PRODUCED NO root dist/ or build/. Found $count nested frontend outputs; set the build folder or make the root build emit one dist/."; \
+        exit 1; \
+      fi; \
+    fi
 
 # Serve stage: pure nginx, no Node.js
 FROM nginx:alpine

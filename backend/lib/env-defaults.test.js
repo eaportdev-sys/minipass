@@ -100,6 +100,12 @@ try {
   const repairedSnapshot = envDefaults.snapshotDefaults(legacyState, tmp, services);
   assert.equal(repairedSnapshot.values.VITE_API_URL, 'http://localhost:3000/api', 'service env examples override stale root-only legacy snapshots');
   assert(repairedSnapshot.sources.includes('client/.env.example'));
+
+  const rootState = path.join(tmp, 'root-panel-state');
+  fs.mkdirSync(rootState);
+  const rootOwned = envDefaults.snapshotDefaults(rootState, tmp, [{ name: 'app', subdir: '', type: 'react', port: 80, hostPort: 8010, enabled: true }]);
+  assert(rootOwned.sources.includes('client/.env.example'), 'root service captures nested frontend env examples it builds');
+  assert(rootOwned.sources.includes('server/.env.example'), 'root service captures nested backend env examples it builds');
   console.log('repository environment defaults and frontend origins: OK');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });

@@ -127,6 +127,7 @@ try {
   const reactTemplate = fs.readFileSync(path.join(templates, 'react', 'Dockerfile'), 'utf8').replace(/\r\n/g, '\n');
   assert(reactTemplate.includes('FROM nginx:alpine'), 'React uses nginx for serving');
   assert(reactTemplate.includes('COPY --from=build /app/dist'), 'React copies built assets');
+  assert(reactTemplate.includes('*/dist/index.html'), 'React can normalize a single nested frontend dist output');
   // React should have nginx.conf copy
   assert(reactTemplate.includes('COPY nginx.conf'), 'React template copies nginx.conf');
 

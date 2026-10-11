@@ -89,9 +89,33 @@ function snapshotDefaults(appDir, codeDir, services) {
   const legacyRootCapture = !Object.keys(snapshot.keySources).length && snapshot.sources.some(s => /^\.env(?:\.[A-Za-z0-9_-]{1,32})?\.example$/.test(s) || s === '.env');
   const seen = new Set(snapshot.sources);
   const root = path.resolve(codeDir);
-  let changed = false;
+  const expandedServices = [];
+  const addService = service => {
+    const subdir = String(service.subdir || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    const key = `${service.name || 'app'}:${subdir}`;
+    if (expandedServices.some(s => `${s.name || 'app'}:${String(s.subdir || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')}` === key)) return;
+    expandedServices.push({ ...service, subdir });
+  };
   for (const service of services || []) {
     if (service.enabled === false) continue;
+    addService(service);
+    const ownsRoot = !String(service.subdir || '').trim();
+    if (!ownsRoot) continue;
+    // A root service owns the whole repository. Capture immediate child env
+    // examples too so root build scripts that build nested web/api packages do
+    // not lose their declared defaults.
+    let entries = [];
+    try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch {}
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith('.') || ['node_modules', 'dist', 'build', 'vendor'].includes(e.name)) continue;
+      const child = path.join(root, e.name);
+      let hasEnv = exampleFiles(child).length > 0;
+      try { hasEnv = hasEnv || fs.lstatSync(path.join(child, '.env')).isFile(); } catch {}
+      if (hasEnv) addService({ ...service, subdir: e.name });
+    }
+  }
+  let changed = false;
+  for (const service of expandedServices) {
     const subdir = String(service.subdir || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
     const dir = path.resolve(codeDir, subdir);
     if (dir !== root && !dir.startsWith(root + path.sep)) continue;
