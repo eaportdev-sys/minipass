@@ -18,4 +18,5 @@ host/__pycache__/
 .host-upgrade.lock
 ~$*
 *.xlsx
+tunnel-add.sh
 .opencode/plugins/minipass-roadmap-guard/
