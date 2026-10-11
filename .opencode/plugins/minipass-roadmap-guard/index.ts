@@ -4,50 +4,74 @@ import path from "node:path"
 
 const MAX_DOC_BYTES = 24_000
 
-function readFile(root: string, name: string) {
+type PluginContext = Parameters<Parameters<typeof Plugin.define>[0]["setup"]>[0]
+
+function repoRoot(ctx: PluginContext) {
+  return ctx.location.project?.canonical || ctx.location.project?.directory || ctx.location.directory
+}
+
+function readRepoFile(root: string, name: string) {
+  const file = path.join(root, name)
   try {
-    const file = path.join(root, name)
     const stat = fs.statSync(file)
     if (!stat.isFile()) return { path: file, text: "" }
     const text = fs.readFileSync(file, "utf8")
-    return { path: file, text: text.length > MAX_DOC_BYTES ? text.slice(0, MAX_DOC_BYTES) + "\n\n[truncated by roadmap guard]" : text }
+    return {
+      path: file,
+      text: text.length > MAX_DOC_BYTES ? `${text.slice(0, MAX_DOC_BYTES)}\n\n[truncated by minipass-roadmap-guard]` : text,
+    }
   } catch {
-    return { path: path.join(root, name), text: "" }
+    return { path: file, text: "" }
   }
 }
 
+function section(markdown: string, heading: string) {
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const match = markdown.match(new RegExp(`^##\\s+${escaped}\\s*\\r?\\n([\\s\\S]*?)(?=\\r?\\n##\\s+|$)`, "im"))
+  return (match?.[1] || "").trim()
+}
+
 function approved(task: string) {
-  return /^\s*Status\s*\n+\s*Approved\s*$/im.test(task) || /^\s*Status\s*:\s*Approved\s*$/im.test(task)
+  const status = section(task, "Status")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)[0]
+  return /^approved$/i.test(status || "") || /^\s*status\s*:\s*approved\s*$/im.test(task)
 }
 
 function taskTitle(task: string) {
-  const match = task.match(/^##\s+Task\s*\n+([\s\S]*?)(?:\n##\s+|$)/im)
-  return (match?.[1] || "No current task declared").trim().split("\n").filter(Boolean)[0] || "No current task declared"
+  return (
+    section(task, "Task")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)[0] || "No current task declared"
+  )
 }
 
 function allowedFiles(task: string) {
-  const match = task.match(/^##\s+Allowed files\s*\n+([\s\S]*?)(?:\n##\s+|$)/im)
-  if (!match) return []
-  return match[1]
+  return section(task, "Allowed files")
     .split(/\r?\n/)
-    .map((line) => line.replace(/^\s*-\s*/, "").trim())
+    .map((line) => line.replace(/^\s*-\s*/, "").replace(/^`|`$/g, "").trim())
     .filter(Boolean)
 }
 
-function riskyTool(name: string) {
-  return /(^|[_-])(write|edit|patch|apply|shell|bash|exec|execute|delete|remove|move|rename|commit|push|subagent)([_-]|$)/i.test(name)
+function formatList(items: string[], fallback: string) {
+  return items.length ? items.map((item) => `- ${item}`).join("\n") : `- ${fallback}`
 }
 
 export default Plugin.define({
   id: "minipass-roadmap-guard",
   async setup(ctx) {
-    const root = ctx.location.project?.canonical || ctx.location.project?.directory || ctx.location.directory
+    const root = repoRoot(ctx)
 
     const load = () => {
-      const roadmap = readFile(root, "ROADMAP.md")
-      const task = readFile(root, "CURRENT_TASK.md")
-      const agents = readFile(root, "AGENTS.md")
-      return { roadmap, task, agents, isApproved: approved(task.text), title: taskTitle(task.text), allowed: allowedFiles(task.text) }
+      const roadmap = readRepoFile(root, "ROADMAP.md")
+      const task = readRepoFile(root, "CURRENT_TASK.md")
+      const agents = readRepoFile(root, "AGENTS.md")
+      const isApproved = approved(task.text)
+      const title = taskTitle(task.text)
+      const allowed = allowedFiles(task.text)
+      return { roadmap, task, agents, isApproved, title, allowed }
     }
 
     await ctx.session.hook("prompt", (event) => {
@@ -64,24 +88,22 @@ export default Plugin.define({
 
     await ctx.session.hook("context", (event) => {
       const state = load()
-      const allowed = state.allowed.length ? state.allowed.map((f) => `- ${f}`).join("\n") : "- No allowed files listed"
       event.system.push({
         type: "text",
         text: [
           "# Minipass roadmap guard",
-          "You are working in the Minipass repository. Follow ROADMAP.md and CURRENT_TASK.md before making changes.",
+          "This local OpenCode plugin keeps Minipass roadmap/task context visible without removing tools or blocking general OpenCode usage.",
           `Current task: ${state.title}`,
           `Task approved for implementation: ${state.isApproved ? "yes" : "no"}`,
-          "Allowed files/directories for this task:",
-          allowed,
+          "Allowed files/directories for implementation:",
+          formatList(state.allowed, "No allowed files listed"),
           "",
-          "Hard rules:",
-          "1. If the user asks a question, answer only. Do not edit files.",
-          "2. Do not change code unless CURRENT_TASK.md status is Approved.",
-          "3. Stay inside the allowed files/directories listed in CURRENT_TASK.md.",
-          "4. Before implementation, state the plan and verification checklist.",
-          "5. Prefer reading repository/site files and explaining decisions before building or patching.",
-          "6. Do not commit or push unless verification for the approved task is complete.",
+          "Guard rules:",
+          "1. Questions get answers only; do not edit files, commit, or push for a question-only request.",
+          "2. If CURRENT_TASK.md is not Approved, do not make repository edits, commits, pushes, or destructive/mutating shell changes. Use read-only exploration and ask for approval first.",
+          "3. If CURRENT_TASK.md is Approved, keep implementation changes inside the listed allowed files/directories and the user's current request.",
+          "4. Do not remove tools from the model context. Let OpenCode permissions handle tool approval; use this guard as project policy context.",
+          "5. Before implementation, state the plan and verification checklist when the user has not already approved a concrete plan.",
           "",
           "## CURRENT_TASK.md",
           state.task.text || "Missing CURRENT_TASK.md",
@@ -93,16 +115,6 @@ export default Plugin.define({
           state.agents.text || "Missing AGENTS.md",
         ].join("\n"),
       })
-
-      if (!state.isApproved) {
-        for (const name of Object.keys(event.tools || {})) {
-          if (riskyTool(name)) delete event.tools[name]
-        }
-        event.system.push({
-          type: "text",
-          text: "CURRENT_TASK.md is not Approved. High-risk edit/shell tools were removed for this model call. Ask the user to approve/update the current task before implementation.",
-        })
-      }
     })
   },
 })
