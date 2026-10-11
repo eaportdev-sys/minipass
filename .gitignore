@@ -4,6 +4,7 @@ apps/*/
 backend/data.json
 backend/.env
 opencode.json
+opencode.json.example
 panel-auth.json
 panel-key*
 upgrade.log
