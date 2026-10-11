@@ -100,7 +100,7 @@ async function main() {
     const prune = fake.calls.find(c => c.args[0] === 'builder');
     assert.deepEqual(prune.args, ['builder', 'prune', '--all', '--force']);
     assert(!fake.calls.some(c => ['system', 'volume'].includes(c.args[0]) && c.args.includes('prune')));
-    for (const failure of ['down', 'image', 'cache']) {
+    for (const failure of ['down', 'image']) {
       dir = setup(); fake = fakeDocker(); fake.fail = failure;
       await assert.rejects(() => trash.destroySite({ record, trashRoot: root, run: fake.run }), /failed after \d+ attempts/);
       assert(fs.existsSync(path.join(dir, 'private-data')), 'failures keep source files for retry');
@@ -108,6 +108,12 @@ async function main() {
       await trash.destroySite({ record, trashRoot: root, run: fake.run });
       assert(!fs.existsSync(dir), 'partial cleanup retry is idempotent');
     }
+    // Cache-prune failure is best-effort: destruction still completes.
+    dir = setup(); fake = fakeDocker(); fake.fail = 'cache';
+    const cacheResult = await trash.destroySite({ record, trashRoot: root, run: fake.run });
+    assert.equal(cacheResult.buildCachePruned, false);
+    assert.match(cacheResult.buildCacheWarning || '', /prune failed/);
+    assert(!fs.existsSync(dir), 'prune failure still removes site files');
     assert.throws(() => trash.trashPath(root, { id: 'demo', trashDir: '../other' }), /invalid trash directory/);
     assert.throws(() => trash.trashPath(root, { id: 'demo', trashDir: 'other-site' }), /does not match/);
     assert.throws(() => trash.trashPath(root, { id: 'minipass' }), /invalid trash site/);

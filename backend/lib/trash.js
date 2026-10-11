@@ -176,10 +176,15 @@ async function destroySite({ record, trashRoot, images, protectedImages = [], ..
       removedImages++;
     }
   });
-  // Operator-approved global UNUSED cache cleanup: no image/volume/system prune.
-  await step('Unused build cache cleanup', () => cli.docker(['builder', 'prune', '--all', '--force']));
+  // Best-effort global UNUSED cache cleanup: no image/volume/system prune.
+  // A prune failure (e.g. missing buildx component) must never abort the
+  // site's own destruction - the files and record are still removed.
+  let buildCachePruned = true, buildCacheWarning = null;
+  try {
+    await step('Unused build cache cleanup', () => cli.docker(['builder', 'prune', '--all', '--force']));
+  } catch (e) { buildCachePruned = false; buildCacheWarning = e.message; }
   await step('Site files removal', async () => fs.rmSync(dir, { recursive: true, force: true }));
-  return { removedImages, sharedImages, buildCachePruned: true };
+  return { removedImages, sharedImages, buildCachePruned, ...(buildCacheWarning ? { buildCacheWarning } : {}) };
 }
 
 module.exports = { validId, trashPath, builtServices, ownedTags, collectImages, rememberImages, stopSiteTools, destroySite };
