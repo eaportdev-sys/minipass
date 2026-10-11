@@ -46,21 +46,28 @@ async function main() {
   assert.equal(refreshed, 1);
   // repo already linked (e.g. token expired, repasting): no owner/name needed, no link call
   reset();
-  respond.token = { ok: true, repo: 'owner/name' };
+  respond.token = { ok: true, repo: 'owner/name', verified: true };
   els.gitSiteToken.value = 'newtok'; els.gitRepoLink.value = '';
   await run('saveSiteToken()');
   assert.equal(calls.token.length, 1);
   assert.equal(calls.link.length, 0);
-  assert(messages.at(-1).text.includes('redeploy pulls owner/name'));
+  assert(messages.at(-1).ok === true && messages.at(-1).text.includes('connected to owner/name'));
+  // repasted token cannot read the linked repo: says so instead of pretending
+  reset();
+  respond.token = { ok: true, repo: 'owner/name', verified: false, verifyError: 'github api 403: Resource not accessible' };
+  els.gitSiteToken.value = 'newtok'; els.gitRepoLink.value = '';
+  await run('saveSiteToken()');
+  assert.equal(calls.link.length, 0);
+  assert(messages.at(-1).ok === false && messages.at(-1).text.includes('cannot read owner/name'));
   // linked repo, field refilled with the same repo: still no link call
   reset();
-  respond.token = { ok: true, repo: 'owner/name' };
+  respond.token = { ok: true, repo: 'owner/name', verified: true };
   els.gitSiteToken.value = 'newtok'; els.gitRepoLink.value = 'owner/name';
   await run('saveSiteToken()');
   assert.equal(calls.link.length, 0);
   // linked repo, field holds a different repo: switches via link
   reset();
-  respond.token = { ok: true, repo: 'owner/name' };
+  respond.token = { ok: true, repo: 'owner/name', verified: true };
   els.gitSiteToken.value = 'newtok'; els.gitRepoLink.value = 'other/repo';
   await run('saveSiteToken()');
   assert.deepEqual(calls.link, [{ appId: 'demo', repo: 'other/repo' }]);

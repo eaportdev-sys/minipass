@@ -2218,7 +2218,7 @@ app.get('/api/apps/:id/suggest', async (req, res) => {
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/apps/:id/git-account', (req, res) => {
+app.post('/api/apps/:id/git-account', async (req, res) => {
   try {
     const db_ = load();
     const meta = db_.apps.find(a => a.id === req.params.id);
@@ -2231,7 +2231,13 @@ app.post('/api/apps/:id/git-account', (req, res) => {
       meta.github.login = login;
     }
     save(db_);
-    res.json({ ok: true, repo: (meta.github && meta.github.repo) || null });
+    const repo = meta.github.repo || null;
+    let verified = false, verifyError = null;
+    if (repo && login) {
+      try { await gh.apiAs(login, `/repos/${repo}`); verified = true; }
+      catch (e) { verifyError = e.message; }
+    }
+    res.json({ ok: true, repo, verified, ...(verifyError ? { verifyError } : {}) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/git-token', async (req, res) => {
@@ -2245,7 +2251,15 @@ app.post('/api/apps/:id/git-token', async (req, res) => {
     if (!meta.github) meta.github = {};
     meta.github.token = token;
     save(db_);
-    res.json({ ok: true, repo: (meta.github && meta.github.repo) || null });
+    // Run the connection, not just store it: prove the new token can read
+    // the linked repo now, instead of failing silently at the next redeploy.
+    const repo = meta.github.repo || null;
+    let verified = false, verifyError = null;
+    if (repo) {
+      try { await gh.apiWith(token, `/repos/${repo}`); verified = true; }
+      catch (e) { verifyError = e.message; }
+    }
+    res.json({ ok: true, repo, verified, ...(verifyError ? { verifyError } : {}) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/apps/:id/git-token', (req, res) => {
