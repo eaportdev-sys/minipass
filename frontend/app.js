@@ -1095,35 +1095,50 @@ async function useAccount() {
   if (!currentApp) return;
   const login = document.getElementById('gitAccount').value;
   const r = await (await fetch(`/api/apps/${currentApp}/git-account`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login }) })).json();
-  toast(r.ok ? (login ? 'using account ' + login : 'account unlinked') : (r.error || 'failed'), !!r.ok);
+  if (!r.ok) { toast(r.error || 'failed', false); return; }
+  if (!login) { toast('account unlinked', true); refresh(); return; }
+  const want = wantedRepoLink();
+  if (!want.ok) { toast('account saved, but ' + want.error, false); refresh(); return; }
+  if (!want.repo) { toast('using account ' + login, true); refresh(); return; }
+  toast('using account ' + login + '… connecting ' + want.repo);
+  const link = await linkSiteRepo(want.repo);
+  if (link.ok) { document.getElementById('gitRepoLink').value = ''; toast('account ' + login + ' connected to ' + want.repo + ' — redeploy pulls with it', true); }
+  else toast('account saved, but ' + link.error, false);
   refresh();
+}
+function wantedRepoLink() {
+  const repo = document.getElementById('gitRepoLink').value.trim();
+  if (!repo) return { ok: true, repo: null };
+  if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) return { ok: false, error: 'repo must be owner/name — not linked' };
+  return { ok: true, repo };
+}
+async function linkSiteRepo(repo) {
+  const login = (document.getElementById('gitAccount') || {}).value || undefined;
+  try {
+    const r = await (await fetch('/api/github/link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appId: currentApp, repo, login }) })).json();
+    return r.ok ? { ok: true } : { ok: false, error: r.error || 'link failed' };
+  } catch (e) { return { ok: false, error: e.message }; }
 }
 async function saveSiteToken() {
   if (!currentApp) return;
   const input = document.getElementById('gitSiteToken');
+  if (!input.value.trim()) { toast('paste a site token first', false); return; }
   const r = await (await fetch(`/api/apps/${currentApp}/git-token`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: input.value }) })).json();
-  if (r.ok) { input.value = ''; toast('site token saved'); refresh(); }
-  else toast(r.error || 'failed', false);
+  if (!r.ok) { toast(r.error || 'failed', false); return; }
+  input.value = '';
+  const want = wantedRepoLink();
+  if (!want.ok) { toast('token saved, but ' + want.error, false); refresh(); return; }
+  if (!want.repo) { toast('site token saved', true); refresh(); return; }
+  const link = await linkSiteRepo(want.repo);
+  if (link.ok) { document.getElementById('gitRepoLink').value = ''; toast('token saved and ' + want.repo + ' connected — redeploy pulls with it', true); }
+  else toast('token saved, but ' + link.error, false);
+  refresh();
 }
 async function clearSiteToken() {
   if (!currentApp) return;
   const r = await (await fetch(`/api/apps/${currentApp}/git-token`, { method: 'DELETE' })).json();
   toast(r.ok ? 'site token cleared' : (r.error || 'failed'), !!r.ok);
   refresh();
-}
-async function linkRepo() {
-  if (!currentApp) return;
-  const input = document.getElementById('gitRepoLink');
-  const repo = input.value.trim();
-  if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) { toast('repo must be owner/name', false); return; }
-  const login = document.getElementById('gitAccount').value || undefined;
-  toast('linking ' + repo + '…');
-  try {
-    const r = await (await fetch('/api/github/link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appId: currentApp, repo, login }) })).json();
-    if (r.ok) { input.value = ''; toast('linked ' + repo + ' — redeploy pulls with the credentials above', true); }
-    else toast(r.error || 'link failed', false);
-    refresh();
-  } catch (e) { toast('link failed: ' + e.message, false); }
 }
 async function setPoll() {
   if (!currentApp) return;
