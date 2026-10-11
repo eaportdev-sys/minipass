@@ -115,9 +115,24 @@ async function destroySite({ record, trashRoot, images, protectedImages = [], ..
   const protect = new Set(protectedImages);
   // Capture before down; reuse this inventory if a later step needs a retry.
   const inventory = images || await collectImages({ id: record.id, dir, record, ...options });
+
+  // Retry helper with exponential backoff for transient Docker failures
+  const retry = async (label, action, maxAttempts = 3, baseDelay = 1000) => {
+    let lastError;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try { return await action(); }
+      catch (e) {
+        lastError = e;
+        if (attempt === maxAttempts) break;
+        const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 500;
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+    throw new Error(`${label} failed after ${maxAttempts} attempts: ${lastError.message}; Trash entry kept. Check Docker availability, resource use or filesystem permissions, then retry.`);
+  };
+
   const step = async (label, action) => {
-    try { return await action(); }
-    catch { throw new Error(`${label} failed; Trash entry kept. Check Docker availability, resource use or filesystem permissions, then retry.`); }
+    return await retry(label, action);
   };
   await step('Database admin container removal', () => stopSiteTools({ id: record.id, ...options }));
   if (fs.existsSync(path.join(dir, 'docker-compose.yml'))) {
