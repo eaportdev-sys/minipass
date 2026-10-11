@@ -2231,7 +2231,7 @@ app.post('/api/apps/:id/git-account', (req, res) => {
       meta.github.login = login;
     }
     save(db_);
-    res.json({ ok: true });
+    res.json({ ok: true, repo: (meta.github && meta.github.repo) || null });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/git-token', async (req, res) => {
@@ -2245,7 +2245,7 @@ app.post('/api/apps/:id/git-token', async (req, res) => {
     if (!meta.github) meta.github = {};
     meta.github.token = token;
     save(db_);
-    res.json({ ok: true });
+    res.json({ ok: true, repo: (meta.github && meta.github.repo) || null });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/apps/:id/git-token', (req, res) => {

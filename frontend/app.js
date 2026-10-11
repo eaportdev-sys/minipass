@@ -1098,6 +1098,8 @@ async function useAccount() {
   if (!r.ok) { toast(r.error || 'failed', false); return; }
   if (!login) { toast('account unlinked', true); refresh(); return; }
   const want = wantedRepoLink();
+  const hasSiteToken = !!(siteById(currentApp).github && siteById(currentApp).github.hasToken);
+  if (r.repo && (!want.repo || want.repo === r.repo)) { toast('using account ' + login + (hasSiteToken ? ' (site token still used first)' : '') + ' — redeploy pulls ' + r.repo + ' with it', true); refresh(); return; }
   if (!want.ok) { toast('account saved, but ' + want.error, false); refresh(); return; }
   if (!want.repo) { toast('using account ' + login, true); refresh(); return; }
   toast('using account ' + login + '… connecting ' + want.repo);
@@ -1127,6 +1129,7 @@ async function saveSiteToken() {
   if (!r.ok) { toast(r.error || 'failed', false); return; }
   input.value = '';
   const want = wantedRepoLink();
+  if (r.repo && (!want.repo || want.repo === r.repo)) { toast('token saved — redeploy pulls ' + r.repo + ' with it', true); refresh(); return; }
   if (!want.ok) { toast('token saved, but ' + want.error, false); refresh(); return; }
   if (!want.repo) { toast('site token saved', true); refresh(); return; }
   const link = await linkSiteRepo(want.repo);
