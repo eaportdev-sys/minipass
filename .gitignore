@@ -3,6 +3,7 @@ apps/*/
 !.gitkeep
 backend/data.json
 backend/.env
+opencode.json
 panel-auth.json
 panel-key*
 upgrade.log
@@ -12,3 +13,5 @@ upgrade.log
 AGENTS.md
 host/__pycache__/
 .host-upgrade.lock
+~$*
+*.xlsx
