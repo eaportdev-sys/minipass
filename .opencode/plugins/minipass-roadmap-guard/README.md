@@ -4,9 +4,11 @@ Local OpenCode plugin for this repository.
 
 Purpose:
 
-- Add lightweight Minipass planning reminders to session context.
-- Encourage using `ROADMAP.md` and `CURRENT_TASK.md` as context when relevant.
-- Keep OpenCode fully usable; this plugin does not remove tools or enforce status gates.
-- Push work toward scoped changes instead of reactive patching.
+- Load lightweight Minipass planning context into each session.
+- Keep the current task and any allowed file scope visible to the model.
+- Treat `CURRENT_TASK.md` and `ROADMAP.md` as planning context, not as an approval/status gate.
+- Warn the model not to edit, commit, push, or run mutating repo commands unless the user asks for implementation.
+- Keep OpenCode fully usable; this plugin does not remove tools from model calls.
+- Push work toward scoped roadmap-driven changes instead of reactive patching.
 
-This is not a replacement for review. It is a lightweight reminder plugin, not a blocker.
+This is not a replacement for review or OpenCode permissions. It is a lightweight context guardrail, not a tool blocker.

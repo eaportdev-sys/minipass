@@ -31,21 +31,13 @@ function section(markdown: string, heading: string) {
   return (match?.[1] || "").trim()
 }
 
-function approved(task: string) {
-  const status = section(task, "Status")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)[0]
-  return /^approved$/i.test(status || "") || /^\s*status\s*:\s*approved\s*$/im.test(task)
-}
-
 function taskTitle(task: string) {
-  return (
-    section(task, "Task")
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)[0] || "No current task declared"
-  )
+  const taskSection = section(task, "Task")
+  const source = taskSection || task
+  return source
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^#\s+/, "").trim())
+    .filter((line) => line && !/^current task$/i.test(line))[0] || "No current task declared"
 }
 
 function allowedFiles(task: string) {
@@ -68,10 +60,9 @@ export default Plugin.define({
       const roadmap = readRepoFile(root, "ROADMAP.md")
       const task = readRepoFile(root, "CURRENT_TASK.md")
       const agents = readRepoFile(root, "AGENTS.md")
-      const isApproved = approved(task.text)
       const title = taskTitle(task.text)
       const allowed = allowedFiles(task.text)
-      return { roadmap, task, agents, isApproved, title, allowed }
+      return { roadmap, task, agents, title, allowed }
     }
 
     await ctx.session.hook("prompt", (event) => {
@@ -80,7 +71,6 @@ export default Plugin.define({
         ...event.metadata,
         roadmapGuard: {
           task: state.title,
-          approved: state.isApproved,
           allowed: state.allowed,
         },
       }
@@ -92,17 +82,16 @@ export default Plugin.define({
         type: "text",
         text: [
           "# Minipass roadmap guard",
-          "This local OpenCode plugin keeps Minipass roadmap/task context visible without removing tools or blocking general OpenCode usage.",
+          "This local OpenCode plugin keeps Minipass roadmap/task context visible without requiring a status gate, removing tools, or blocking general OpenCode usage.",
           `Current task: ${state.title}`,
-          `Task approved for implementation: ${state.isApproved ? "yes" : "no"}`,
           "Allowed files/directories for implementation:",
           formatList(state.allowed, "No allowed files listed"),
           "",
           "Guard rules:",
           "1. Questions get answers only; do not edit files, commit, or push for a question-only request.",
-          "2. If CURRENT_TASK.md is not Approved, do not make repository edits, commits, pushes, or destructive/mutating shell changes. Use read-only exploration and ask for approval first.",
-          "3. If CURRENT_TASK.md is Approved, keep implementation changes inside the listed allowed files/directories and the user's current request.",
-          "4. Do not remove tools from the model context. Let OpenCode permissions handle tool approval; use this guard as project policy context.",
+          "2. Treat CURRENT_TASK.md and ROADMAP.md as planning context, not as an Approved/Not Approved gate.",
+          "3. Make repository changes only when the user asks for implementation, and keep them scoped to the user's request plus any listed allowed files/directories.",
+          "4. Do not remove tools from the model context. Let OpenCode permissions handle tool approval; use this guard as lightweight project policy context.",
           "5. Before implementation, state the plan and verification checklist when the user has not already approved a concrete plan.",
           "",
           "## CURRENT_TASK.md",
