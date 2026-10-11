@@ -122,7 +122,10 @@ async function statusTests() {
   context.fetch = async () => ({ json: async () => ({ containers: [] }) });
   await run('hydrateAppCards(fixtures.slice(0,1), appsRefreshSeq)');
   assert.equal(element('appState-site-000').textContent, 'Off');
-  assert(element('appLifecycle-site-000').innerHTML.includes('Start'));
+  assert(element('appLifecycle-site-000').innerHTML.includes('Deploy'), 'never-built sites offer Deploy, not Start');
+  context.fetch = async () => ({ json: async () => ({ containers: [{ service: 'app', state: 'exited' }] }) });
+  await run('hydrateAppCards(fixtures.slice(0,1), appsRefreshSeq)');
+  assert(element('appLifecycle-site-000').innerHTML.includes('Start'), 'stopped existing containers can be started');
   context.fetch = async () => { throw new Error('offline'); };
   await run('hydrateAppCards(fixtures.slice(0,1), appsRefreshSeq)');
   assert.equal(element('appState-site-000').textContent, 'Unavailable');

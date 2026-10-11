@@ -2821,6 +2821,9 @@ app.post('/api/apps/:id/start', async (req, res) => {
   try { await siteLifecycle(req.params.id, async () => {
     const meta = load().apps.find(a => a.id === req.params.id);
     const dir = appDir(APPS_DIR, req.params.id);
+    if (!meta) throw lifecycleError('unknown app', 404);
+    const existing = await appContainers(meta.id);
+    if (!existing.length && !meta.lastGoodDeploy) throw lifecycleError('site has not been deployed yet - use Deploy first', 409);
     if (meta && meta.storageQuota) await quotas.verifyDatabases(meta.id, dir);
     await sh(`${COMPOSE_BIN}${meta && meta.storageQuota ? ` -p ${meta.id}` : ''} up -d`, dir);
   }); res.json({ ok: true }); }

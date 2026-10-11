@@ -107,13 +107,13 @@ function appLinksMarkup(a, services) {
     return `<a class="website-url" href="${safeHtml(url)}" title="${safeHtml((s.name || 'app') + ': ' + url)}" target="_blank" rel="noopener noreferrer">${services.length > 1 ? '<span>' + safeHtml(s.name) + '</span>' : ''}<span>${safeHtml(url.replace(/^http:\/\//, ''))}</span><span aria-hidden="true">↗</span></a>`;
   }).join('');
 }
-function setAppCardState(id, state, running) {
-  websiteStates.set(id, { state, running });
+function setAppCardState(id, state, running, canStart = true) {
+  websiteStates.set(id, { state, running, canStart });
   websiteStateSeq.set(id, (websiteStateSeq.get(id) || 0) + 1);
   const power = document.getElementById('appPower-' + id);
   const lifecycle = document.getElementById('appLifecycle-' + id);
   if (!power || !lifecycle) return;
-  const label = state === 'deploying' ? 'Deploying' : state === 'checking' ? 'Checking' : running ? 'Redeploy' : state === 'failed' ? 'Retry' : 'Deploy';
+  const label = state === 'deploying' ? 'Deploying' : state === 'checking' ? 'Checking' : running ? 'Redeploy' : !canStart ? 'Deploy' : state === 'failed' ? 'Retry' : 'Deploy';
   setPowerState('appPower-' + id, state, label);
   power.disabled = state === 'deploying' || state === 'checking';
   power.title = state === 'deploying' ? 'Deployment in progress' : running ? 'Rebuild and redeploy this site' : 'Build and deploy this site';
@@ -122,7 +122,9 @@ function setAppCardState(id, state, running) {
   if (status) { status.className = 'website-state is-' + state; status.textContent = state === 'deploying' ? 'Deploying' : state === 'checking' ? 'Checking' : state === 'failed' ? 'Unavailable' : running ? 'Running' : 'Off'; }
   lifecycle.innerHTML = state === 'deploying' || state === 'checking'
     ? '<button disabled>…</button>'
-    : running ? `<button onclick="stopApp('${id}')" aria-label="Stop ${safeHtml(id)}">Stop</button>` : `<button onclick="startApp('${id}')" aria-label="Start ${safeHtml(id)}">Start</button>`;
+    : running ? `<button onclick="stopApp('${id}')" aria-label="Stop ${safeHtml(id)}">Stop</button>`
+      : canStart ? `<button onclick="startApp('${id}')" aria-label="Start ${safeHtml(id)}">Start</button>`
+        : `<button onclick="deploy('${id}')" aria-label="Deploy ${safeHtml(id)}">Deploy</button>`;
 }
 async function websiteStatusRequest(id, current) {
   if (websiteStatusActive < 4) websiteStatusActive++;
@@ -148,7 +150,8 @@ async function hydrateAppCards(apps, seq, renderSeq = websiteRenderSeq) {
         if (!current() || version !== (websiteStateSeq.get(a.id) || 0)) continue;
         if (!st || st.error) throw new Error('status unavailable');
         const running = appIsRunning(st);
-        setAppCardState(a.id, st.deploying ? 'deploying' : (running ? 'deployed' : 'off'), running);
+        const canStart = appCanStart(st);
+        setAppCardState(a.id, st.deploying ? 'deploying' : (running ? 'deployed' : 'off'), running, canStart);
       } catch {
         if (current() && version === (websiteStateSeq.get(a.id) || 0)) setAppCardState(a.id, 'failed', false);
       }
@@ -1826,9 +1829,13 @@ async function startApp(id) {
 }
 async function toggleSitePower() {
   if (!currentApp) return;
-  const state = document.getElementById('sitePower').dataset.state;
+  const power = document.getElementById('sitePower');
+  const state = power.dataset.state;
   if (state === 'deployed') await stopApp(currentApp);
-  else if (state === 'off' || state === 'failed') await startApp(currentApp);
+  else if (state === 'off' || state === 'failed') {
+    if (power.dataset.canStart === '0') await deploy(currentApp);
+    else await startApp(currentApp);
+  }
 }
 async function rmApp(id) {
   const name = siteName(siteById(id));
@@ -2464,7 +2471,10 @@ function setPowerState(id, state, label) {
   if (text) text.textContent = label;
   if (id === 'sitePower') {
     el.disabled = state === 'deploying' || state === 'checking';
-    el.title = state === 'deployed' ? 'Site is deployed — click to stop' : state === 'off' || state === 'failed' ? 'Site is off — click to start' : label;
+    const canStart = el.dataset.canStart !== '0';
+    el.title = state === 'deployed' ? 'Site is deployed — click to stop'
+      : state === 'off' || state === 'failed' ? (canStart ? 'Site is off — click to start' : 'Site has no built container yet — click to deploy')
+        : label;
   }
 }
 function sourceSlot(source) {
@@ -2479,12 +2489,19 @@ function appIsRunning(st) {
   const appContainers = containers.filter(c => !/^db(-|$)/i.test(c.service || ''));
   return appContainers.length > 0 && appContainers.every(c => /^running/i.test(c.state || ''));
 }
+function appCanStart(st) {
+  const containers = (st && st.containers) || [];
+  return containers.length > 0 || !!(st && st.liveDeploy) || !!(st && st.lastDeploy && st.lastDeploy.status === 'ok');
+}
 function updatePowerStates(st) {
   const receiving = st && !st.deployOp && st.pushEvent && (Date.now() - st.pushEvent.at) < 120000;
   const activeSlot = st && st.deployOp ? sourceSlot(st.deployOp.source) : (receiving ? 'local' : null);
   const deploying = !!(st && st.deploying) || !!receiving;
   const running = appIsRunning(st);
-  setPowerState('sitePower', deploying ? 'deploying' : (running ? 'deployed' : 'off'), deploying ? 'Deploying' : (running ? 'Deployed' : 'Off'));
+  const canStart = appCanStart(st);
+  const sitePower = document.getElementById('sitePower');
+  if (sitePower) sitePower.dataset.canStart = canStart ? '1' : '0';
+  setPowerState('sitePower', deploying ? 'deploying' : (running ? 'deployed' : 'off'), deploying ? 'Deploying' : (running ? 'Deployed' : (canStart ? 'Off' : 'Not deployed')));
   const liveSlot = sourceSlot(st && st.liveDeploy && st.liveDeploy.source);
   const failedSlot = st && st.lastDeploy && st.lastDeploy.status !== 'ok' ? sourceSlot(st.lastDeploy.source) : null;
   const githubEnabled = !!(st && st.app && st.app.github && st.app.github.enabled === true);
