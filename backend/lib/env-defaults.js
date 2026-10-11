@@ -85,6 +85,8 @@ function snapshotDefaults(appDir, codeDir, services) {
     if (saved && saved.version === 1 && Array.isArray(saved.sources) && saved.values && typeof saved.values === 'object') snapshot = saved;
   } catch {}
   if (!snapshot.originals || typeof snapshot.originals !== 'object') snapshot.originals = {};
+  if (!snapshot.keySources || typeof snapshot.keySources !== 'object') snapshot.keySources = {};
+  const legacyRootCapture = !Object.keys(snapshot.keySources).length && snapshot.sources.some(s => /^\.env(?:\.[A-Za-z0-9_-]{1,32})?\.example$/.test(s) || s === '.env');
   const seen = new Set(snapshot.sources);
   const root = path.resolve(codeDir);
   let changed = false;
@@ -94,6 +96,7 @@ function snapshotDefaults(appDir, codeDir, services) {
     const dir = path.resolve(codeDir, subdir);
     if (dir !== root && !dir.startsWith(root + path.sep)) continue;
     const discovered = {};
+    const discoveredSources = {};
     // Examples first (production-specific last), then repository .env wins
     // within the same service. Each source path is captured at most once.
     for (const name of [...exampleFiles(dir), '.env']) {
@@ -105,6 +108,7 @@ function snapshotDefaults(appDir, codeDir, services) {
         if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SOURCE_BYTES) continue;
         for (const item of parseExample(fs.readFileSync(file, 'utf8'))) {
           discovered[item.key] = item.value;
+          discoveredSources[item.key] = source;
           if (!Array.isArray(snapshot.originals[item.key])) snapshot.originals[item.key] = [];
           if (!snapshot.originals[item.key].includes(item.value)) snapshot.originals[item.key].push(item.value);
         }
@@ -114,7 +118,11 @@ function snapshotDefaults(appDir, codeDir, services) {
       } catch {}
     }
     for (const [key, value] of Object.entries(discovered)) {
-      if (!Object.prototype.hasOwnProperty.call(snapshot.values, key)) snapshot.values[key] = secureDefault(key, value) || value;
+      const replaceLegacyRoot = legacyRootCapture && subdir && !snapshot.keySources[key];
+      if (!Object.prototype.hasOwnProperty.call(snapshot.values, key) || replaceLegacyRoot) {
+        snapshot.values[key] = secureDefault(key, value) || value;
+        snapshot.keySources[key] = discoveredSources[key] || subdir || 'root';
+      } else if (!snapshot.keySources[key]) snapshot.keySources[key] = discoveredSources[key] || subdir || 'root';
     }
   }
   // Upgrade an early/partial snapshot that still contains a known secret

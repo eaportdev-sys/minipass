@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const { exec, execSync, execFileSync, spawn } = require('child_process');
 const http = require('http');
 const { WebSocketServer } = require('ws');
-const { createApp, appDir, normDbs, dbService, nginxConf, ensureDockerfile, needsDockerfileOptIn } = require('./lib/generator');
+const { createApp, appDir, normDbs, dbService, nginxConf, ensureDockerfile, needsDockerfileOptIn, inferPort } = require('./lib/generator');
 const { gitEnv, pubKey, appPubKey, appGitEnv } = require('./lib/ssh');
 const svc = require('./lib/services');
 const dbTools = require('./lib/db-tools');
@@ -613,6 +613,10 @@ app.post('/api/apps', async (req, res) => {
     envSetManaged(created.dir, { COMPOSE_PROJECT_NAME: id });
     const db_ = load();
     const meta = { id, name: rawName, type: created.type || type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: appDomain, token, hostPort, subdir: created.subdir || '', storageQuota, buildOptions: { modernize: req.body.modernizeBuild === true }, createdAt: new Date().toISOString() };
+    if (!subdir) {
+      try { maybeNormalizeRootMonorepo(meta, created.dir); }
+      catch (e) { console.error(id, 'monorepo normalization:', e.message); }
+    }
     // Capture repository env sources before the first deploy. Never fail an
     // otherwise valid create solely because the private snapshot could not be written.
     try { applyEnvDefaults(meta, created.dir, req.hostname, req.protocol); }
@@ -683,6 +687,75 @@ const deployOps = new Map();
 // Push receipts: id -> { phase, at }. The hook pings `received` before the
 // queued deploy starts so the UI immediately shows incoming work.
 const pushEvents = new Map();
+function readJsonSafe(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+function rootHasFrontendMarkers(paths) {
+  const list = new Set(paths || []);
+  return ['vite.config.js', 'vite.config.ts', 'vite.config.mjs', 'vite.config.cjs', 'angular.json', 'next.config.js', 'next.config.mjs', 'next.config.ts', 'nuxt.config.js', 'vue.config.js', 'craco.config.js', 'index.html', 'index.htm'].some(p => list.has(p)) ||
+    (list.has('public/index.html') && ['src/index.js', 'src/index.jsx', 'src/index.ts', 'src/index.tsx', 'src/main.js', 'src/main.jsx', 'src/main.ts', 'src/main.tsx', 'src/App.js', 'src/App.tsx'].some(p => list.has(p)));
+}
+function detectedRepoServices(codeDir) {
+  const { findBackends, findFrontends } = require('./lib/detect');
+  const paths = preflight.collectPaths(codeDir);
+  const pkgs = {};
+  for (const p of paths.filter(p => /(^|\/)package\.json$/.test(p))) {
+    const dir = p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
+    if (!dir || dir.split('/').length <= 2) pkgs[dir] = readJsonSafe(path.join(codeDir, p));
+  }
+  const frontends = findFrontends(paths, pkgs);
+  const backends = findBackends(paths, pkgs, frontends);
+  return { paths, pkgs, frontends, backends };
+}
+function serviceNameFromSubdir(subdir, used) {
+  const parts = String(subdir || '').split('/').filter(Boolean);
+  let base = (parts[parts.length - 1] || 'svc').toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '') || 'svc';
+  if (base === 'app') base = 'web';
+  let name = base.slice(0, 30) || 'svc', i = 2;
+  while (used.has(name) || !svc.validSvcName(name)) name = `${base.slice(0, 26)}-${i++}`;
+  used.add(name);
+  return name;
+}
+function maybeNormalizeRootMonorepo(meta, dir, opts = {}) {
+  if (!meta || !meta.repoUrl || meta.subdir || (Array.isArray(meta.services) && meta.services.length)) return false;
+  if (!['react', 'static', 'node'].includes(meta.type)) return false;
+  const codeDir = path.join(dir, 'code');
+  const detected = detectedRepoServices(codeDir);
+  if (rootHasFrontendMarkers(detected.paths)) return false;
+  if (detected.frontends.length !== 1 || detected.backends.length > 4) return false;
+  const frontend = detected.frontends[0];
+  const used = new Set(['app']);
+  const frontProfile = localBuildProfile(path.join(codeDir, frontend), TEMPLATES_DIR);
+  const frontType = frontProfile.kind === 'jekyll' ? 'static' : 'react';
+  const services = [{
+    name: 'app', subdir: frontend, type: frontType, port: 80,
+    hostPort: meta.hostPort, enabled: true, buildOptions: meta.buildOptions || {}
+  }];
+  for (const b of detected.backends) {
+    const name = serviceNameFromSubdir(b, used);
+    services.push({ name, subdir: b, type: 'node', port: inferPort(path.join(codeDir, b), 3000), hostPort: null, enabled: true, buildOptions: {} });
+  }
+  meta.type = frontType;
+  meta.subdir = frontend;
+  meta.services = services;
+  if (services.length === 2 && !meta.apiLinkOff) {
+    meta.apiBackend = { app: services[1].name, port: parseInt(services[1].port, 10) || 3000, service: 'app', auto: true };
+  }
+  const out = svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
+  meta.services = out.normalized;
+  envSetManaged(dir, { HOST_PORT: String(meta.hostPort || services[0].hostPort || '') });
+  if (opts.logFile) {
+    try { fs.appendFileSync(opts.logFile, `--- root monorepo normalized: app -> ${frontend}${detected.backends.length ? '; backend services -> ' + detected.backends.join(', ') : ''} ---\n`); } catch {}
+  }
+  return true;
+}
+function envDefaultRequest(meta) {
+  try {
+    const u = new URL(process.env.PANEL_URL || '');
+    if (u.hostname) return { hostname: u.hostname, protocol: u.protocol.replace(/:$/, '') || 'http' };
+  } catch {}
+  return { hostname: (meta && meta.domain) || 'localhost', protocol: 'http' };
+}
 function deploySh(id, cmd, cwd, env) {
   checkCancelled(id);
   return new Promise((res, rej) => {
@@ -1012,9 +1085,22 @@ async function deployNow(id, opts = {}) {
   try {
     const ymlPath = path.join(dir, 'docker-compose.yml');
     const before = fs.existsSync(ymlPath) ? fs.readFileSync(ymlPath, 'utf8') : '';
+    const normalizedRoot = maybeNormalizeRootMonorepo(meta, dir, { logFile: buildLog });
     svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
     const after = fs.existsSync(ymlPath) ? fs.readFileSync(ymlPath, 'utf8') : '';
-    if (before && before !== after) fs.appendFileSync(buildLog, '--- project compose normalized before deploy ---\n');
+    if (before && before !== after && !normalizedRoot) fs.appendFileSync(buildLog, '--- project compose normalized before deploy ---\n');
+    if (normalizedRoot) {
+      const origin = envDefaultRequest(meta);
+      try {
+        const envResult = applyEnvDefaults(meta, dir, origin.hostname, origin.protocol);
+        if ((envResult.added || []).length || (envResult.updated || []).length) fs.appendFileSync(buildLog, `--- env defaults restored: ${[...(envResult.added || []), ...(envResult.updated || [])].join(', ')} ---\n`);
+      } catch (e) {
+        fs.appendFileSync(buildLog, `--- env defaults restore skipped: ${e.message} ---\n`);
+      }
+      const dbFix = load();
+      const mFix = dbFix.apps.find(a => a.id === id);
+      if (mFix) { Object.assign(mFix, { type: meta.type, subdir: meta.subdir, services: meta.services, apiBackend: meta.apiBackend }); save(dbFix); }
+    }
   } catch (e) {
     const sha = await currentSha(dir);
     await recordDeploy(id, { sha, at: new Date().toISOString(), status: 'error', error: ('compose repair failed - running containers untouched: ' + e.message).slice(-500) });
@@ -1197,6 +1283,21 @@ async function deployNow(id, opts = {}) {
     ? [...new Set(opts.only.filter(s => /^[A-Za-z0-9_-]{1,32}$/.test(s || '')))]
     : [];
   const scope = only.join(' ');
+  // auto-link before nginx rendering: exactly one backend sibling + frontend(s)
+  // present and no explicit choice on record = wire it on this same deploy.
+  // Manual unlink sets apiLinkOff so this never fights back.
+  try {
+    const autoSvcs = svc.fullServices(meta, dir);
+    const autoFronts = autoSvcs.filter(s => (s.type === 'static' || s.type === 'react') && s.enabled !== false);
+    const autoBacks = autoSvcs.filter(s => s.type !== 'static' && s.type !== 'react' && s.enabled !== false);
+    if (!meta.apiBackend && !meta.apiLinkOff && autoFronts.length >= 1 && autoBacks.length === 1) {
+      const b = autoBacks[0];
+      meta.apiBackend = { app: b.name, port: parseInt(b.port, 10) || 3000, service: autoFronts[0].name, auto: true };
+      const dbAuto = load();
+      const mAuto = dbAuto.apps.find(a => a.id === id);
+      if (mAuto) { mAuto.apiBackend = meta.apiBackend; save(dbAuto); }
+    }
+  } catch {}
   // heal: static/react must ship our nginx.conf (SPA fallback, proxy when linked).
   // Only files WE seeded (marker headers) are ever refreshed - repo-owned files are sacred.
   // Proxy target comes from env (the link lives there), meta only migrates old links forward.
@@ -1242,20 +1343,6 @@ async function deployNow(id, opts = {}) {
       } else if (cur.includes('# minipass-managed') && cur !== nginxConf(wantProxy)) {
         fs.writeFileSync(nc, nginxConf(wantProxy));
       }
-    }
-  } catch {}
-  // auto-link: exactly one backend sibling + frontend(s) present and no explicit
-  // choice on record = wire it. Manual unlink sets apiLinkOff so this never fights back.
-  try {
-    const autoSvcs = svc.fullServices(meta, dir);
-    const autoFronts = autoSvcs.filter(s => (s.type === 'static' || s.type === 'react') && s.enabled !== false);
-    const autoBacks = autoSvcs.filter(s => s.type !== 'static' && s.type !== 'react' && s.enabled !== false);
-    if (!meta.apiBackend && !meta.apiLinkOff && autoFronts.length >= 1 && autoBacks.length === 1) {
-      const b = autoBacks[0];
-      meta.apiBackend = { app: b.name, port: parseInt(b.port, 10) || 3000, auto: true };
-      const dbAuto = load();
-      const mAuto = dbAuto.apps.find(a => a.id === id);
-      if (mAuto) { mAuto.apiBackend = meta.apiBackend; save(dbAuto); }
     }
   } catch {}
   const sha = sourceSha || await currentSha(dir);
@@ -3018,6 +3105,10 @@ app.put('/api/apps/:id/env', async (req, res) => {
 function applyEnvDefaults(meta, dir, hostname, protocol, requestedKeys) {
   const services = svc.fullServices(meta, dir);
   const origins = envDefaults.publishedOrigins(services, hostname, protocol);
+  if (meta && meta.apiBackend && origins.frontend) {
+    const target = String(meta.apiBackend.app || '').replace(/^svc:/, '');
+    if (services.some(s => s.name === target && s.enabled !== false && !['static', 'react'].includes(s.type))) origins.backend = origins.frontend;
+  }
   const snapshot = envDefaults.snapshotDefaults(dir, path.join(dir, 'code'), services);
   const envPath = path.join(dir, '.env');
   const valOf = new Map(readEnvVars(envPath).map(v => [v.key, v.value]));

@@ -58,7 +58,10 @@ function ensureDockerfile(ctxDir, type, templatesDir, options = {}) {
     throw new Error(`no Dockerfile and package.json has no build script - add a Dockerfile or a "build" script emitting dist/`);
   }
   if (type === 'php' && (has('index.php') || has('composer.json'))) { seed('Dockerfile'); return 'seeded-php'; }
-  if (type === 'node' && has('index.js')) { seed('Dockerfile'); return 'seeded-node'; }
+  if (type === 'node') {
+    const pkg = readPkg();
+    if (has('index.js') || (pkg && pkg.scripts && pkg.scripts.start)) { seed('Dockerfile'); return 'seeded-node'; }
+  }
   throw new Error(`no Dockerfile in build context and type '${type}' has no safe default here - add a Dockerfile (with EXPOSE + CMD) to the repo`);
 }
 
@@ -81,7 +84,13 @@ function needsDockerfileOptIn(ctxDir, type) {
     } catch {}
   }
   if (type === 'php' && (has('index.php') || has('composer.json'))) return false;
-  if (type === 'node' && has('index.js')) return false;
+  if (type === 'node') {
+    if (has('index.js')) return false;
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(ctxDir, 'package.json'), 'utf8'));
+      if (pkg && pkg.scripts && pkg.scripts.start) return false;
+    } catch {}
+  }
   return true;
 }
 

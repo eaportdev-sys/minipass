@@ -87,6 +87,19 @@ try {
   const backendOnly = envDefaults.resolvedDefaults(tmp, [services[0]], backendOnlyOrigins, snapshot.values, snapshot.originals, runtime);
   assert.equal(backendOnly.values.WHITE_LIST_URLS, 'http://10.0.0.250:8002', 'API-only allowlists use their published backend origin');
   assert(envDefaults.exampleFiles(path.join(tmp, 'server')).includes('.env.dev.example'));
+
+  const legacyState = path.join(tmp, 'legacy-panel-state');
+  fs.mkdirSync(legacyState);
+  fs.writeFileSync(path.join(legacyState, '.env.defaults.json'), JSON.stringify({
+    version: 1,
+    capturedAt: new Date().toISOString(),
+    sources: ['.env.example'],
+    values: { VITE_API_URL: 'http://localhost:9999/root' },
+    originals: { VITE_API_URL: ['http://localhost:9999/root'] }
+  }, null, 2));
+  const repairedSnapshot = envDefaults.snapshotDefaults(legacyState, tmp, services);
+  assert.equal(repairedSnapshot.values.VITE_API_URL, 'http://localhost:3000/api', 'service env examples override stale root-only legacy snapshots');
+  assert(repairedSnapshot.sources.includes('client/.env.example'));
   console.log('repository environment defaults and frontend origins: OK');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });

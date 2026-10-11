@@ -66,12 +66,11 @@ try {
       appsDir, templatesDir: path.resolve(__dirname, '../../templates'), name: 'sample', type: 'node',
       repoUrl: 'https://github.com/example/sample.git', db: [], hostPort: 8000, subdir: 'server'
     };
-    assert.throws(() => createApp(input), /no Dockerfile/, 'create first explains the missing Dockerfile');
-    const created = createApp({ ...input, standardDockerfile: true });
+    const created = createApp(input);
     assert.equal(created.subdir, 'server');
     const dockerfile = fs.readFileSync(path.join(pending, 'code', 'server', 'Dockerfile'), 'utf8');
-    assert(dockerfile.includes('exec npm start'), 'explicit create retry seeds the standard Node image');
-    assert(!fs.existsSync(path.join(pending, 'code', 'package.json')), 'retry never copies the starter over a repository checkout');
+    assert(dockerfile.includes('exec npm start'), 'Node service with a start script seeds the standard Node image');
+    assert(!fs.existsSync(path.join(pending, 'code', 'package.json')), 'standard template never copies the starter over a repository checkout');
     assert.equal(fs.readFileSync(path.join(pending, 'code', 'server', 'package.json'), 'utf8'), '{"scripts":{"build":"tsc","start":"node dist/index.js"}}');
     assert(fs.readFileSync(path.join(pending, 'docker-compose.yml'), 'utf8').includes('code/server'));
     const branchDir = path.join(appsDir, 'branch-test', 'code');
@@ -83,6 +82,13 @@ try {
     assert(!fs.existsSync(path.join(branchDir, 'Dockerfile')), 'mismatched retry cannot seed or build another branch');
     createApp({ ...branchInput, gitBranch: 'feature/api' });
     assert(fs.existsSync(path.join(branchDir, 'Dockerfile')), 'same-branch retry remains supported');
+
+    const apiOnly = path.join(appsDir, 'api-start-script', 'code');
+    fs.mkdirSync(apiOnly, { recursive: true });
+    execFileSync('git', ['init', '--initial-branch=main'], { cwd: apiOnly, stdio: 'ignore' });
+    fs.writeFileSync(path.join(apiOnly, 'package.json'), '{"scripts":{"build":"tsc","start":"node dist/index.js"}}');
+    createApp({ ...input, name: 'api-start-script', subdir: '', type: 'node' });
+    assert(fs.existsSync(path.join(apiOnly, 'Dockerfile')), 'Node package with declared start script gets the standard Dockerfile');
   } finally { fs.rmSync(appsDir, { recursive: true, force: true }); }
   console.log('database generation and MariaDB support: OK');
 } finally {

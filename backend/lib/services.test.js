@@ -55,7 +55,7 @@ volumes:
   const api = path.join(tmp, 'code', 'server');
   fs.mkdirSync(api, { recursive: true });
   fs.writeFileSync(path.join(api, 'package.json'), '{"scripts":{"start":"node dist/index.js"}}');
-  assert.equal(needsDockerfileOptIn(api, 'node'), true, 'Node package without Dockerfile needs explicit opt-in');
+  assert.equal(needsDockerfileOptIn(api, 'node'), false, 'Node package with a start script can use the standard Dockerfile');
   fs.writeFileSync(path.join(api, 'Dockerfile'), 'FROM node:20-alpine\n');
   assert.equal(needsDockerfileOptIn(api, 'node'), false, 'existing Dockerfile never offers replacement');
 
