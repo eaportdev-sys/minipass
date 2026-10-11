@@ -1878,6 +1878,7 @@ async function loadTrash() {
         `<div class="appcard-actions"><button class="btn primary" onclick="restoreTrash('${safeHtml(t.id)}')" ${t.cleanupStartedAt || t.msLeft === 0 ? 'disabled' : ''}>restore</button><button class="btn danger" onclick="destroyTrash('${safeHtml(t.id)}')">${t.cleanupStartedAt || t.cleanupError ? 'retry cleanup' : 'delete forever'}</button></div>` +
         `</div></div>`;
     }).join('') : '<div class="card">Trash is empty.</div>';
+    if (trashOpActive) trashProgress(trashOpActive);
   } catch { if (box) box.innerHTML = '<div class="card">trash unreachable</div>'; }
 }
 async function restoreTrash(id) {
@@ -1890,6 +1891,19 @@ async function restoreTrash(id) {
     refresh(); loadTrash();
   } catch (e) { toast('restore failed: ' + e.message, false); }
 }
+let trashOpActive = null;
+function trashProgress(text) {
+  trashOpActive = text || null;
+  try {
+    const prog = document.getElementById('trashProg');
+    if (prog) { prog.style.display = text ? 'block' : 'none'; if (text) prog.textContent = text; }
+  } catch {}
+  try {
+    if (typeof document.querySelectorAll === 'function') {
+      for (const b of document.querySelectorAll('#view-trash button')) b.disabled = !!text;
+    }
+  } catch {}
+}
 async function emptyTrash() {
   let count = 0;
   try { count = (await (await fetch('/api/trash')).json()).length; } catch {}
@@ -1900,11 +1914,13 @@ async function emptyTrash() {
     requireText: 'empty', confirmLabel: 'Empty trash', danger: true
   });
   if (!ok) return;
+  trashProgress(`Destroying ${count} site${count === 1 ? '' : 's'}… this can take minutes, please wait.`);
   try {
     const r = await (await fetch('/api/trash', { method: 'DELETE' })).json();
     toast(r.ok ? `trash emptied (${(r.destroyed || []).length} destroyed)` : `${(r.destroyed || []).length} destroyed; ${r.error || 'cleanup failed'}`, !!r.ok);
     loadTrash(); refresh();
   } catch (e) { toast('empty failed: ' + e.message, false); }
+  finally { trashProgress(null); }
 }
 async function destroyTrash(id) {
   const name = siteName(siteById(id));
@@ -1914,11 +1930,13 @@ async function destroyTrash(id) {
     requireText: name, confirmLabel: 'Destroy forever', danger: true
   });
   if (!ok) return;
+  trashProgress('Destroying ' + id + '… this can take a while, please wait.');
   try {
     const r = await (await fetch('/api/trash/' + id, { method: 'DELETE' })).json();
     toast(r.ok ? (id + ' destroyed') : (r.error || 'failed'), !!r.ok);
     loadTrash(); refresh();
   } catch (e) { toast('destroy failed: ' + e.message, false); }
+  finally { trashProgress(null); }
 }
 async function showLogs() {
   if (!currentApp) { logsEl.textContent = 'open a website first'; return; }

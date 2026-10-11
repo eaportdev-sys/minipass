@@ -299,6 +299,7 @@
     </section>
     <section id="view-trash" class="view">
       <div class="pagehead"><div><h1>Trash</h1><div class="meta">48-hour restore window. Permanent cleanup removes files, volumes and site-built images, and clears unused build cache. Shared images stay. Failed cleanup remains visible for retry.</div></div><div class="actions"><button onclick="loadTrash()">refresh</button><button class="btn danger" onclick="emptyTrash()">empty trash</button></div></div>
+      <div id="trashProg" class="meta" style="display:none" aria-live="polite"></div>
       <div id="trashList"></div>
     </section>
     <section id="view-terminal" class="view">

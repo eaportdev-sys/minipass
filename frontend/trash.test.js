@@ -34,6 +34,7 @@ async function main() {
   assert.equal(prompt.requireText, 'empty');
   assert(prompt.body.includes('unused Docker build cache'));
   assert(messages.at(-1).text.includes('1 destroyed') && messages.at(-1).ok === false);
+  assert(box.textContent.includes('Destroying') && box.style.display === 'none', 'trash progress shows during empty and clears after');
   console.log('Trash UI: soft-delete failure, visible cleanup retry, blocked restore and typed bulk/cache confirmation: OK');
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });
