@@ -1111,6 +1111,20 @@ async function clearSiteToken() {
   toast(r.ok ? 'site token cleared' : (r.error || 'failed'), !!r.ok);
   refresh();
 }
+async function linkRepo() {
+  if (!currentApp) return;
+  const input = document.getElementById('gitRepoLink');
+  const repo = input.value.trim();
+  if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) { toast('repo must be owner/name', false); return; }
+  const login = document.getElementById('gitAccount').value || undefined;
+  toast('linking ' + repo + '…');
+  try {
+    const r = await (await fetch('/api/github/link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appId: currentApp, repo, login }) })).json();
+    if (r.ok) { input.value = ''; toast('linked ' + repo + ' — redeploy pulls with the credentials above', true); }
+    else toast(r.error || 'link failed', false);
+    refresh();
+  } catch (e) { toast('link failed: ' + e.message, false); }
+}
 async function setPoll() {
   if (!currentApp) return;
   const minutes = parseInt(document.getElementById('pollSel').value, 10) || 0;

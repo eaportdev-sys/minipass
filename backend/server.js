@@ -1817,22 +1817,29 @@ app.get('/api/github/repos', async (req, res) => {
 app.post('/api/github/link', async (req, res) => {
   // { appId, repo: "owner/name", login? } -> connect the source. Automatic
   // deployment remains off until the site owner explicitly enables it.
+  // Credentials resolve per-site (stored site token first), so a token-only
+  // site can link or relink without a panel account - e.g. after a token
+  // change. The stored token and automation settings are preserved.
   try {
     const { appId, repo, login } = req.body;
     const parts = String(repo || '').split('/');
-    if (parts.length !== 2) return res.status(400).json({ error: 'repo must be owner/name' });
+    if (parts.length !== 2 || !parts[0] || !parts[1]) return res.status(400).json({ error: 'repo must be owner/name' });
     const db_ = load();
     const meta = db_.apps.find(a => a.id === appId);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
-    const info = await gh.apiAs(login || undefined, `/repos/${parts[0]}/${parts[1]}`);
-    const acct = gh.getAuth(login);
+    const trimmedLogin = String(login || '').trim();
+    if (trimmedLogin && !gh.getAuth(trimmedLogin)) return res.status(400).json({ error: 'account not connected: ' + trimmedLogin });
+    const prev = (meta.github && typeof meta.github === 'object') ? meta.github : {};
+    const probe = { github: { token: prev.token || null, login: trimmedLogin || prev.login || null } };
+    const info = await gh.apiFor(probe, `/repos/${parts[0]}/${parts[1]}`);
     let head = null;
     try {
-      const c = await gh.apiAs(login || undefined, `/repos/${parts[0]}/${parts[1]}/commits/${encodeURIComponent(info.default_branch)}`);
+      const c = await gh.apiFor(probe, `/repos/${parts[0]}/${parts[1]}/commits/${encodeURIComponent(info.default_branch)}`);
       head = c && c.sha;
     } catch {}
     meta.repoUrl = info.clone_url;
-    meta.github = { repo: info.full_name, branch: info.default_branch, login: acct && acct.login, sha: head, pollMinutes: 0, enabled: false };
+    meta.github = { ...prev, repo: info.full_name, branch: info.default_branch, login: trimmedLogin || prev.login || null, sha: head,
+      pollMinutes: typeof prev.pollMinutes === 'number' ? prev.pollMinutes : 0, enabled: !!prev.enabled };
     save(db_);
     res.json({ ok: true, repoUrl: meta.repoUrl, automation: false, webhook: 'disabled until enabled on the site deploy page' });
   } catch (e) { res.status(500).json({ error: e.message }); }

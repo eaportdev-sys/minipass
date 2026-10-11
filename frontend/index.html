@@ -113,6 +113,11 @@
               <div class="meta">Private to this site and used before shared accounts.</div>
               <div class="controlrow"><input id="gitSiteToken" type="password" placeholder="github_pat_…"><button onclick="saveSiteToken()">save</button><button onclick="clearSiteToken()">clear</button></div>
             </div>
+          <div class="linkrepo-row">
+              <b>Link repository</b>
+              <div class="meta">Connect owner/name so redeploys pull code with the credentials above. Re-link after a token change or to switch repositories.</div>
+              <div class="controlrow"><input id="gitRepoLink" placeholder="owner/name" autocomplete="off"><button onclick="linkRepo()">link repo</button></div>
+            </div>
           </div>
           <div class="meta keyrow">SSH remote deploy key (read-only): <button id="repoKeyToggle" onclick="showRepoKey()">show key</button></div>
           <div class="meta"><code id="repoKeyOut"></code></div>
