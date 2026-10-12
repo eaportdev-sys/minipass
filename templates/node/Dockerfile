@@ -53,8 +53,6 @@ WORKDIR /app
 # Copy built application from build stage
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package*.json ./
-COPY --from=build /app/dist ./dist 2>/dev/null || true
-COPY --from=build /app/build ./build 2>/dev/null || true
 COPY --from=build /app ./
 
 EXPOSE 3000

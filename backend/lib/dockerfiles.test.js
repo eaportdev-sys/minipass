@@ -243,6 +243,7 @@ try {
     // Correct order: source before install so lifecycle scripts have schemas/configs.
     assert(template.indexOf('COPY . .') < template.lastIndexOf('npm ci'), `${type}: source copied before install for lifecycle scripts`);
     assert(!/RUN npm (?:i|install).*\|\| true/.test(template), `${type}: install failures must abort the build`);
+    assert(!/COPY[^\n]*(?:2>|\|\|)/.test(template), `${type}: COPY instructions do not use shell redirection`);
     // Build-time ARGs for generators
     assert(template.includes('ARG DATABASE_URL='), `${type}: has DATABASE_URL build arg`);
     assert(template.includes('ARG SHADOW_DATABASE_URL='), `${type}: has SHADOW_DATABASE_URL build arg`);
