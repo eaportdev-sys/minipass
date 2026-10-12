@@ -233,6 +233,7 @@ try {
       assert(template.includes('start:built'), 'node: avoids dev start scripts when a production script exists');
       assert(template.includes('[ ! -d .next ]'), 'node: fails the build when a next app produces no .next output');
       assert(template.includes('BUILD PRODUCED NO .next/'), 'node: names the missing next build output loudly');
+      assert(template.includes('rebinding to 0.0.0.0'), 'node: rebinds localhost-bound start scripts so published ports can reach them');
     } else {
       assert(template.includes('FROM minipass/node:22 AS build'), 'react: uses minipass base image for build');
       assert(template.includes('FROM nginx:alpine'), 'react: uses nginx for serving');

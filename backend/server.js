@@ -1710,6 +1710,7 @@ const LOG_RULES = [
   { re: /password authentication failed/i, level: 'fail', msg: () => 'db password rejected — .env out of sync with the kept volume (recreate resets both)' },
   { re: /getaddrinfo ENOTFOUND ([^\s]+)/i, level: 'fail', msg: m => `DNS fail for "${m[1]}" — wrong service hostname in env? (use db-<type>)` },
   { re: /connect ECONNREFUSED ([^\s:]+):(\d+)/i, level: 'fail', msg: m => `nothing at ${m[1]}:${m[2]} — wrong host/port in env, or that service is down` },
+  { re: /127\.0\.0\.1:\d+/, level: 'warn', msg: () => '127.0.0.1 inside a container is the container itself — servers must bind 0.0.0.0 to be reachable, and clients must use the service host, not localhost' },
   { re: /EADDRINUSE[^:]*:?(\d+)?/i, level: 'fail', msg: m => `port ${m[1] || '?'} busy inside the container — app hardcodes a port?` },
   { re: /Cannot find module ([^\s'"]+)/, level: 'fail', msg: m => `missing node module ${m[1]} — incomplete install, rebuild the app` },
   { re: /JavaScript heap out of memory|OOMKilled/i, level: 'fail', msg: () => 'out of memory — raise box swap or container limits' },
