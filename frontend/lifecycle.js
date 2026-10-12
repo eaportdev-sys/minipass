@@ -25,15 +25,14 @@ async function runDeploy(id, services, local = false) {
   manualDeployActive = id;
   if (id === currentApp) setPowerState('sitePower', 'deploying', 'Deploying');
   prog.style.display = 'block';
-  bar.style.width = '2%'; bar.style.background = '#4caf50';
+  bar.style.width = '100%'; bar.style.background = '#4caf50';
+  pct.textContent = 'working…';
   const tick = setInterval(() => {
     const s = Math.floor((Date.now() - t0) / 1000);
     time.textContent = s + 's';
-    if (!done) {
-      const p = Math.min(95, 2 + (Date.now() - t0) / 90000 * 93);
-      bar.style.width = p.toFixed(0) + '%';
-      pct.textContent = p.toFixed(0) + '%';
-    }
+    // Honest progress: the panel cannot know build percent, so show elapsed
+    // effort plus the live log tail instead of a faked percentage.
+    if (!done) pct.textContent = s > 60 ? `working… ${Math.floor(s / 60)}m` : 'working…';
   }, 1000);
   const poll = setInterval(async () => {
     try {
