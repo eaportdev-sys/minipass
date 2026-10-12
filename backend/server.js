@@ -10,6 +10,7 @@ const { WebSocketServer } = require('ws');
 const { createApp, appDir, normDbs, dbService, nginxConf, ensureDockerfile, needsDockerfileOptIn, inferPort, TYPE_PORT } = require('./lib/generator');
 const { gitEnv, pubKey, appPubKey, appGitEnv } = require('./lib/ssh');
 const svc = require('./lib/services');
+const deployMarkers = require('./lib/deploy-markers');
 const dbTools = require('./lib/db-tools');
 const migrations = require('./lib/migrations');
 const routes = require('./lib/routes');
@@ -1019,7 +1020,11 @@ function deploy(id, opts = {}) {
     return deployNow(id, opts);
   });
   deployQueues.set(id, run);
-  const clear = () => { if (deployQueues.get(id) === run) deployQueues.delete(id); };
+  // Host-visible marker so the upgrade job defers its restart while any site
+  // deploy is queued or running. Cleared only when no queue remains for the
+  // site, so overlapping deploys never drop coverage early.
+  deployMarkers.mark(path.dirname(DATA_FILE), id);
+  const clear = () => { if (deployQueues.get(id) === run) deployQueues.delete(id); if (!deployQueues.has(id)) deployMarkers.unmark(path.dirname(DATA_FILE), id); };
   run.then(clear, clear);
   return run;
 }
@@ -3827,6 +3832,10 @@ app.get('/api/panel/version', (req, res) => {
 });
 app.post('/api/panel/upgrade', async (req, res) => {
   if (!REPO_DIR) return res.status(501).json({ error: 'repo not mounted (add ./:/repo volume)' });
+  // A restart now would orphan any running site deploy (in-memory queues die
+  // with this container, leaving a stale status). Refuse while deploys are
+  // queued or running; the host-side job defers the same way via markers.
+  if (deployLocks.size > 0 || deployQueues.size > 0) return res.status(409).json({ error: 'site deploy in progress - upgrade when it finishes' });
   // Upgrade lock: double-clicks / retries must not stack concurrent recreates.
   const lockFile = path.join(REPO_DIR, '.upgrade-lock');
   try {
@@ -3916,3 +3925,10 @@ wss.on('connection', (ws, req) => {
 });
 
 server.listen(PORT, () => console.log(`minipaas on :${PORT}, apps in ${APPS_DIR}`));
+// A restart orphans any deploy markers from the killed process (queues are
+// in-memory). Fresh boot has no active deploys by definition, so sweep them
+// rather than blocking host upgrades forever.
+try {
+  const swept = deployMarkers.sweep(path.dirname(DATA_FILE));
+  if (swept) console.log(`cleared ${swept} orphaned deploy marker(s)`);
+} catch (e) { console.error('deploy marker sweep:', e.message); }
