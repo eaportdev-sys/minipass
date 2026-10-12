@@ -17,16 +17,19 @@ DOCKER_BUILDKIT=1 docker build \
   --target builder \
   .
 
+# Build build image used by app Dockerfiles during dependency install/build.
+echo "Building ${PREFIX}/node:22..."
+DOCKER_BUILDKIT=1 docker build \
+  --tag "${PREFIX}/node:22" \
+  --file templates/base/node.Dockerfile \
+  .
+
 # Build runtime image (minimal, only runtime deps)
 echo "Building ${PREFIX}/node:22-runtime..."
 DOCKER_BUILDKIT=1 docker build \
   --tag "${PREFIX}/node:22-runtime" \
   --file templates/base/node-runtime.Dockerfile \
   .
-
-# Build combined base image (alias for backward compat)
-echo "Building ${PREFIX}/node:22..."
-docker tag "${PREFIX}/node:22-runtime" "${PREFIX}/node:22"
 
 echo "Base images built:"
 docker images "${PREFIX}/node" --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"
