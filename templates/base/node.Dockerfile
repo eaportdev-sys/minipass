@@ -32,16 +32,6 @@ RUN apk add --no-cache \
     sqlite-dev postgresql-dev \
     git
 
-# Copy pre-compiled native modules (if any succeeded). Dockerfile COPY cannot
-# use shell redirection/`|| true`; copy the always-created directory instead.
-COPY --from=builder /precompiled /tmp/precompiled
-
-# Install pre-compiled modules globally so they're available without recompilation
-RUN if ls /tmp/precompiled/*.tgz 1>/dev/null 2>&1; then \
-      npm install -g /tmp/precompiled/*.tgz && \
-      rm -rf /tmp/precompiled; \
-    fi
-
 # npm cache directory for BuildKit mount
 RUN mkdir -p /root/.npm && chmod 777 /root/.npm
 

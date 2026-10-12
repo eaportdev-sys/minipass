@@ -213,7 +213,7 @@ try {
   const baseNode = fs.readFileSync(path.join(templates, 'base', 'node.Dockerfile'), 'utf8').replace(/\r\n/g, '\n');
   assert(baseNode.includes('python3 build-base'), 'base node image includes native build toolchain for dependency install');
   assert(baseNode.includes('sqlite-dev'), 'base node image includes sqlite headers for better-sqlite3');
-  assert(baseNode.includes('COPY --from=builder /precompiled /tmp/precompiled'), 'base node image copies precompiled directory without shell syntax in COPY');
+  assert(!baseNode.includes('npm install -g /tmp/precompiled'), 'base node image does not globally install optional precompiled tarballs');
   assert(!/COPY[^\n]*(?:2>|\|\|)/.test(baseNode), 'base node image COPY instructions do not use shell redirection');
   const baseScript = fs.readFileSync(path.join(__dirname, '../../build-base-images.sh'), 'utf8').replace(/\r\n/g, '\n');
   assert(baseScript.includes('--tag "${PREFIX}/node:22"') && baseScript.includes('--file templates/base/node.Dockerfile'), 'node:22 tag is built from the build-tool image, not runtime');
