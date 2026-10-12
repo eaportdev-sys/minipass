@@ -14,8 +14,10 @@ ARG DIRECT_URL
 # detected packageManager field or lockfiles; default npm preserves old builds).
 ARG PACKAGE_MANAGER=npm
 
-# Copy package manifests first for optimal layer caching.
-COPY package*.json ./
+# Copy source before install. Many real apps run generate/prepare hooks during
+# install that need schemas/config files, so correctness wins over a package-only
+# cache layer.
+COPY . .
 
 # Install dependencies with shared cache mounts (persistent across all sites/builds).
 # --prefer-offline uses cache when available, falls back to network.
@@ -27,7 +29,7 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
     export COREPACK_ENABLE_DOWNLOAD_PROMPT=0; \
     if [ "$PACKAGE_MANAGER" = "pnpm" ]; then \
       corepack enable >/dev/null 2>&1; \
-      pnpm install --frozen-lockfile --prefer-offline || pnpm install --prefer-offline --no-frozen-lockfile; \
+      pnpm install --dangerously-allow-all-builds --frozen-lockfile --prefer-offline || pnpm install --frozen-lockfile --prefer-offline || pnpm install --dangerously-allow-all-builds --prefer-offline --no-frozen-lockfile || pnpm install --prefer-offline --no-frozen-lockfile; \
     elif [ "$PACKAGE_MANAGER" = "yarn" ]; then \
       corepack enable >/dev/null 2>&1; \
       yarn install --frozen-lockfile || yarn install; \
@@ -37,14 +39,11 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
       npm install --prefer-offline; \
     fi
 
-# Copy source after install so lifecycle scripts have schemas/configs.
-COPY . .
-
 # Build the production bundle. Vite emits dist/, CRA emits build/.
 # Root build scripts for full-stack repos sometimes emit exactly one nested
 # frontend bundle (for example web/dist or client/build); normalize that too
 # instead of forcing a separate service when the repository already builds root.
-RUN npm run build && \
+RUN if [ "$PACKAGE_MANAGER" = "pnpm" ]; then pnpm run build; elif [ "$PACKAGE_MANAGER" = "yarn" ]; then yarn run build; else npm run build; fi && \
     if [ -d dist ]; then \
       true; \
     elif [ -d build ]; then \

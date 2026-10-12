@@ -60,8 +60,8 @@ volumes:
   assert.equal(needsDockerfileOptIn(api, 'node'), false, 'existing Dockerfile never offers replacement');
 
   const nodeTemplate = fs.readFileSync(path.resolve(__dirname, '../../templates/node/Dockerfile'), 'utf8');
-  assert(nodeTemplate.includes('RUN npm run build --if-present'), 'standard Node image builds compiled projects');
-  assert(nodeTemplate.includes('exec npm start'), 'standard Node image uses a declared start script');
+  assert(nodeTemplate.includes('npm run build --if-present') && nodeTemplate.includes('pnpm run build --if-present'), 'standard Node image builds compiled projects with the detected manager');
+  assert(nodeTemplate.includes('start:built') && nodeTemplate.includes('next start'), 'standard Node image prefers production start scripts/framework start');
   assert(nodeTemplate.includes('exec node index.js'), 'standard Node image retains the simple index.js fallback');
 
   console.log('service context and Dockerfile validation: OK');

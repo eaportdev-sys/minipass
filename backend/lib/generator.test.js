@@ -69,7 +69,7 @@ try {
     const created = createApp(input);
     assert.equal(created.subdir, 'server');
     const dockerfile = fs.readFileSync(path.join(pending, 'code', 'server', 'Dockerfile'), 'utf8');
-    assert(dockerfile.includes('exec npm start'), 'Node service with a start script seeds the standard Node image');
+    assert(dockerfile.includes('start:built') && dockerfile.includes('No production start script'), 'Node service seeds the production-start standard image');
     assert(!fs.existsSync(path.join(pending, 'code', 'package.json')), 'standard template never copies the starter over a repository checkout');
     assert.equal(fs.readFileSync(path.join(pending, 'code', 'server', 'package.json'), 'utf8'), '{"scripts":{"build":"tsc","start":"node dist/index.js"}}');
     assert(fs.readFileSync(path.join(pending, 'docker-compose.yml'), 'utf8').includes('code/server'));

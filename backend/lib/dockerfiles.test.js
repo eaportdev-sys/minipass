@@ -219,20 +219,20 @@ try {
       assert(template.includes('npm ci --prefer-offline'), 'node: uses npm ci with cache');
       assert(template.includes('--mount=type=cache'), 'node: uses BuildKit cache mount');
       assert(template.includes('ARG PACKAGE_MANAGER=npm'), 'node: manager chosen at build time, npm default');
-      assert(template.includes('pnpm install --frozen-lockfile'), 'node: installs pnpm repos with corepack');
+      assert(template.includes('pnpm install --dangerously-allow-all-builds --frozen-lockfile'), 'node: installs pnpm repos non-interactively with corepack');
       assert(template.includes('yarn install --frozen-lockfile'), 'node: installs yarn repos with corepack');
+      assert(template.includes('start:built'), 'node: avoids dev start scripts when a production script exists');
     } else {
       assert(template.includes('FROM minipass/node:22 AS build'), 'react: uses minipass base image for build');
       assert(template.includes('FROM nginx:alpine'), 'react: uses nginx for serving');
       assert(template.includes('npm ci --prefer-offline'), 'react: uses npm ci with cache');
       assert(template.includes('ARG PACKAGE_MANAGER=npm'), 'react: manager chosen at build time, npm default');
-      assert(template.includes('pnpm install --frozen-lockfile'), 'react: installs pnpm repos with corepack');
+      assert(template.includes('pnpm install --dangerously-allow-all-builds --frozen-lockfile'), 'react: installs pnpm repos non-interactively with corepack');
       assert(template.includes('yarn install --frozen-lockfile'), 'react: installs yarn repos with corepack');
     }
     // Tools are in base image; template focuses on app build
-    // Correct order: package manifests first, then install, then source (so lifecycle scripts have schemas)
-    assert(template.indexOf('COPY package*.json') < template.lastIndexOf('npm ci'), `${type}: package manifests copied before install`);
-    assert(template.lastIndexOf('npm ci') < template.indexOf('COPY . .'), `${type}: source copied after install for lifecycle scripts`);
+    // Correct order: source before install so lifecycle scripts have schemas/configs.
+    assert(template.indexOf('COPY . .') < template.lastIndexOf('npm ci'), `${type}: source copied before install for lifecycle scripts`);
     assert(!/RUN npm (?:i|install).*\|\| true/.test(template), `${type}: install failures must abort the build`);
     // Build-time ARGs for generators
     assert(template.includes('ARG DATABASE_URL='), `${type}: has DATABASE_URL build arg`);

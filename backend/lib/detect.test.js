@@ -66,6 +66,7 @@ const nextPkg = { scripts: { dev: 'node run.mjs dev', build: 'node run.mjs build
 const nextRoot = decideType(['package.json', 'next.config.ts', 'vite.config.ts', 'app/page.tsx'], nextPkg);
 assert.equal(nextRoot.type, 'node', JSON.stringify(nextRoot));
 assert.equal(nextRoot.detected, 'next', JSON.stringify(nextRoot));
+assert(decideType(['package.json'], { dependencies: { '@neondatabase/serverless': '^1.0.0' } }).dbs.includes('postgres'), 'Neon driver requires postgres');
 const nextNoBuild = decideType(['package.json', 'next.config.js'], { scripts: { start: 'next start' }, dependencies: { next: '^15.0.0' } });
 assert.equal(nextNoBuild.type, 'node', JSON.stringify(nextNoBuild));
 const nuxtRoot = decideType(['package.json', 'nuxt.config.ts'], { scripts: { build: 'nuxt build', start: 'node .output/server/index.mjs' }, dependencies: { nuxt: '^3.0.0' } });

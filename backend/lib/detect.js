@@ -13,7 +13,7 @@ function decideType(paths, pkg) {
   // database hints from driver deps (confident packages only)
   const deps = { ...(((pkg || {}).dependencies) || {}), ...(((pkg || {}).devDependencies) || {}) };
   const dbs = [];
-  if (deps.pg || deps.postgres || deps['pg-hstore']) dbs.push('postgres');
+  if (deps.pg || deps.postgres || deps['pg-hstore'] || deps['@neondatabase/serverless']) dbs.push('postgres');
   if (deps.mysql || deps.mysql2) dbs.push('mysql');
   if (deps.mariadb) dbs.push('mariadb');
   if (deps.mongoose || deps.mongodb) dbs.push('mongo');

@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const { exec, execSync, execFileSync, spawn } = require('child_process');
 const http = require('http');
 const { WebSocketServer } = require('ws');
-const { createApp, appDir, normDbs, dbService, nginxConf, ensureDockerfile, needsDockerfileOptIn } = require('./lib/generator');
+const { createApp, appDir, normDbs, dbService, nginxConf, ensureDockerfile, needsDockerfileOptIn, inferPort, TYPE_PORT } = require('./lib/generator');
 const { gitEnv, pubKey, appPubKey, appGitEnv } = require('./lib/ssh');
 const svc = require('./lib/services');
 const dbTools = require('./lib/db-tools');
@@ -620,18 +620,37 @@ app.post('/api/apps', async (req, res) => {
     envSetManaged(created.dir, { COMPOSE_PROJECT_NAME: id });
     const db_ = load();
     const meta = { id, name: rawName, type: created.type || type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: appDomain, token, hostPort, packageManager, subdir: created.subdir || '', storageQuota, buildOptions: { modernize: req.body.modernizeBuild === true }, createdAt: new Date().toISOString() };
+    let detectedServices = [];
+    try { detectedServices = configureDetectedServices(meta, created.dir); }
+    catch (e) { console.error(id, 'auto service detection:', e.message); }
     // Capture repository env sources before the first deploy. Never fail an
     // otherwise valid create solely because the private snapshot could not be written.
     try { applyEnvDefaults(meta, created.dir, req.hostname, req.protocol); }
     catch (e) { console.error(id, 'env defaults snapshot:', e.message); }
     db_.apps = db_.apps.filter(a => a.id !== id).concat([meta]);
     save(db_);
+    try {
+      const autoDbs = [];
+      for (const need of requiredDatabases(meta, path.join(created.dir, 'code'))) {
+        if (!normDbs(meta.db).includes(need)) {
+          const r = attachDatabase(meta, need);
+          if (r.attached) autoDbs.push(need);
+        }
+      }
+      const healed = ensureDatabaseAliases(meta);
+      if (autoDbs.length || healed.length) {
+        svc.renderProject({ dir: created.dir, templatesDir: TEMPLATES_DIR, meta });
+        panelLog.logEvent({ level: 'info', area: 'create', site: id, message: `database wiring detected: ${autoDbs.join(', ') || 'aliases'}` });
+      }
+    } catch (e) { console.error(id, 'auto database detection:', e.message); }
     try { fs.unlinkSync(path.join(created.dir, '.pending-create.json')); } catch {}
     // Source linking and automatic deployment are separate choices. The first
     // build is manual and automation stays off until explicitly enabled.
     const webhookNote = ghLink ? 'github linked - automation disabled' : 'no github automation';
-    // build async so UI returns fast (goes through deploy() so it lands in deploy.log)
-    deploy(id).catch(e => console.error(id, e.message));
+    if (detectedServices.length) panelLog.logEvent({ level: 'info', area: 'create', site: id, message: 'services detected: ' + detectedServices.join(', ') });
+    // First build is manual. AUTO_DEPLOY is intentionally false for now, so a
+    // create/link flow cannot surprise-run a half-reviewed repository.
+    if (AUTO_DEPLOY) deploy(id).catch(e => console.error(id, e.message));
     if (storageWarning) panelLog.logEvent({ level: 'warn', area: 'create', site: id, message: 'storage allowance recorded but not enforced: ' + storageWarning });
     res.json({ ...pubApp(meta), localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote, storageEnforced: storageQuota.enforced === true, ...(storageWarning ? { storageWarning } : {}) });
   } catch (e) {
@@ -1021,6 +1040,151 @@ function resolveBuildManager(meta, codeDir) {
   return 'npm';
 }
 
+const RELATIONAL_DBS = ['postgres', 'mysql', 'mariadb'];
+function envMergeManaged(dir, lines) {
+  const envPath = path.join(dir, '.env');
+  let envText = '';
+  try { envText = fs.readFileSync(envPath, 'utf8'); } catch {}
+  const have = new Set();
+  for (const line of envText.split('\n')) {
+    const m = line.match(/^([A-Z_][A-Z0-9_]*)=/);
+    if (m) have.add(m[1]);
+  }
+  const fresh = [];
+  for (const line of lines) {
+    const k = String(line).split('=')[0];
+    if (!k || have.has(k)) continue;
+    have.add(k);
+    fresh.push(line);
+  }
+  if (!fresh.length) return [];
+  fs.writeFileSync(envPath, envText.replace(/\s*$/, '') + '\n' + fresh.join('\n') + '\n');
+  try { fs.appendFileSync(path.join(dir, '.env.managed'), fresh.map(l => l.split('=')[0]).join('\n') + '\n'); } catch {}
+  return fresh.map(l => l.split('=')[0]);
+}
+function dbAliasLines(block) {
+  if (!block || !block.info || !block.url) return [];
+  return [`DB_HOST=${block.info.host}`, `DB_PORT=${block.info.port}`, `DB_NAME=${block.info.name}`, `DB_USER=${block.info.user}`, `DB_PASSWORD=${block.info.pass}`, `DATABASE_URL=${block.url}`];
+}
+function attachDatabase(meta, type) {
+  type = normDbs(type)[0];
+  if (!type) throw new Error('unknown database type');
+  const db_ = load();
+  const stored = db_.apps.find(a => a.id === meta.id);
+  if (!stored) throw new Error('unknown app');
+  const dir = appDir(APPS_DIR, stored.id);
+  const ymlPath = path.join(dir, 'docker-compose.yml');
+  if (!fs.existsSync(ymlPath)) throw new Error('app has no compose file');
+  const current = normDbs(stored.db);
+  if (current.includes(type)) {
+    Object.assign(meta, stored);
+    return { attached: false, keys: ensureDatabaseAliases(stored) };
+  }
+  const yml = fs.readFileSync(ymlPath, 'utf8');
+  if (yml.includes(`db-${type}:`)) {
+    stored.db = [...current, type];
+    save(db_);
+    Object.assign(meta, stored);
+    return { attached: false, keys: ensureDatabaseAliases(stored) };
+  }
+  const hadRelational = current.some(t => RELATIONAL_DBS.includes(t));
+  const safe = stored.id.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'app';
+  const b = dbService(type, safe, `db-${type}`, `dbdata-${type}`);
+  let out = yml.replace(/\nvolumes:\n/, `\n${b.compose}\nvolumes:\n`);
+  if (out === yml) out = yml.replace(/\s*$/, `\n${b.compose}\nvolumes:\n  ${b.vol}:\n`);
+  else {
+    const start = out.search(/^volumes:[ \t]*\r?$/m);
+    const next = out.slice(start).search(/\n(?=[A-Za-z_][A-Za-z0-9_-]*:)/);
+    const end = next < 0 ? out.length : start + next + 1;
+    out = out.slice(0, end).replace(/\s*$/, '\n') + `  ${b.vol}:\n` + out.slice(end);
+  }
+  fs.writeFileSync(ymlPath, out);
+  if (stored.storageQuota) quotas.bindDatabases(dir);
+  const lines = [...b.lines, ...(!hadRelational && RELATIONAL_DBS.includes(type) ? dbAliasLines(b) : [])];
+  const keys = envMergeManaged(dir, lines);
+  stored.db = [...current, type];
+  save(db_);
+  Object.assign(meta, stored);
+  return { attached: true, keys };
+}
+function ensureDatabaseAliases(meta) {
+  const current = normDbs(meta.db);
+  const first = current.find(t => RELATIONAL_DBS.includes(t));
+  if (!first) return [];
+  const dir = appDir(APPS_DIR, meta.id);
+  const env = parseEnvFile(path.join(dir, '.env'));
+  if (env.DATABASE_URL && env.DB_HOST && env.DB_USER && env.DB_PASSWORD) return [];
+  const prefix = first.toUpperCase();
+  const host = env[`${prefix}_HOST`] || (current.length === 1 ? 'db' : `db-${first}`);
+  const port = env[`${prefix}_PORT`] || (first === 'postgres' ? '5432' : '3306');
+  const name = env[`${prefix}_DB`] || env[`${prefix}_DATABASE`] || meta.id.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'app';
+  const user = env[`${prefix}_USER`] || name;
+  const pass = env[`${prefix}_PASSWORD`] || env.DB_PASSWORD || '';
+  if (!pass) return [];
+  const scheme = first === 'postgres' ? 'postgresql' : 'mysql';
+  return envMergeManaged(dir, [`DB_HOST=${host}`, `DB_PORT=${port}`, `DB_NAME=${name}`, `DB_USER=${user}`, `DB_PASSWORD=${pass}`, `DATABASE_URL=${scheme}://${user}:${pass}@${host}:${port}/${name}`]);
+}
+function requiredDatabases(meta, codeRoot) {
+  const dir = appDir(APPS_DIR, meta.id);
+  const needs = new Set();
+  for (const service of svc.fullServices(meta, dir).filter(s => s.enabled !== false)) {
+    const ctx = path.join(codeRoot, service.subdir || '');
+    try {
+      const a = preflight.analyzeService(ctx, service.type, service.subdir || '');
+      for (const db of a.databaseNeeds || []) if (RELATIONAL_DBS.includes(db) || ['mongo', 'redis'].includes(db)) needs.add(db);
+    } catch {}
+  }
+  return [...needs];
+}
+function serviceNameFromSubdir(subdir, used) {
+  const base = (subdir || 'app').split('/').filter(Boolean).slice(-2).join('-').toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '') || 'app';
+  let name = base === 'app' || !used.has(base) ? base : base + '-svc';
+  let i = 2;
+  while (used.has(name)) name = `${base}-${i++}`;
+  used.add(name);
+  return name;
+}
+function configureDetectedServices(meta, dir) {
+  if (!meta.repoUrl || meta.subdir) return [];
+  const codeDir = path.join(dir, 'code');
+  let analysis;
+  try { analysis = preflight.analyzeRepository(codeDir, null, null); } catch { return []; }
+  const detected = (analysis.services || []).filter(s => s && s.type && fs.existsSync(path.join(codeDir, s.subdir || '')));
+  if (!detected.length) return [];
+  const current = svc.fullServices(meta, dir);
+  if (detected.length === 1 && current.length === 1 && (current[0].subdir || '') === (detected[0].subdir || '') && current[0].type === detected[0].type) return [];
+  const usedNames = new Set(['app']);
+  const usedPorts = hostPortsInUse();
+  if (meta.hostPort) usedPorts.add(meta.hostPort);
+  const nextHost = () => {
+    let p = 8000;
+    while (usedPorts.has(p) && p < 9000) p++;
+    usedPorts.add(p);
+    return p;
+  };
+  const services = detected.map((s, i) => {
+    const ctx = path.join(codeDir, s.subdir || '');
+    const port = inferPort(ctx, TYPE_PORT[s.type] || 3000);
+    return {
+      name: i === 0 ? 'app' : serviceNameFromSubdir(s.subdir, usedNames),
+      subdir: s.subdir || '',
+      type: s.type,
+      port,
+      hostPort: i === 0 ? (meta.hostPort || nextHost()) : nextHost(),
+      enabled: true,
+      buildOptions: meta.buildOptions || {}
+    };
+  });
+  meta.services = services;
+  meta.type = services[0].type;
+  meta.subdir = services[0].subdir;
+  meta.hostPort = services[0].hostPort;
+  envSetManaged(dir, { APP_TYPE: meta.type, PORT: String(services[0].port), HOST_PORT: String(meta.hostPort) });
+  const out = svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
+  meta.services = out.normalized;
+  return services.map(s => s.name + ':' + (s.subdir || '.'));
+}
+
 async function deployNow(id, opts = {}) {
   // The queue above serializes builds. Keep the lock as live UI state and as a
   // defensive invariant against any future call that bypasses the queue.
@@ -1123,6 +1287,31 @@ async function deployNow(id, opts = {}) {
       throw new Error(msg);
     }
     } // end pull (local rebuilds skip the sync: box files are the source of truth)
+  }
+  // Repository-driven database guard: before any build/container swap, read the
+  // enabled service folders and attach missing managed DBs. This prevents the
+  // common "build succeeded, API crash-loops with DATABASE_URL is required"
+  // failure from create/link flows and old sites alike.
+  try {
+    const needed = requiredDatabases(meta, buildCodeDir);
+    const current = normDbs(meta.db);
+    const added = [];
+    for (const dbType of needed) {
+      if (!current.includes(dbType)) {
+        const r = attachDatabase(meta, dbType);
+        if (r.attached) added.push(dbType);
+        current.push(dbType);
+      }
+    }
+    const healed = ensureDatabaseAliases(meta);
+    if (added.length || healed.length) {
+      svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
+      fs.appendFileSync(buildLog, `--- database wiring: ${added.length ? 'attached ' + added.join(', ') : 'aliases refreshed'}${healed.length ? ' (' + healed.join(', ') + ')' : ''} ---\n`);
+    }
+  } catch (e) {
+    const shaDb = sourceSha || await currentSha(dir);
+    await recordDeploy(id, { sha: shaDb, at: new Date().toISOString(), status: 'error', error: ('database wiring failed - running containers untouched: ' + e.message).slice(-500) });
+    throw e;
   }
   // All deployment sources, including detached local-push checkouts and local
   // rebuilds, pass the same approval gate before any build or container swap.
@@ -2340,49 +2529,13 @@ app.post('/api/apps/:id/db', async (req, res) => {
     const db_ = load();
     const meta = db_.apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
-    const dir = appDir(APPS_DIR, meta.id);
-    const ymlPath = path.join(dir, 'docker-compose.yml');
-    const envPath = path.join(dir, '.env');
-    if (!fs.existsSync(ymlPath)) return res.status(400).json({ error: 'app has no compose file' });
     const current = normDbs(meta.db);
-    const yml = fs.readFileSync(ymlPath, 'utf8');
-    if (current.includes(type) || yml.includes(`db-${type}:`)) {
+    if (current.includes(type)) {
       return res.status(400).json({ error: type + ' already attached' });
     }
-    const safe = meta.id.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'app';
-    const b = dbService(type, safe, `db-${type}`, `dbdata-${type}`);
-    // splice service in before the volumes: block (or append both at end)
-    let out = yml.replace(/\nvolumes:\n/, `\n${b.compose}\nvolumes:\n`);
-    if (out === yml) out = yml.replace(/\s*$/, `\n${b.compose}\nvolumes:\n  ${b.vol}:\n`);
-    else {
-      // Bound quota volumes have nested driver_opts. Append at the END of the
-      // top-level volumes section, never between a volume name and its options.
-      const start = out.search(/^volumes:[ \t]*\r?$/m);
-      const next = out.slice(start).search(/\n(?=[A-Za-z_][A-Za-z0-9_-]*:)/);
-      const end = next < 0 ? out.length : start + next + 1;
-      out = out.slice(0, end).replace(/\s*$/, '\n') + `  ${b.vol}:\n` + out.slice(end);
-    }
-    fs.writeFileSync(ymlPath, out);
-    if (meta.storageQuota) quotas.bindDatabases(dir);
-    // merge env: existing keys win (old passwords keep matching old volumes)
-    const have = new Set();
-    let envText = '';
-    try {
-      envText = fs.readFileSync(envPath, 'utf8');
-      for (const line of envText.split('\n')) {
-        const m = line.match(/^([A-Z_]+)=/);
-        if (m) have.add(m[1]);
-      }
-    } catch {}
-    const fresh = b.lines.filter(l => !have.has(l.split('=')[0]));
-    fs.writeFileSync(envPath, envText.replace(/\s*$/, '') + '\n' + fresh.join('\n') + '\n');
-    try {
-      fs.appendFileSync(path.join(dir, '.env.managed'), fresh.map(l => l.split('=')[0]).join('\n') + '\n');
-    } catch {}
-    meta.db = [...current, type];
-    save(db_);
+    const result = attachDatabase(meta, type);
     await markDirty(meta.id, 'db ' + type + ' added');
-    if (!(req.body && req.body.apply === true)) return res.json({ ok: true, added: type, pending: true });
+    if (!(req.body && req.body.apply === true)) return res.json({ ok: true, added: type, keys: result.keys, pending: true });
     try { await deploy(meta.id); } catch (e) { return res.json({ ok: true, added: type, redeployError: e.message }); }
     res.json({ ok: true, added: type, redeployed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }

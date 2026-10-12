@@ -181,8 +181,23 @@ const previousNpmReact = [
   '',
   'EXPOSE 80'
 ].join('\n');
-const LEGACY = { node: [previousNpmNode, previousNativeNode, oldNode, oldSimpleNode], react: [previousNpmReact, previousNativeReact, oldReact, oldViteReact, oldLooseReact, oldUnmarkedReact, firstReact] };
 const normalized = text => text.replace(/\r\n/g, '\n').trim();
+const previousManagerNode = text => text.startsWith('# minipass template\n# Universal Node.js template') &&
+  text.includes('ARG PACKAGE_MANAGER=npm') &&
+  text.includes('pnpm install --frozen-lockfile --prefer-offline || pnpm install --prefer-offline --no-frozen-lockfile') &&
+  text.includes('RUN npm run build --if-present') &&
+  text.includes('exec npm start; else exec node index.js; fi');
+const previousManagerReact = text => text.startsWith('# minipass template\n# Universal React/Vite/CRA/Next') &&
+  text.includes('ARG PACKAGE_MANAGER=npm') &&
+  text.includes('pnpm install --frozen-lockfile --prefer-offline || pnpm install --prefer-offline --no-frozen-lockfile') &&
+  text.includes('RUN npm run build &&') &&
+  text.includes('COPY --from=build /app/dist /usr/share/nginx/html');
+const LEGACY = { node: [previousManagerNode, previousNpmNode, previousNativeNode, oldNode, oldSimpleNode], react: [previousManagerReact, previousNpmReact, previousNativeReact, oldReact, oldViteReact, oldLooseReact, oldUnmarkedReact, firstReact] };
+
+function legacyMatch(type, current) {
+  const n = normalized(current);
+  return (LEGACY[type] || []).some(old => typeof old === 'function' ? old(n) : n === normalized(old));
+}
 
 function refreshStandardDockerfile(ctxDir, type, templatesDir) {
   if (!LEGACY[type]) return 'unchanged';
@@ -192,7 +207,7 @@ function refreshStandardDockerfile(ctxDir, type, templatesDir) {
   catch (e) { if (e.code === 'ENOENT') return 'missing'; throw e; }
   const template = fs.readFileSync(path.join(templatesDir, type, 'Dockerfile'), 'utf8');
   if (normalized(current) === normalized(template)) return 'current';
-  if (!LEGACY[type].some(old => normalized(current) === old)) return 'custom';
+  if (!legacyMatch(type, current)) return 'custom';
   fs.writeFileSync(file, template);
   return 'updated';
 }
@@ -207,7 +222,7 @@ function standardDockerfileType(ctxDir, templatesDir) {
   for (const type of ['static', 'node', 'react']) {
     let template = '';
     try { template = normalized(fs.readFileSync(path.join(templatesDir, type, 'Dockerfile'), 'utf8')); } catch {}
-    if ((template && current === template) || (LEGACY[type] || []).includes(current)) return type;
+    if ((template && current === template) || legacyMatch(type, current)) return type;
   }
   return null;
 }

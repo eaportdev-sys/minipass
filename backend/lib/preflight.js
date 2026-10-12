@@ -46,9 +46,28 @@ function collectPaths(ctxDir) {
   return out;
 }
 
+function sourceEnvKeys(ctxDir, paths) {
+  const keys = new Set();
+  const pats = [
+    /process\.env\.([A-Z][A-Z0-9_]{1,80})/g,
+    /process\.env\[['"]([A-Z][A-Z0-9_]{1,80})['"]\]/g,
+    /env\(\s*['"]([A-Z][A-Z0-9_]{1,80})['"]\s*\)/g
+  ];
+  for (const p of (paths || []).filter(p => /\.(?:js|mjs|cjs|ts|tsx|jsx|php)$/i.test(p)).slice(0, 80)) {
+    const text = readText(path.join(ctxDir, p), 64 * 1024);
+    for (const re of pats) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(text)) && keys.size < 80) keys.add(m[1]);
+    }
+  }
+  return [...keys];
+}
+
 function analyzeService(ctxDir, type, subdir) {
   const paths = collectPaths(ctxDir);
   const pkg = paths.includes('package.json') ? readJson(path.join(ctxDir, 'package.json')) : null;
+  const detected = decideType(paths, pkg);
   const pkgScripts = pkg && pkg.scripts ? pkg.scripts : {};
   const pkgDeps = { ...((pkg && pkg.dependencies) || {}), ...((pkg && pkg.devDependencies) || {}) };
   const profile = readBuildProfile(ctxDir);
@@ -83,7 +102,7 @@ function analyzeService(ctxDir, type, subdir) {
 
   // Environment requirements
   const envExamples = exampleDefaults(ctxDir, [{ subdir: '', type, enabled: true }]);
-  const requiredEnv = Object.keys(envExamples).filter(k => {
+  const requiredEnv = [...new Set([...Object.keys(envExamples), ...sourceEnvKeys(ctxDir, paths)])].filter(k => {
     // Filter out built-ins and optional-looking keys
     return !/^(NODE_ENV|HOST|TRUST_PROXY)$/i.test(k);
   });
@@ -94,6 +113,7 @@ function analyzeService(ctxDir, type, subdir) {
   const sqlHints = paths.filter(p => /\.sql$/i.test(p)).map(p => sqlDatabaseHints(readText(path.join(ctxDir, p)))).flat();
   const configHints = paths.filter(p => /(knexfile|ormconfig|drizzle|typeorm|sequelize|config\/database)/i.test(p))
     .map(p => databaseConfigHints(p, readText(path.join(ctxDir, p)))).flat();
+  const databaseNeeds = [...new Set([...(detected.dbs || []), ...prismaHints, ...sqlHints, ...configHints])].filter(db => db !== 'sqlite');
 
   // Build-time requirements
   const buildTimeNeeds = [];
@@ -148,6 +168,7 @@ function analyzeService(ctxDir, type, subdir) {
     prismaHints,
     sqlHints,
     configHints,
+    databaseNeeds,
     openPaths: openPaths.slice(0, 20),
     subApps,
     hasPackageJson: !!pkg,
@@ -176,17 +197,19 @@ function analyzeRepository(codeDir, explicitType, explicitSubdir) {
   const frontends = findFrontends(paths, pkgs);
   const backends = findBackends(paths, pkgs, frontends);
 
-  // If single root service, return it
   const services = [];
-  if (frontends.length === 1 && backends.length === 0) {
-    services.push(analyzeService(codeDir, typeResult.type || 'static', frontends[0] || ''));
-  } else if (backends.length === 1 && frontends.length === 0) {
-    services.push(analyzeService(codeDir, typeResult.type || 'node', backends[0] || ''));
-  } else {
-    for (const f of frontends) services.push(analyzeService(path.join(codeDir, f), 'react', f));
-    for (const b of backends) services.push(analyzeService(path.join(codeDir, b), 'node', b));
-    if (!services.length && typeResult.type) services.push(analyzeService(codeDir, typeResult.type, ''));
-  }
+  const rootScripts = (pkg && pkg.scripts) || {};
+  const rootHasRuntimeMarker = !!(paths.includes('package.json') && (
+    rootScripts.start || paths.some(p => /^(?:next|nuxt)\.config\.(?:js|mjs|cjs|ts)$/.test(p)) ||
+    paths.some(p => /^(?:server|index|app)\.(?:js|mjs|cjs|ts)$/.test(p)) ||
+    paths.includes('composer.json') || paths.includes('index.php') || paths.includes('index.html') ||
+    paths.some(p => /^Dockerfile$/i.test(p))
+  ));
+  const hasSubApps = frontends.length || backends.length;
+  if (typeResult.type && (!hasSubApps || rootHasRuntimeMarker)) services.push(analyzeService(codeDir, typeResult.type, ''));
+  for (const f of frontends) services.push(analyzeService(path.join(codeDir, f), 'react', f));
+  for (const b of backends) services.push(analyzeService(path.join(codeDir, b), 'node', b));
+  if (!services.length && typeResult.type) services.push(analyzeService(codeDir, typeResult.type, ''));
 
   return {
     services,
@@ -244,7 +267,7 @@ function readinessReport(analysis) {
     }
 
     // Database hints
-    const dbHints = [...new Set([...s.prismaHints, ...s.sqlHints, ...s.configHints])];
+    const dbHints = [...new Set([...(s.databaseNeeds || []), ...s.prismaHints, ...s.sqlHints, ...s.configHints])];
     if (dbHints.length) {
       recommendations.push({ code: 'DATABASE_HINTS', service: s.subdir || 'root', message: `Detected database types: ${dbHints.join(', ')}`, hint: dbHints });
     }

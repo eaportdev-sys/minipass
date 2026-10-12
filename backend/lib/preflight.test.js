@@ -46,6 +46,7 @@ try {
   assert.equal(nodeSvc.type, 'node');
   assert(nodeSvc.requiredEnv.includes('DATABASE_URL'), 'detects DATABASE_URL');
   assert(nodeSvc.requiredEnv.includes('JWT_SECRET'), 'detects JWT_SECRET');
+  assert(nodeSvc.databaseNeeds.includes('postgres'), 'pg dependency requires postgres');
   assert.equal(nodeSvc.dockerfileStatus, 'missing', 'no dockerfile');
   assert.equal(nodeSvc.port, 3000, 'default node port');
   assert.equal(nodeSvc.startCmd, 'node index.js', 'start command');
@@ -56,6 +57,7 @@ try {
   assert(prismaSvc.buildTimeNeeds.includes('DATABASE_URL (Prisma generate)'), 'prisma build-time need');
   assert(prismaSvc.gitIgnored, 'detects .dockerignore excluding .git');
   assert.equal(prismaSvc.prismaHints[0], 'postgres', 'prisma provider detected');
+  assert(prismaSvc.databaseNeeds.includes('postgres'), 'prisma provider contributes database need');
 
   // Test 3: React service
   analysis = preflight.analyzeRepository(reactDir, 'react', '');
@@ -71,6 +73,22 @@ try {
   const types = new Set(analysis.services.map(s => s.type));
   assert(types.has('node'), 'node service present');
   assert(types.has('react'), 'react service present');
+  assert(analysis.services.some(s => s.subdir === ''), 'root service retained when it has a runtime marker');
+  assert(analysis.services.some(s => s.subdir === 'frontend'), 'frontend sub-service retained');
+
+  // Workspace orchestrator root should not become a bogus runnable service.
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-workspace-'));
+  try {
+    fs.writeFileSync(path.join(ws, 'package.json'), JSON.stringify({ private: true, workspaces: ['client', 'server'], scripts: { build: 'npm run build --prefix client' } }));
+    fs.mkdirSync(path.join(ws, 'client'));
+    fs.writeFileSync(path.join(ws, 'client', 'package.json'), JSON.stringify({ scripts: { build: 'vite build' }, dependencies: { react: '^19.0.0', 'react-dom': '^19.0.0' }, devDependencies: { vite: '^8.0.0' } }));
+    fs.writeFileSync(path.join(ws, 'client', 'vite.config.js'), 'export default {}');
+    fs.mkdirSync(path.join(ws, 'server'));
+    fs.writeFileSync(path.join(ws, 'server', 'package.json'), JSON.stringify({ scripts: { start: 'node server.js' }, dependencies: { express: '^5.0.0' } }));
+    fs.writeFileSync(path.join(ws, 'server', 'server.js'), 'process.env.PORT;');
+    const wsAnalysis = preflight.analyzeRepository(ws, null, null);
+    assert.deepEqual(wsAnalysis.services.map(s => s.subdir).sort(), ['client', 'server'], 'workspace creates client+server, not root');
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
 
   // Test 5: Readiness report for Node service
   const report = preflight.readinessReport(analysis);
