@@ -102,23 +102,23 @@
       <div id="tab-setup" class="sitetab" style="display:none">
         <div class="card stepcard">
           <div class="stephead"><span class="stepno">1</span><div><b>Connect the source</b><div class="meta" id="gitConnState"></div></div></div>
-          <div class="linkrepo-row" id="gitRepoRow">
-            <b>Repository</b>
-            <div class="meta">First connection only: enter or pick the repo, then connect below with either credential.</div>
-            <div class="controlrow"><input id="gitRepoLink" placeholder="owner/name" autocomplete="off"><button onclick="listSiteRepos()">list repos</button></div>
-            <div class="controlrow"><select id="gitRepoPick" style="display:none" onchange="pickSiteRepo()" aria-label="Pick a repository"><option value="">— pick one —</option></select></div>
-          </div>
           <div class="credential-grid">
             <div class="credential-option">
               <b>Shared GitHub account</b>
               <div class="meta">Use a connected panel account.</div>
-              <div class="controlrow"><select id="gitAccount"><option value="">—</option></select><button onclick="useAccount()">use account</button></div>
+              <div class="controlrow"><select id="gitAccount" onchange="updatePickerVisibility()"><option value="">—</option></select><button onclick="useAccount()">use account</button></div>
             </div>
             <div class="credential-option">
               <b>Site-only token</b>
               <div class="meta">Private to this site and used before shared accounts.</div>
-              <div class="controlrow"><input id="gitSiteToken" type="password" placeholder="github_pat_…"><button onclick="saveSiteToken()">connect</button><button onclick="clearSiteToken()">clear</button></div>
+              <div class="controlrow"><input id="gitSiteToken" type="password" placeholder="github_pat_…" oninput="updatePickerVisibility()"><button onclick="saveSiteToken()">connect</button><button onclick="clearSiteToken()">clear</button><span id="gitTokenState" class="badge service-state on" style="display:none">connected</span></div>
             </div>
+          </div>
+          <div class="linkrepo-row" id="gitRepoRow">
+            <b>Repository</b>
+            <div class="meta">First connection only: pick the repo, then connect. Typing owner/name works too.</div>
+            <div class="controlrow" id="gitPickerRow" style="display:none"><button onclick="listSiteRepos()">list repos</button><select id="gitRepoPick" onchange="pickSiteRepo()" aria-label="Pick a repository"><option value="">— pick one —</option></select></div>
+            <div class="controlrow"><input id="gitRepoLink" placeholder="owner/name" autocomplete="off"></div>
           </div>
           <div class="meta keyrow">SSH remote deploy key (read-only): <button id="repoKeyToggle" onclick="showRepoKey()">show key</button></div>
           <div class="meta"><code id="repoKeyOut"></code></div>

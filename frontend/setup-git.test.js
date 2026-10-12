@@ -11,7 +11,11 @@ const els = {
   gitSiteToken: { value: 'tok123' },
   gitRepoLink: { value: 'owner/name' },
   gitRepoPick: { value: '', innerHTML: '', style: {} },
-  gitAccount: { value: '' }
+  gitAccount: { value: '', innerHTML: '', options: [] },
+  gitConnState: { textContent: '', innerHTML: '' },
+  gitRepoRow: { style: {} },
+  gitPickerRow: { style: {} },
+  gitTokenState: { style: {} }
 };
 const siteMeta = {};
 const context = vm.createContext({
@@ -28,6 +32,7 @@ const context = vm.createContext({
     if (url.includes('/git-account')) { calls.account.push(body); return { json: async () => respond.account }; }
     if (url.includes('/api/github/link')) { calls.link.push(body); return { json: async () => respond.link }; }
     if (url.includes('/git-repos')) { return { json: async () => respond.repos }; }
+    if (url.includes('/api/github/status')) { return { json: async () => ({ logins: [] }) }; }
     throw new Error('unexpected ' + url);
   }
 });
@@ -144,4 +149,32 @@ async function main() {
   assert(messages.at(-1).ok === false && messages.at(-1).text.includes('first'));
   console.log('Setup git connect: repaste reuses the stored link, download-on-connect, switch/unlink/validation, repo picker: OK');
 }
-main().catch(e => { console.error(e); process.exitCode = 1; });
+vm.runInContext(source.slice(source.indexOf('async function fillGitConn('), source.indexOf('async function useAccount(')), context);
+async function main2() {
+  // linked site with stored token: repo row hidden, switch offered, badge on
+  await run(`fillGitConn({ github: { repo: 'o/n', branch: 'main', hasToken: true }, repoUrl: '' })`);
+  assert.equal(els.gitRepoRow.style.display, 'none');
+  assert(els.gitConnState.innerHTML.includes('switch repo'));
+  assert.equal(els.gitTokenState.style.display, '');
+  // unlinked, nothing typed: repo row shown, picker hidden, badge off
+  await run('fillGitConn({})');
+  assert.equal(els.gitRepoRow.style.display, '');
+  assert.equal(els.gitConnState.textContent, 'not connected');
+  assert.equal(els.gitTokenState.style.display, 'none');
+  assert.equal(els.gitPickerRow.style.display, 'none');
+  // typing a token reveals the picker
+  els.gitSiteToken.value = 'tok';
+  await run('updatePickerVisibility()');
+  assert.equal(els.gitPickerRow.style.display, '');
+  // selecting an account reveals the picker too
+  els.gitSiteToken.value = '';
+  els.gitAccount.value = 'someone';
+  await run('updatePickerVisibility()');
+  assert.equal(els.gitPickerRow.style.display, '');
+  // switch reopens the row
+  els.gitRepoRow.style.display = 'none';
+  await run('unhideRepoRow()');
+  assert.equal(els.gitRepoRow.style.display, '');
+  console.log('Setup git visibility: linked hides repo row, picker follows credential, badge and switch: OK');
+}
+main().then(main2).catch(e => { console.error(e); process.exitCode = 1; });

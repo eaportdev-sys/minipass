@@ -1096,6 +1096,12 @@ async function fillGitConn(a) {
   const source = g.repo ? `${g.repo}${g.branch ? '@' + g.branch : ''}` : '';
   const hasSource = !!source || (a.repoUrl && /^(git@|ssh:\/\/)/i.test(a.repoUrl));
   if (row) row.style.display = hasSource ? 'none' : '';
+  gitStoredCredential = !!(g.hasToken || g.login);
+  try {
+    const badge = document.getElementById('gitTokenState');
+    if (badge) badge.style.display = g.hasToken ? '' : 'none';
+  } catch {}
+  updatePickerVisibility();
   if (g.hasToken && source) state.innerHTML = `site token stored •••• (used first) → ${safeHtml(source)} <button onclick="unhideRepoRow()">switch repo</button>`;
   else if (g.hasToken) state.textContent = 'site token stored •••• (used first)';
   else if (g.login && source) state.innerHTML = `panel account: ${safeHtml(g.login)} → ${safeHtml(source)} <button onclick="unhideRepoRow()">switch repo</button>`;
@@ -1114,6 +1120,21 @@ async function fillGitConn(a) {
 function unhideRepoRow() {
   const row = document.getElementById('gitRepoRow');
   if (row) row.style.display = '';
+}
+let gitStoredCredential = false;
+function credentialReady() {
+  try {
+    if (document.getElementById('gitSiteToken').value.trim()) return true;
+    const acc = document.getElementById('gitAccount');
+    if (acc && acc.value) return true;
+  } catch {}
+  return gitStoredCredential;
+}
+function updatePickerVisibility() {
+  try {
+    const row = document.getElementById('gitPickerRow');
+    if (row) row.style.display = credentialReady() ? '' : 'none';
+  } catch {}
 }
 async function useAccount() {
   if (!currentApp) return;
