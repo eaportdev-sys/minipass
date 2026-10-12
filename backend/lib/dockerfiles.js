@@ -184,14 +184,14 @@ const previousNpmReact = [
 const normalized = text => text.replace(/\r\n/g, '\n').trim();
 const previousManagerNode = text => text.startsWith('# minipass template\n# Universal Node.js template') &&
   text.includes('ARG PACKAGE_MANAGER=npm') &&
-  text.includes('pnpm install --frozen-lockfile --prefer-offline || pnpm install --prefer-offline --no-frozen-lockfile') &&
-  text.includes('RUN npm run build --if-present') &&
-  text.includes('exec npm start; else exec node index.js; fi');
+  (text.includes('RUN npm run build --if-present') || text.includes('pnpm run build --if-present')) &&
+  (text.includes('exec npm start; else exec node index.js; fi') || text.includes('No production start script found')) &&
+  text.trim().endsWith('"]');
 const previousManagerReact = text => text.startsWith('# minipass template\n# Universal React/Vite/CRA/Next') &&
   text.includes('ARG PACKAGE_MANAGER=npm') &&
-  text.includes('pnpm install --frozen-lockfile --prefer-offline || pnpm install --prefer-offline --no-frozen-lockfile') &&
-  text.includes('RUN npm run build &&') &&
-  text.includes('COPY --from=build /app/dist /usr/share/nginx/html');
+  (text.includes('RUN npm run build &&') || text.includes('pnpm run build; elif')) &&
+  text.includes('COPY --from=build /app/dist /usr/share/nginx/html') &&
+  text.trim().endsWith('EXPOSE 80');
 const LEGACY = { node: [previousManagerNode, previousNpmNode, previousNativeNode, oldNode, oldSimpleNode], react: [previousManagerReact, previousNpmReact, previousNativeReact, oldReact, oldViteReact, oldLooseReact, oldUnmarkedReact, firstReact] };
 
 function legacyMatch(type, current) {

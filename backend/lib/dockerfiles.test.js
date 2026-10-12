@@ -287,6 +287,13 @@ try {
     assert.equal(refreshStandardDockerfile(folder, 'react', templates), 'current', 'React upgrade is idempotent');
   }
 
+  const badCopyNode = fs.readFileSync(path.join(templates, 'node', 'Dockerfile'), 'utf8').replace('COPY --from=build /app ./', 'COPY --from=build /app/dist ./dist 2>/dev/null || true\nCOPY --from=build /app/build ./build 2>/dev/null || true\nCOPY --from=build /app ./');
+  const badCopyFolder = path.join(tmp, 'node', 'bad-copy');
+  fs.mkdirSync(badCopyFolder, { recursive: true });
+  fs.writeFileSync(path.join(badCopyFolder, 'Dockerfile'), badCopyNode);
+  assert.equal(refreshStandardDockerfile(badCopyFolder, 'node', templates), 'updated', 'generated Node template with invalid optional COPY upgrades');
+  assert(!/^COPY[^\n]*(?:2>|\|\|)/m.test(fs.readFileSync(path.join(badCopyFolder, 'Dockerfile'), 'utf8')), 'bad optional COPY removed');
+
   // Test 3: Custom files are not rewritten
   for (const type of ['node', 'react']) {
     const template = fs.readFileSync(path.join(templates, type, 'Dockerfile'), 'utf8').replace(/\r\n/g, '\n');
