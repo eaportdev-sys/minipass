@@ -667,6 +667,19 @@ app.delete('/api/apps/pending/:id', async (req, res) => {
 });
 
 const redactUrl = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
+// First sync: repo linked after a template create - replace starter with repo,
+// keeping managed build files the container needs. Shared by deploy and link
+// so connecting post-create behaves exactly like creating with the repo.
+function firstSyncClone({ codeDir, templatesDir, type, url, env }) {
+  execSync(`git clone --depth 1 "${url}" "${codeDir}.new"`, { stdio: 'pipe', env });
+  for (const f of ['Dockerfile', 'nginx.conf']) {
+    const dst = path.join(codeDir + '.new', f);
+    const src = path.join(templatesDir, type || 'static', f);
+    if (!fs.existsSync(dst) && fs.existsSync(src)) fs.copyFileSync(src, dst);
+  }
+  fs.rmSync(codeDir, { recursive: true, force: true });
+  fs.renameSync(codeDir + '.new', codeDir);
+}
 const LEGACY_PANEL_PHP_DOCKERFILE = [
   'FROM php:8.2-apache',
   'WORKDIR /var/www/html',
@@ -1075,16 +1088,7 @@ async function deployNow(id, opts = {}) {
         dockerfileProtection.run(dir, protectedServices, codeDir, 'suspend', line => fs.appendFileSync(buildLog, line + '\n'));
       }
       if (!fs.existsSync(path.join(codeDir, '.git'))) {
-        // first sync: repo linked after a template create - replace starter with repo,
-        // keeping managed build files the container needs
-        execSync(`git clone --depth 1 "${url}" "${codeDir}.new"`, { stdio: 'pipe', env });
-        for (const f of ['Dockerfile', 'nginx.conf']) {
-          const dst = path.join(codeDir + '.new', f);
-          const src = path.join(TEMPLATES_DIR, meta.type || 'static', f);
-          if (!fs.existsSync(dst) && fs.existsSync(src)) fs.copyFileSync(src, dst);
-        }
-        fs.rmSync(codeDir, { recursive: true, force: true });
-        fs.renameSync(codeDir + '.new', codeDir);
+        firstSyncClone({ codeDir, templatesDir: TEMPLATES_DIR, type: meta.type, url, env });
       } else {
         let branch = (meta.github && meta.github.branch) || 'main';
         try { branch = execSync('git branch --show-current', { cwd: codeDir }).toString().trim() || branch; } catch {}
@@ -1848,7 +1852,26 @@ app.post('/api/github/link', async (req, res) => {
     meta.github = { ...prev, repo: info.full_name, branch: info.default_branch, login: trimmedLogin || prev.login || null, sha: head,
       pollMinutes: typeof prev.pollMinutes === 'number' ? prev.pollMinutes : 0, enabled: !!prev.enabled };
     save(db_);
-    res.json({ ok: true, repoUrl: meta.repoUrl, automation: false, webhook: 'disabled until enabled on the site deploy page' });
+    // Connect downloads the code like create does: fresh clone when no checkout
+    // exists yet. Existing checkouts are left alone - redeploy pulls updates.
+    // No containers are touched here; builds stay manual.
+    let pulled = false, codePresent = false, pullNote = null;
+    const siteDir = appDir(APPS_DIR, meta.id);
+    const codeDir = path.join(siteDir, 'code');
+    if (!meta.repoUrl) { pullNote = 'no repository url stored'; }
+    else if (fs.existsSync(path.join(codeDir, '.git'))) {
+      codePresent = true;
+      if (prev.repo && prev.repo !== info.full_name) pullNote = 'code on disk is from ' + prev.repo + ' - redeploy pulls ' + info.full_name;
+    } else {
+      const isSsh = /^(git@|ssh:\/\/)/i.test(meta.repoUrl);
+      const credToken = (probe.github && probe.github.token) || null;
+      const url = isSsh ? meta.repoUrl : (credToken ? gh.authUrlFor({ github: { token: credToken } }, meta.repoUrl) : meta.repoUrl);
+      try {
+        firstSyncClone({ codeDir, templatesDir: TEMPLATES_DIR, type: meta.type, url, env: isSsh ? appGitEnv(siteDir) : process.env });
+        pulled = true;
+      } catch (e) { pullNote = 'download failed: ' + redactUrl(e.stderr ? String(e.stderr) : e.message).slice(-300); }
+    }
+    res.json({ ok: true, repoUrl: meta.repoUrl, pulled, codePresent, pullNote, automation: false, webhook: 'disabled until enabled on the site deploy page' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 // Push-to-deploy: bare repo per app on the host. The hook only notifies the

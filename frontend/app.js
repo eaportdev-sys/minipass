@@ -1125,7 +1125,7 @@ async function useAccount() {
   if (!want.repo) { toast('using account ' + login, true); refresh(); return; }
   toast('using account ' + login + '… connecting ' + want.repo);
   const link = await linkSiteRepo(want.repo);
-  if (link.ok) { document.getElementById('gitRepoLink').value = ''; toast('account ' + login + ' connected to ' + want.repo + ' — redeploy pulls with it', true); }
+  if (link.ok) { document.getElementById('gitRepoLink').value = ''; const t = linkDone(link, want.repo); toast('account ' + login + ' connected, ' + t.text, t.ok); }
   else toast('account saved, but ' + link.error, false);
   refresh();
 }
@@ -1157,8 +1157,13 @@ async function linkSiteRepo(repo) {
   const login = (document.getElementById('gitAccount') || {}).value || undefined;
   try {
     const r = await (await fetch('/api/github/link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appId: currentApp, repo, login }) })).json();
-    return r.ok ? { ok: true } : { ok: false, error: r.error || 'link failed' };
+    return r.ok ? { ok: true, pulled: !!r.pulled, codePresent: !!r.codePresent, pullNote: r.pullNote || null } : { ok: false, error: r.error || 'link failed' };
   } catch (e) { return { ok: false, error: e.message }; }
+}
+function linkDone(link, repo) {
+  if (link.pulled) return { text: repo + ' downloaded — confirm services below', ok: true };
+  if (link.codePresent) return { text: repo + ' connected — ' + (link.pullNote || 'code already on disk'), ok: true };
+  return { text: repo + ' connected, but files not downloaded: ' + (link.pullNote || 'unknown error'), ok: false };
 }
 async function saveSiteToken() {
   if (!currentApp) return;
@@ -1177,7 +1182,7 @@ async function saveSiteToken() {
   if (!want.ok) { toast('token saved, but ' + want.error, false); refresh(); return; }
   if (!want.repo) { toast('site token saved', true); refresh(); return; }
   const link = await linkSiteRepo(want.repo);
-  if (link.ok) { document.getElementById('gitRepoLink').value = ''; toast('token saved and ' + want.repo + ' connected — redeploy pulls with it', true); }
+  if (link.ok) { document.getElementById('gitRepoLink').value = ''; const t = linkDone(link, want.repo); toast('token saved, ' + t.text, t.ok); }
   else toast('token saved, but ' + link.error, false);
   refresh();
 }

@@ -6,7 +6,7 @@ const source = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
 const messages = [];
 let refreshed = 0;
 const calls = { token: [], account: [], link: [] };
-const respond = { token: { ok: true }, account: { ok: true }, link: { ok: true }, repos: { repos: [] } };
+const respond = { token: { ok: true }, account: { ok: true }, link: { ok: true, pulled: true }, repos: { repos: [] } };
 const els = {
   gitSiteToken: { value: 'tok123' },
   gitRepoLink: { value: 'owner/name' },
@@ -35,7 +35,7 @@ vm.runInContext(source.slice(source.indexOf('async function useAccount('), sourc
 const run = code => vm.runInContext(code, context);
 const reset = () => {
   calls.token.length = 0; calls.account.length = 0; calls.link.length = 0; messages.length = 0; refreshed = 0;
-  respond.token = { ok: true }; respond.account = { ok: true }; respond.link = { ok: true };
+  respond.token = { ok: true }; respond.account = { ok: true }; respond.link = { ok: true, pulled: true };
   for (const k of Object.keys(siteMeta)) delete siteMeta[k];
 };
 async function main() {
@@ -45,7 +45,8 @@ async function main() {
   assert.deepEqual(calls.link, [{ appId: 'demo', repo: 'owner/name' }]);
   assert.equal(els.gitSiteToken.value, '');
   assert.equal(els.gitRepoLink.value, '');
-  assert(messages.at(-1).ok === true && messages.at(-1).text.includes('connected'));
+  assert(messages.at(-1).ok === true && messages.at(-1).text.includes('downloaded'));
+  assert(messages.at(-1).text.includes('confirm services below'));
   assert.equal(refreshed, 1);
   // repo already linked (e.g. token expired, repasting): no owner/name needed, no link call
   reset();
@@ -68,12 +69,20 @@ async function main() {
   els.gitSiteToken.value = 'newtok'; els.gitRepoLink.value = 'owner/name';
   await run('saveSiteToken()');
   assert.equal(calls.link.length, 0);
-  // linked repo, field holds a different repo: switches via link
+  // linked repo, field holds a different repo: switches via link, old code stays
   reset();
   respond.token = { ok: true, repo: 'owner/name', verified: true };
+  respond.link = { ok: true, pulled: false, codePresent: true, pullNote: 'code on disk is from owner/name - redeploy pulls other/repo' };
   els.gitSiteToken.value = 'newtok'; els.gitRepoLink.value = 'other/repo';
   await run('saveSiteToken()');
   assert.deepEqual(calls.link, [{ appId: 'demo', repo: 'other/repo' }]);
+  assert(messages.at(-1).ok === true && messages.at(-1).text.includes('code on disk'));
+  // link saved but download failed: says so, flagged as failure
+  reset();
+  respond.link = { ok: true, pulled: false, codePresent: false, pullNote: 'download failed: boom' };
+  els.gitSiteToken.value = 'newtok'; els.gitRepoLink.value = 'owner/name';
+  await run('saveSiteToken()');
+  assert(messages.at(-1).ok === false && messages.at(-1).text.includes('not downloaded'));
   // token, no repo anywhere: saves only
   reset();
   els.gitSiteToken.value = 'tok123'; els.gitRepoLink.value = '';
@@ -131,6 +140,6 @@ async function main() {
   respond.repos = { error: 'save a site token or connect an account first' };
   await run('listSiteRepos()');
   assert(messages.at(-1).ok === false && messages.at(-1).text.includes('first'));
-  console.log('Setup git connect: repaste reuses the stored link, switch/unlink/validation, repo picker: OK');
+  console.log('Setup git connect: repaste reuses the stored link, download-on-connect, switch/unlink/validation, repo picker: OK');
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });
