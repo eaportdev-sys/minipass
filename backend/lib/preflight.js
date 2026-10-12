@@ -2,7 +2,7 @@
 // possible; never executes repository code. Returns a structured report.
 const fs = require('fs');
 const path = require('path');
-const { decideType, findBackends, findFrontends, prismaDatabaseHints, sqlDatabaseHints, databaseConfigHints } = require('./detect');
+const { decideType, detectPackageManager, findBackends, findFrontends, prismaDatabaseHints, sqlDatabaseHints, databaseConfigHints } = require('./detect');
 const { detectMigrations } = require('./migrations');
 const { parseExample, exampleFiles, exampleDefaults } = require('./env-defaults');
 const { readBuildProfile, localBuildProfile } = require('./build-profile');
@@ -152,7 +152,7 @@ function analyzeService(ctxDir, type, subdir) {
     subApps,
     hasPackageJson: !!pkg,
     pkgName: pkg?.name,
-    pkgManager: pkg?.packageManager || (exists(ctxDir, 'pnpm-lock.yaml') ? 'pnpm' : exists(ctxDir, 'yarn.lock') ? 'yarn' : exists(ctxDir, 'bun.lockb') || exists(ctxDir, 'bun.lock') ? 'bun' : 'npm')
+    pkgManager: detectPackageManager({ pkg, files: paths }).manager,
   };
 }
 

@@ -13,7 +13,7 @@ const context = vm.createContext({
   toast() {}, refresh() {}, accessChanged() {}
 });
 const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
-vm.runInContext('let createModalSession=1, createCleanupPromise=Promise.resolve(), createPendingId=null, createStandardDockerfile=false, createConnectRequest=0, createDetectRequest=0, createDetectRepo="", createStorageAvailable=null, modalLogin=null;\n' +
+vm.runInContext('let createModalSession=1, createCleanupPromise=Promise.resolve(), createPendingId=null, createStandardDockerfile=false, createConnectRequest=0, createDetectRequest=0, createDetectRepo="", createDetectedManager="npm", createStorageAvailable=null, modalLogin=null;\n' +
   section('async function createApp(', 'async function detectType(') +
   section('function resetCreateForm(', 'function useCreateStandardDockerfile(') +
   section('function useCreateStandardDockerfile(', 'function closeCreate(') +

@@ -69,10 +69,10 @@ function walkDirs(root, maxDepth = 4, maxDirs = 300) {
 }
 
 function npmRunner(pkg, files, script) {
-  const declared = String((pkg && pkg.packageManager) || '').toLowerCase();
-  if (declared.startsWith('pnpm') || files.has('pnpm-lock.yaml')) return `pnpm run ${script}`;
-  if (declared.startsWith('yarn') || files.has('yarn.lock')) return `yarn ${script}`;
-  if (declared.startsWith('bun') || files.has('bun.lock') || files.has('bun.lockb')) return `bun run ${script}`;
+  const manager = require('./detect').detectPackageManager({ pkg, files: [...files] }).manager;
+  if (manager === 'pnpm') return `pnpm run ${script}`;
+  if (manager === 'yarn') return `yarn ${script}`;
+  if (manager === 'bun') return `bun run ${script}`;
   return `npm run ${script}`;
 }
 

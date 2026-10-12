@@ -69,6 +69,22 @@ function decideType(paths, pkg) {
   return { type: null, detected: null, dbs, reason: 'no recognizable markers (package.json, composer.json, index.php, index.html) - pick manually' };
 }
 
+// One canonical package-manager read for every detector: the packageManager
+// field wins, then lockfiles, then npm. Takes { pkg, files } where files are
+// basenames or relative paths. Pure - unit-test with fixtures.
+function detectPackageManager({ pkg, files } = {}) {
+  const field = pkg && typeof pkg.packageManager === 'string' ? pkg.packageManager.trim() : '';
+  const named = /^(npm|pnpm|yarn|bun)(?:@(.+))?$/i.exec(field);
+  if (named) return { manager: named[1].toLowerCase(), version: named[2] || null, source: 'packageManager' };
+  const list = Array.isArray(files) ? files : [];
+  const has = n => list.some(p => String(p).replace(/\\/g, '/').split('/').pop() === n);
+  if (has('pnpm-lock.yaml')) return { manager: 'pnpm', version: null, source: 'lockfile' };
+  if (has('yarn.lock')) return { manager: 'yarn', version: null, source: 'lockfile' };
+  if (has('bun.lockb') || has('bun.lock')) return { manager: 'bun', version: null, source: 'lockfile' };
+  if (has('package-lock.json') || has('npm-shrinkwrap.json')) return { manager: 'npm', version: null, source: 'lockfile' };
+  return { manager: 'npm', version: null, source: 'default' };
+}
+
 // Monorepo sub-apps from workspace manifests (npm/pnpm/lerna) or tooling
 // conventions (turbo/nx), resolved against dirs that actually hold a package.json.
 // Pure - unit-test with fixtures.
@@ -241,4 +257,4 @@ function prismaDatabaseHints(text) {
   return dbs;
 }
 
-module.exports = { decideType, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints };
+module.exports = { decideType, detectPackageManager, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints };

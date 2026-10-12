@@ -1344,6 +1344,7 @@ async function createApp(options = {}) {
     name: v('name'), type: typeEl ? typeEl.value : 'static', dbs, storageGB,
     repoUrl: v('repo'), domain: access === 'domain' ? v('domain') : '',
     subdir: v('subdir'), standardDockerfile: approvedStandardDockerfile,
+    packageManager: createDetectedManager,
     modernizeBuild: document.getElementById('createModernBuild').checked
   };
   if (createPendingId) body.pendingId = createPendingId;
@@ -1412,6 +1413,7 @@ async function detectType() {
       document.getElementById('createBranches').innerHTML = '';
       document.getElementById('branchDefault').textContent = '';
       createDetectRepo = '';
+      createDetectedManager = 'npm';
       return;
     }
     repo = m[1] + '/' + m[2];
@@ -1449,7 +1451,8 @@ async function detectType() {
       const dbs = r.dbs || [];
       document.querySelectorAll('input[name=appdb]').forEach(c => { c.checked = dbs.includes(c.value); });
       const types = { static: 'Static', react: 'React', node: 'Node.js', php: 'PHP' };
-      state.textContent = `Detected ${types[r.type] || r.type}${dbs.length ? ' + ' + dbs.join(', ') : ''}${r.branch ? ' on ' + r.branch : ''}. Check the selections below.`;
+      createDetectedManager = ['npm', 'pnpm', 'yarn', 'bun'].includes(r.packageManager) ? r.packageManager : 'npm';
+      state.textContent = `Detected ${types[r.type] || r.type}${dbs.length ? ' + ' + dbs.join(', ') : ''}${createDetectedManager !== 'npm' ? ` · installs with ${createDetectedManager}` : ''}${r.branch ? ' on ' + r.branch : ''}. Check the selections below.`;
       state.title = r.reason || '';
       if (r.dbNote) { dbNote.style.display = 'block'; dbNote.textContent = r.dbNote; }
     } else {
@@ -1535,6 +1538,7 @@ let createModalSession = 0;
 let createConnectRequest = 0;
 let createDetectRequest = 0;
 let createDetectRepo = '';
+let createDetectedManager = 'npm';
 let createStandardDockerfile = false;
 let createStorageAvailable = null;
 let createCleanupPromise = Promise.resolve();
@@ -1799,6 +1803,7 @@ function resetCreateForm() {
   document.getElementById('ghRepoRow').style.display = 'none';
   document.getElementById('ghConnectRow').style.display = 'block';
   document.getElementById('createGitDetails').open = false;
+  createDetectedManager = 'npm';
   document.getElementById('createDetectState').textContent = 'Auto-detect from GitHub, or select manually.';
   document.getElementById('createDetectState').title = '';
   document.getElementById('ghConnState').textContent = 'Paste a site-only token.';

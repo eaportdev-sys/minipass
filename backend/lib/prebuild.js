@@ -55,11 +55,17 @@ function buildScript(ctxDir) {
 }
 
 function packageManager(ctxDir) {
-  const has = f => { try { return fs.existsSync(path.join(ctxDir, f)); } catch { return false; } };
-  if (has('pnpm-lock.yaml')) return 'pnpm';
-  if (has('yarn.lock')) return 'yarn';
-  if (has('package-lock.json')) return 'npm-ci';
-  return 'npm';
+  let pkg = null;
+  try { pkg = JSON.parse(fs.readFileSync(path.join(ctxDir, 'package.json'), 'utf8')); } catch {}
+  let files = [];
+  try { files = fs.readdirSync(ctxDir); } catch {}
+  const found = require('./detect').detectPackageManager({ pkg, files });
+  // Historical contract: an npm lockfile means prune-safe `npm ci`.
+  if (found.manager === 'npm') {
+    try { if (fs.existsSync(path.join(ctxDir, 'package-lock.json'))) return 'npm-ci'; } catch {}
+    return 'npm';
+  }
+  return found.manager;
 }
 
 // A .dockerignore that excludes the output dir would silently drop the

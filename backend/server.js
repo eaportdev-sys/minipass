@@ -593,6 +593,7 @@ app.post('/api/apps', async (req, res) => {
       else siteToken = null;
     }
     const dbs = normDbs(req.body.dbs !== undefined ? req.body.dbs : db);
+    const packageManager = ['npm', 'pnpm', 'yarn', 'bun'].includes(req.body.packageManager) ? req.body.packageManager : 'npm';
     const subdir = String(req.body.subdir || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '') || '';
     if (draft && (draft.repoUrl !== finalRepoUrl || draft.branch !== explicitBranch || draft.subdir !== subdir)) throw lifecycleError('pending checkout uses a different source - cancel and reopen before changing repositories, branches or folders');
     // Requested allowance is always validated and recorded. When the host
@@ -618,7 +619,7 @@ app.post('/api/apps', async (req, res) => {
     quotas.bindDatabases(created.dir);
     envSetManaged(created.dir, { COMPOSE_PROJECT_NAME: id });
     const db_ = load();
-    const meta = { id, name: rawName, type: created.type || type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: appDomain, token, hostPort, subdir: created.subdir || '', storageQuota, buildOptions: { modernize: req.body.modernizeBuild === true }, createdAt: new Date().toISOString() };
+    const meta = { id, name: rawName, type: created.type || type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: appDomain, token, hostPort, packageManager, subdir: created.subdir || '', storageQuota, buildOptions: { modernize: req.body.modernizeBuild === true }, createdAt: new Date().toISOString() };
     // Capture repository env sources before the first deploy. Never fail an
     // otherwise valid create solely because the private snapshot could not be written.
     try { applyEnvDefaults(meta, created.dir, req.hostname, req.protocol); }
@@ -1645,8 +1646,9 @@ async function detectRepo(repo, { login, token, branch } = {}) {
       if (blob && blob.content) pkg = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8'));
     } catch {}
   }
-  const { decideType, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints } = require('./lib/detect');
+  const { decideType, detectPackageManager, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints } = require('./lib/detect');
   const out = decideType(tree, pkg);
+  out.packageManager = detectPackageManager({ pkg, files: tree }).manager;
   Object.assign(out, source);
   out.repositorySize = quotas.repositorySize(t);
   // monorepo sub-apps, tool-agnostic: vite heuristic + workspace manifests

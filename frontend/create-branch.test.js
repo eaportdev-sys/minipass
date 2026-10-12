@@ -73,6 +73,13 @@ async function main() {
   element('repo').value = 'https://github.com/owner/backend';
   await run('detectType()');
   assert.equal(element('createBuildProfile').style.display, 'none', 'ordinary Node apps do not inherit static build setup');
+  context.fetch = async () => ({ json: async () => ({ branch: 'main', defaultBranch: 'main', type: 'node', packageManager: 'pnpm' }) });
+  element('repo').value = 'https://github.com/owner/pnpm-app';
+  await run('detectType()');
+  assert(element('createDetectState').textContent.includes('installs with pnpm'));
+  assert.equal(run('createDetectedManager'), 'pnpm');
+  run('resetCreateForm()');
+  assert.equal(run('createDetectedManager'), 'npm');
   console.log('create branch selection, branch-aware detection and reset guards: OK');
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

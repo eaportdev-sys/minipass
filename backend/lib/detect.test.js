@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { decideType, findBackends, findFrontends, prismaDatabaseHints, databaseConfigHints, sqlDatabaseHints } = require('./detect');
+const { decideType, detectPackageManager, findBackends, findFrontends, prismaDatabaseHints, databaseConfigHints, sqlDatabaseHints } = require('./detect');
 
 // Mirrors docker/awesome-compose shapes: CRA frontend, express backend, angular.
 const tree = [
@@ -82,6 +82,16 @@ assert.equal(futureFw.detected, 'start-script', JSON.stringify(futureFw));
 // A declared production server wins even for SPA deps: trust the runtime.
 const spaServer = decideType(['package.json', 'vite.config.ts'], { scripts: { build: 'vite build', start: 'serve -s dist' }, dependencies: { react: '^19.0.0' } });
 assert.equal(spaServer.type, 'node', JSON.stringify(spaServer));
+
+// One package-manager read for every detector: field wins, then lockfiles.
+assert.deepEqual(detectPackageManager({ pkg: { packageManager: 'pnpm@9.1.0' }, files: [] }), { manager: 'pnpm', version: '9.1.0', source: 'packageManager' });
+assert.deepEqual(detectPackageManager({ pkg: { packageManager: 'yarn' }, files: [] }), { manager: 'yarn', version: null, source: 'packageManager' });
+assert.deepEqual(detectPackageManager({ pkg: { packageManager: 'foo@1' }, files: ['yarn.lock'] }), { manager: 'yarn', version: null, source: 'lockfile' });
+assert.deepEqual(detectPackageManager({ pkg: {}, files: ['apps/web/pnpm-lock.yaml'] }), { manager: 'pnpm', version: null, source: 'lockfile' });
+assert.deepEqual(detectPackageManager({ pkg: null, files: ['sub\\yarn.lock'] }), { manager: 'yarn', version: null, source: 'lockfile' });
+assert.deepEqual(detectPackageManager({ pkg: {}, files: ['bun.lockb'] }), { manager: 'bun', version: null, source: 'lockfile' });
+assert.deepEqual(detectPackageManager({ pkg: {}, files: ['package-lock.json'] }), { manager: 'npm', version: null, source: 'lockfile' });
+assert.deepEqual(detectPackageManager({}), { manager: 'npm', version: null, source: 'default' });
 
 // Next/Nuxt subdirs are not suggested as static frontends ...
 const ssrTree = ['web/package.json', 'web/next.config.js', 'web/src/app.tsx', 'shop/nuxt.config.ts', 'shop/package.json'];
