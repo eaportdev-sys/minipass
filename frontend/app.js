@@ -1101,7 +1101,7 @@ async function fillGitConn(a) {
     const badge = document.getElementById('gitTokenState');
     if (badge) badge.style.display = g.hasToken ? '' : 'none';
   } catch {}
-  updatePickerVisibility();
+  await credentialListed();
   if (g.hasToken && source) state.innerHTML = `site token stored •••• (used first) → ${safeHtml(source)} <button onclick="unhideRepoRow()">switch repo</button>`;
   else if (g.hasToken) state.textContent = 'site token stored •••• (used first)';
   else if (g.login && source) state.innerHTML = `panel account: ${safeHtml(g.login)} → ${safeHtml(source)} <button onclick="unhideRepoRow()">switch repo</button>`;
@@ -1134,6 +1134,18 @@ function updatePickerVisibility() {
   try {
     const row = document.getElementById('gitPickerRow');
     if (row) row.style.display = credentialReady() ? '' : 'none';
+    if (!credentialReady()) {
+      const sel = document.getElementById('gitRepoPick');
+      if (sel) sel.innerHTML = '<option value="">— pick one —</option>';
+    }
+  } catch {}
+}
+async function credentialListed() {
+  updatePickerVisibility();
+  try {
+    const row = document.getElementById('gitRepoRow');
+    const sel = document.getElementById('gitRepoPick');
+    if (row && row.style.display !== 'none' && credentialReady() && sel && sel.options && sel.options.length <= 1) await listSiteRepos();
   } catch {}
 }
 async function useAccount() {
@@ -1165,11 +1177,24 @@ function wantedRepoLink() {
   if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) return { ok: false, error: 'repo must be owner/name — not linked' };
   return { ok: true, repo };
 }
-function pickSiteRepo() {
+let lastAutoConnect = '';
+async function pickSiteRepo() {
   const v = document.getElementById('gitRepoPick').value;
   if (!v) return;
   document.getElementById('gitRepoLink').value = v;
-  toast('picked ' + v + ' — press connect to download its files', true);
+  if (v === lastAutoConnect) { toast('picked ' + v + ' — press connect to download its files', true); return; }
+  lastAutoConnect = v;
+  if (document.getElementById('gitSiteToken').value.trim()) { await saveSiteToken(); return; }
+  if (gitStoredCredential || ((document.getElementById('gitAccount') || {}).value)) { await connectPickedRepo(v); return; }
+  toast('picked ' + v + ' — add a credential above, then connect', true);
+}
+async function connectPickedRepo(repo) {
+  if (!currentApp) return;
+  toast('connecting ' + repo + '…');
+  const link = await linkSiteRepo(repo);
+  if (link.ok) { document.getElementById('gitRepoLink').value = ''; const t = linkDone(link, repo); toast(t.text, t.ok); if (link.pulled) loadServices(); }
+  else toast(link.error, false);
+  refresh();
 }
 async function listSiteRepos() {
   if (!currentApp) return;

@@ -4,13 +4,13 @@ const path = require('path');
 const vm = require('vm');
 const source = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
 const messages = [];
-let refreshed = 0, servicesReloaded = 0;
+let refreshed = 0, servicesReloaded = 0, reposCalls = 0;
 const calls = { token: [], account: [], link: [] };
 const respond = { token: { ok: true }, account: { ok: true }, link: { ok: true, pulled: true }, repos: { repos: [] } };
 const els = {
   gitSiteToken: { value: 'tok123' },
   gitRepoLink: { value: 'owner/name' },
-  gitRepoPick: { value: '', innerHTML: '', style: {} },
+  gitRepoPick: { value: '', innerHTML: '', style: {}, options: [] },
   gitAccount: { value: '', innerHTML: '', options: [] },
   gitConnState: { textContent: '', innerHTML: '' },
   gitRepoRow: { style: {} },
@@ -31,7 +31,7 @@ const context = vm.createContext({
     if (url.includes('/git-token')) { calls.token.push(body); return { json: async () => respond.token }; }
     if (url.includes('/git-account')) { calls.account.push(body); return { json: async () => respond.account }; }
     if (url.includes('/api/github/link')) { calls.link.push(body); return { json: async () => respond.link }; }
-    if (url.includes('/git-repos')) { return { json: async () => respond.repos }; }
+    if (url.includes('/git-repos')) { reposCalls++; return { json: async () => respond.repos }; }
     if (url.includes('/api/github/status')) { return { json: async () => ({ logins: [] }) }; }
     throw new Error('unexpected ' + url);
   }
@@ -132,16 +132,43 @@ async function main() {
   assert.deepEqual(calls.account, [{ login: '' }]);
   assert.equal(calls.link.length, 0);
   assert(messages.at(-1).text.includes('unlinked'));
-  // repo picker: lists credential-visible repos, picking fills the input
+  // repo picker: lists credential-visible repos
   reset();
   respond.repos = { repos: [{ full_name: 'owner/name', private: true, default_branch: 'main' }, { full_name: 'owner/other', private: false }] };
   els.gitRepoPick.value = '';
   await run('listSiteRepos()');
   assert(els.gitRepoPick.innerHTML.includes('owner/other') && els.gitRepoPick.innerHTML.includes('(private)'));
   assert(messages.at(-1).text.includes('2 repos'));
+  // picking with a typed token connects straight through to download + services
+  els.gitSiteToken.value = 'tok123';
   els.gitRepoPick.value = 'owner/other';
   await run('pickSiteRepo()');
-  assert.equal(els.gitRepoLink.value, 'owner/other');
+  assert.equal(calls.token.length, 1);
+  assert.deepEqual(calls.link, [{ appId: 'demo', repo: 'owner/other' }]);
+  assert.equal(servicesReloaded, 1);
+  assert(messages.at(-1).text.includes('downloaded'));
+  // picking the same repo again does not refire
+  await run('pickSiteRepo()');
+  assert.equal(calls.link.length, 1);
+  assert(messages.at(-1).text.includes('press connect'));
+  // picking with a stored credential (nothing typed) connects directly
+  reset();
+  await run('gitStoredCredential = true');
+  els.gitSiteToken.value = '';
+  els.gitAccount.value = '';
+  els.gitRepoPick.value = 'owner/name';
+  await run('pickSiteRepo()');
+  assert.equal(calls.token.length, 0);
+  assert.deepEqual(calls.link, [{ appId: 'demo', repo: 'owner/name' }]);
+  await run('gitStoredCredential = false');
+  // picking with no credential: told to add one, nothing fires
+  reset();
+  els.gitSiteToken.value = '';
+  els.gitAccount.value = '';
+  els.gitRepoPick.value = 'owner/other';
+  await run('pickSiteRepo()');
+  assert.equal(calls.link.length + calls.token.length, 0);
+  assert(messages.at(-1).text.includes('add a credential'));
   // picker with no credential: backend error surfaces
   reset();
   respond.repos = { error: 'save a site token or connect an account first' };
@@ -175,6 +202,16 @@ async function main2() {
   els.gitRepoRow.style.display = 'none';
   await run('unhideRepoRow()');
   assert.equal(els.gitRepoRow.style.display, '');
+  // stored credential, no link: repos auto-list on load
+  els.gitRepoPick.options = [];
+  respond.repos = { repos: [{ full_name: 'o/n', private: false }] };
+  await run(`fillGitConn({ github: { hasToken: true } })`);
+  assert(els.gitRepoPick.innerHTML.includes('o/n'));
+  // already populated: no reload
+  const n = reposCalls;
+  els.gitRepoPick.options = [{}, {}];
+  await run(`fillGitConn({ github: { hasToken: true } })`);
+  assert.equal(reposCalls, n);
   console.log('Setup git visibility: linked hides repo row, picker follows credential, badge and switch: OK');
 }
 main().then(main2).catch(e => { console.error(e); process.exitCode = 1; });
