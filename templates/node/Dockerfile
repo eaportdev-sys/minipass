@@ -43,6 +43,16 @@ RUN if [ "$PACKAGE_MANAGER" = "pnpm" ]; then pnpm run build --if-present; \
     elif [ "$PACKAGE_MANAGER" = "yarn" ]; then if node -e "const s=require('./package.json').scripts||{};process.exit(s.build?0:1)"; then yarn run build; fi; \
     else npm run build --if-present; fi
 
+# A Next.js production server needs the build output. Fail here with the
+# reason instead of shipping an image that crash-loops on `next start`
+# (e.g. repos whose build script targets a worker bundle, never .next/).
+RUN if node -e "const p=require('./package.json');const d={...(p.dependencies||{}),...(p.devDependencies||{})};process.exit(d.next?0:1)"; then \
+      if [ ! -d .next ]; then \
+        echo "BUILD PRODUCED NO .next/ BUT next IS A DEPENDENCY. The repo build did not run 'next build' (this repo may target a different runtime, e.g. a worker bundle). Add a repo Dockerfile that serves the real output, or a start:prod script for it - 'next start' can never work without .next/."; \
+        exit 1; \
+      fi; \
+    fi
+
 # Runtime stage — smaller, no build tools
 FROM minipass/node:22-runtime
 ARG PACKAGE_MANAGER=npm

@@ -759,23 +759,55 @@ async function rollbackImages(dir, snaps) {
 // `only` scopes the gate to just-rebuilt services (others keep whatever state they had).
 // Fast path: if all services report healthy immediately, exit early.
 async function waitStable(id, dir, meta, only = null) {
+  const { steadyPoll } = require('./lib/health');
   const all = svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false);
   const names = new Set((only && only.length ? all.filter(s => only.includes(s.name)) : all).map(s => s.name));
   let steady = 0;
+  let prev = new Map();
+  let lastRel = [];
   for (let i = 0; i < 10; i++) {
     if (i) await new Promise(r => setTimeout(r, 3000));
     checkCancelled(id); // stop mid-verify aborts before any rollback restart
     let cs = [];
-    try { cs = await appContainers(id); } catch { continue; }
+    try { cs = await appContainers(id); } catch { prev = new Map(); continue; }
     const rel = cs.filter(c => names.has(c.service));
+    lastRel = rel;
     if (rel.length && rel.some(c => /exited|dead|failed|removing/i.test(c.state || ''))) {
       return { ok: false, detail: rel.map(c => `${c.service}=${c.state}`).join(', ') };
     }
     if (rel.length && rel.every(c => /^running/i.test(c.state || ''))) {
-      if (++steady >= 2) return { ok: true };
-    } else steady = 0;
+      // `running` alone is restart-blind: a crash loop caught mid-iteration
+      // reads as healthy. Require the same container instances (StartedAt)
+      // across polls before counting the streak.
+      const curr = new Map();
+      for (const c of rel) {
+        if (!c.id) continue;
+        try {
+          const insp = await sh(`docker inspect ${c.id} --format '{{.Id}} {{.State.Status}} {{.State.StartedAt}}'`, dir);
+          const parts = insp.trim().split(/\s+/);
+          curr.set(parts[0], { running: /^running/i.test(parts[1] || ''), startedAt: parts.slice(2).join(' ') });
+        } catch { /* inspect failed: container gone mid-poll - not steady */ }
+      }
+      if (curr.size === rel.length && steadyPoll(prev, curr).steady) {
+        if (++steady >= 2) return { ok: true };
+      } else steady = 0;
+      prev = curr;
+    } else { steady = 0; prev = new Map(); }
   }
-  return { ok: false, detail: 'containers never stabilized within 60s' };
+  // Name the crash-looping service instead of a bare timeout.
+  let restarts = '';
+  try {
+    const counts = [];
+    for (const c of lastRel) {
+      if (!c.id) continue;
+      try {
+        const n = (await sh(`docker inspect ${c.id} --format '{{.RestartCount}}'`, dir)).trim();
+        if (parseInt(n, 10) > 0) counts.push(`${c.service} restarted ${n}x`);
+      } catch {}
+    }
+    if (counts.length) restarts = ` (${counts.join(', ')})`;
+  } catch {}
+  return { ok: false, detail: `containers never stabilized within 60s${restarts}` };
 }
 async function currentSha(dir) {
   try {
