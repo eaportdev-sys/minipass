@@ -1184,6 +1184,19 @@ function configureDetectedServices(meta, dir) {
   meta.services = out.normalized;
   return services.map(s => s.name + ':' + (s.subdir || '.'));
 }
+function hasStaleRootService(meta, dir) {
+  const services = svc.fullServices(meta, dir);
+  if (!services.some(s => (s.subdir || '') === '')) return false;
+  let analysis;
+  try { analysis = preflight.analyzeRepository(path.join(dir, 'code'), null, null); } catch { return false; }
+  const desired = (analysis.services || []).map(s => s.subdir || '');
+  if (desired.includes('')) return false;
+  if (!desired.length) return false;
+  const root = services.find(s => (s.subdir || '') === '');
+  if (!root) return false;
+  try { if (!standardDockerfileType(path.join(dir, 'code'), TEMPLATES_DIR)) return false; } catch { return false; }
+  return true;
+}
 
 async function deployNow(id, opts = {}) {
   // The queue above serializes builds. Keep the lock as live UI state and as a
@@ -1210,7 +1223,7 @@ async function deployNow(id, opts = {}) {
   try {
     const ymlPath = path.join(dir, 'docker-compose.yml');
     const before = fs.existsSync(ymlPath) ? fs.readFileSync(ymlPath, 'utf8') : '';
-    const detectedServices = (!meta.services || !meta.services.length) ? configureDetectedServices(meta, dir) : [];
+    const detectedServices = (!meta.services || !meta.services.length || hasStaleRootService(meta, dir)) ? configureDetectedServices(meta, dir) : [];
     if (detectedServices.length) {
       const dbSvc = load();
       const stored = dbSvc.apps.find(a => a.id === id);

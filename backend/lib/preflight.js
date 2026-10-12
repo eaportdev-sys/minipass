@@ -199,11 +199,13 @@ function analyzeRepository(codeDir, explicitType, explicitSubdir) {
 
   const services = [];
   const rootScripts = (pkg && pkg.scripts) || {};
+  let rootDockerfileIsRuntime = paths.some(p => /^Dockerfile$/i.test(p));
+  try { if (rootDockerfileIsRuntime && standardDockerfileType(codeDir, path.join(__dirname, '..', '..', 'templates'))) rootDockerfileIsRuntime = false; } catch {}
   const rootHasRuntimeMarker = !!(paths.includes('package.json') && (
     rootScripts.start || paths.some(p => /^(?:next|nuxt)\.config\.(?:js|mjs|cjs|ts)$/.test(p)) ||
     paths.some(p => /^(?:server|index|app)\.(?:js|mjs|cjs|ts)$/.test(p)) ||
     paths.includes('composer.json') || paths.includes('index.php') || paths.includes('index.html') ||
-    paths.some(p => /^Dockerfile$/i.test(p))
+    rootDockerfileIsRuntime
   ));
   const hasSubApps = frontends.length || backends.length;
   if (typeResult.type && (!hasSubApps || rootHasRuntimeMarker)) services.push(analyzeService(codeDir, typeResult.type, ''));

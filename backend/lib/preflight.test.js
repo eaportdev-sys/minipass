@@ -86,8 +86,9 @@ try {
     fs.mkdirSync(path.join(ws, 'server'));
     fs.writeFileSync(path.join(ws, 'server', 'package.json'), JSON.stringify({ scripts: { start: 'node server.js' }, dependencies: { express: '^5.0.0' } }));
     fs.writeFileSync(path.join(ws, 'server', 'server.js'), 'process.env.PORT;');
+    fs.copyFileSync(path.join(__dirname, '../../templates/react/Dockerfile'), path.join(ws, 'Dockerfile'));
     const wsAnalysis = preflight.analyzeRepository(ws, null, null);
-    assert.deepEqual(wsAnalysis.services.map(s => s.subdir).sort(), ['client', 'server'], 'workspace creates client+server, not root');
+    assert.deepEqual(wsAnalysis.services.map(s => s.subdir).sort(), ['client', 'server'], 'workspace with panel-root Dockerfile creates client+server, not root');
   } finally { fs.rmSync(ws, { recursive: true, force: true }); }
 
   // Test 5: Readiness report for Node service

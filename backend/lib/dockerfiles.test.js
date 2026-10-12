@@ -210,6 +210,10 @@ const LEGACY_REACT = [previousNpmReact, previousNativeReact, oldReact, oldViteRe
 const normalized = text => text.replace(/\r\n/g, '\n').trim();
 
 try {
+  const baseNode = fs.readFileSync(path.join(templates, 'base', 'node.Dockerfile'), 'utf8').replace(/\r\n/g, '\n');
+  assert(baseNode.includes('python3 build-base'), 'base node image includes native build toolchain for dependency install');
+  assert(baseNode.includes('sqlite-dev'), 'base node image includes sqlite headers for better-sqlite3');
+
   // Test 1: Current template structure validation
   for (const type of ['node', 'react']) {
     const template = fs.readFileSync(path.join(templates, type, 'Dockerfile'), 'utf8').replace(/\r\n/g, '\n');

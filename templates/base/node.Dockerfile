@@ -22,10 +22,14 @@ RUN npm install -g node-gyp && \
 # Final base image — minimal, only runtime deps
 FROM node:22-alpine
 
-# Runtime dependencies for native modules
+# Runtime dependencies and native build toolchain. App Dockerfiles run
+# dependency installation from this image, so native packages such as
+# better-sqlite3, sharp fallbacks, canvas, bcrypt, etc. need python/make/gcc
+# here, not only in the precompile stage above.
 RUN apk add --no-cache \
+    python3 build-base autoconf automake libtool nasm pkgconf \
     vips cairo pango giflib libjpeg-turbo libpng \
-    sqlite-libs postgresql-libs \
+    sqlite-dev postgresql-dev \
     git
 
 # Copy pre-compiled native modules (if any succeeded)
