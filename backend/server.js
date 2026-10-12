@@ -1007,6 +1007,20 @@ async function rebindHostPorts(id, dir, meta, composeCmd) {
   return moves.map(m => ({ service: m.name, from: m.from, to: m.to }));
 }
 
+// Build-time package manager: read the checkout (lockfile added after create
+// counts), fall back to the stored create-time detection, else npm. Single
+// value per build; mixed-manager monorepos build with the root manager.
+function resolveBuildManager(meta, codeDir) {
+  try {
+    const { detectPackageManager } = require('./lib/detect');
+    const pkg = JSON.parse(fs.readFileSync(path.join(codeDir, 'package.json'), 'utf8'));
+    return detectPackageManager({ pkg, files: fs.readdirSync(codeDir) }).manager;
+  } catch {}
+  const stored = meta && meta.packageManager;
+  if (['npm', 'pnpm', 'yarn', 'bun'].includes(stored)) return stored;
+  return 'npm';
+}
+
 async function deployNow(id, opts = {}) {
   // The queue above serializes builds. Keep the lock as live UI state and as a
   // defensive invariant against any future call that bypasses the queue.
@@ -1279,8 +1293,9 @@ async function deployNow(id, opts = {}) {
   const scopeSuffix = scope ? ` ${scope}` : '';
   fs.appendFileSync(buildLog, '--- Docker image build ---\n');
   const buildOffset = fs.statSync(buildLog).size;
+  const buildManager = resolveBuildManager(meta, typeof buildCodeDir === 'string' ? buildCodeDir : codeDir);
   try {
-    await deploySh(id, `${composeCmd} build${scopeSuffix} >> "${buildLog}" 2>&1`, dir);
+    await deploySh(id, `${composeCmd} build --build-arg PACKAGE_MANAGER=${buildManager}${scopeSuffix} >> "${buildLog}" 2>&1`, dir);
   } catch (e) {
     if (deployOps.get(id) && deployOps.get(id).cancelled) {
       const cancelled = 'deploy cancelled - active build terminated and containers stay stopped';
