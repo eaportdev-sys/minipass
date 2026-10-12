@@ -1210,6 +1210,13 @@ async function deployNow(id, opts = {}) {
   try {
     const ymlPath = path.join(dir, 'docker-compose.yml');
     const before = fs.existsSync(ymlPath) ? fs.readFileSync(ymlPath, 'utf8') : '';
+    const detectedServices = (!meta.services || !meta.services.length) ? configureDetectedServices(meta, dir) : [];
+    if (detectedServices.length) {
+      const dbSvc = load();
+      const stored = dbSvc.apps.find(a => a.id === id);
+      if (stored) { Object.assign(stored, { services: meta.services, type: meta.type, subdir: meta.subdir, hostPort: meta.hostPort }); save(dbSvc); }
+      fs.appendFileSync(buildLog, `--- service wiring: detected ${detectedServices.join(', ')} ---\n`);
+    }
     svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
     const after = fs.existsSync(ymlPath) ? fs.readFileSync(ymlPath, 'utf8') : '';
     if (before && before !== after) fs.appendFileSync(buildLog, '--- project compose normalized before deploy ---\n');
