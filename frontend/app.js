@@ -1092,9 +1092,14 @@ async function saveAllow() {
 async function fillGitConn(a) {
   const g = a.github || {};
   const state = document.getElementById('gitConnState');
+  const row = document.getElementById('gitRepoRow');
   const source = g.repo ? `${g.repo}${g.branch ? '@' + g.branch : ''}` : '';
-  if (g.hasToken) state.textContent = 'site token stored •••• (used first)' + (source ? ' → ' + source : '');
-  else if (g.login) state.textContent = 'panel account: ' + g.login + (source ? ' → ' + source : '');
+  const hasSource = !!source || (a.repoUrl && /^(git@|ssh:\/\/)/i.test(a.repoUrl));
+  if (row) row.style.display = hasSource ? 'none' : '';
+  if (g.hasToken && source) state.innerHTML = `site token stored •••• (used first) → ${safeHtml(source)} <button onclick="unhideRepoRow()">switch repo</button>`;
+  else if (g.hasToken) state.textContent = 'site token stored •••• (used first)';
+  else if (g.login && source) state.innerHTML = `panel account: ${safeHtml(g.login)} → ${safeHtml(source)} <button onclick="unhideRepoRow()">switch repo</button>`;
+  else if (g.login) state.textContent = 'panel account: ' + g.login;
   else if (source) state.textContent = 'public GitHub repository: ' + source;
   else if (a.repoUrl && /^(git@|ssh:\/\/)/i.test(a.repoUrl)) state.textContent = 'ssh deploy key (see repo key in webhook section)';
   else state.textContent = 'not connected';
@@ -1105,6 +1110,10 @@ async function fillGitConn(a) {
     sel.innerHTML = '<option value="">—</option>' + (s.logins || []).map(l => `<option value="${l}">${l}</option>`).join('');
     sel.value = [...sel.options].some(o => o.value === (prev || g.login)) ? (prev || g.login) : '';
   } catch {}
+}
+function unhideRepoRow() {
+  const row = document.getElementById('gitRepoRow');
+  if (row) row.style.display = '';
 }
 async function useAccount() {
   if (!currentApp) return;
@@ -1125,7 +1134,7 @@ async function useAccount() {
   if (!want.repo) { toast('using account ' + login, true); refresh(); return; }
   toast('using account ' + login + '… connecting ' + want.repo);
   const link = await linkSiteRepo(want.repo);
-  if (link.ok) { document.getElementById('gitRepoLink').value = ''; const t = linkDone(link, want.repo); toast('account ' + login + ' connected, ' + t.text, t.ok); }
+  if (link.ok) { document.getElementById('gitRepoLink').value = ''; const t = linkDone(link, want.repo); toast('account ' + login + ' connected, ' + t.text, t.ok); if (link.pulled) loadServices(); }
   else toast('account saved, but ' + link.error, false);
   refresh();
 }
@@ -1137,7 +1146,9 @@ function wantedRepoLink() {
 }
 function pickSiteRepo() {
   const v = document.getElementById('gitRepoPick').value;
-  if (v) document.getElementById('gitRepoLink').value = v;
+  if (!v) return;
+  document.getElementById('gitRepoLink').value = v;
+  toast('picked ' + v + ' — press connect to download its files', true);
 }
 async function listSiteRepos() {
   if (!currentApp) return;
@@ -1182,7 +1193,7 @@ async function saveSiteToken() {
   if (!want.ok) { toast('token saved, but ' + want.error, false); refresh(); return; }
   if (!want.repo) { toast('site token saved', true); refresh(); return; }
   const link = await linkSiteRepo(want.repo);
-  if (link.ok) { document.getElementById('gitRepoLink').value = ''; const t = linkDone(link, want.repo); toast('token saved, ' + t.text, t.ok); }
+  if (link.ok) { document.getElementById('gitRepoLink').value = ''; const t = linkDone(link, want.repo); toast('token saved, ' + t.text, t.ok); if (link.pulled) loadServices(); }
   else toast('token saved, but ' + link.error, false);
   refresh();
 }

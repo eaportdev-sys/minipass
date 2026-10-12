@@ -4,7 +4,7 @@ const path = require('path');
 const vm = require('vm');
 const source = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
 const messages = [];
-let refreshed = 0;
+let refreshed = 0, servicesReloaded = 0;
 const calls = { token: [], account: [], link: [] };
 const respond = { token: { ok: true }, account: { ok: true }, link: { ok: true, pulled: true }, repos: { repos: [] } };
 const els = {
@@ -20,6 +20,7 @@ const context = vm.createContext({
   safeHtml: text => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
   refresh: () => { refreshed++; },
   setTimeout: () => 0,
+  loadServices: () => { servicesReloaded++; },
   siteById: () => siteMeta,
   fetch: async (url, opts) => {
     const body = opts && opts.body ? JSON.parse(opts.body) : {};
@@ -34,7 +35,7 @@ els.toasts = { appendChild: d => messages.push({ text: d.textContent, ok: !Strin
 vm.runInContext(source.slice(source.indexOf('async function useAccount('), source.indexOf('async function showLogs(')), context);
 const run = code => vm.runInContext(code, context);
 const reset = () => {
-  calls.token.length = 0; calls.account.length = 0; calls.link.length = 0; messages.length = 0; refreshed = 0;
+  calls.token.length = 0; calls.account.length = 0; calls.link.length = 0; messages.length = 0; refreshed = 0; servicesReloaded = 0;
   respond.token = { ok: true }; respond.account = { ok: true }; respond.link = { ok: true, pulled: true };
   for (const k of Object.keys(siteMeta)) delete siteMeta[k];
 };
@@ -47,6 +48,7 @@ async function main() {
   assert.equal(els.gitRepoLink.value, '');
   assert(messages.at(-1).ok === true && messages.at(-1).text.includes('downloaded'));
   assert(messages.at(-1).text.includes('confirm services below'));
+  assert.equal(servicesReloaded, 1, 'services reload after files download');
   assert.equal(refreshed, 1);
   // repo already linked (e.g. token expired, repasting): no owner/name needed, no link call
   reset();

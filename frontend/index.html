@@ -102,9 +102,9 @@
       <div id="tab-setup" class="sitetab" style="display:none">
         <div class="card stepcard">
           <div class="stephead"><span class="stepno">1</span><div><b>Connect the source</b><div class="meta" id="gitConnState"></div></div></div>
-          <div class="linkrepo-row">
+          <div class="linkrepo-row" id="gitRepoRow">
             <b>Repository</b>
-            <div class="meta">owner/name to pull on redeploy. Already linked (see status above)? Just save — the stored link is reused, no need to refill this.</div>
+            <div class="meta">First connection only: enter or pick the repo, then connect below with either credential.</div>
             <div class="controlrow"><input id="gitRepoLink" placeholder="owner/name" autocomplete="off"><button onclick="listSiteRepos()">list repos</button></div>
             <div class="controlrow"><select id="gitRepoPick" style="display:none" onchange="pickSiteRepo()" aria-label="Pick a repository"><option value="">— pick one —</option></select></div>
           </div>
@@ -238,7 +238,7 @@
         </div>
         <div class="deploy-source-grid">
           <div class="card deploy-source-card">
-            <div class="deploy-source-head"><div><b>GitHub automation</b><div class="meta">Webhook or scheduled polling</div></div><div id="hookPower" class="source-power is-checking"><span class="power-symbol">⏻</span><span class="power-label">Checking</span></div></div>
+            <div class="deploy-source-head"><div><b>GitHub automation</b><div class="meta">Webhook and polling triggers</div></div><div id="hookPower" class="source-power is-checking"><span class="power-symbol">⏻</span><span class="power-label">Checking</span></div></div>
             <div id="githubAutomationBox" class="local-git-box">
               <div id="githubAutomationOff" class="local-git-disabled"><b id="githubAutomationOffTitle">Loading automation state…</b><div class="meta" id="githubAutomationOffMeta"></div><button id="githubAutomationEnable" class="btn primary" onclick="setGithubAutomation(true)">enable github automation</button></div>
               <div id="githubAutomationOn" style="display:none">
@@ -449,7 +449,7 @@
     </div>
     <pre id="out" class="compact-output"></pre>
   </div>
-  <footer class="create-footer"><span class="meta">Enable auto-deploy later in Deploy.</span><div class="modalbtns"><button id="createCancelBtn" onclick="closeCreate()">Cancel</button><button id="createBuildBtn" class="btn primary" onclick="createApp()">Build website</button></div></footer>
+  <footer class="create-footer"><span class="meta">Manual redeploys anytime in Deploy.</span><div class="modalbtns"><button id="createCancelBtn" onclick="closeCreate()">Cancel</button><button id="createBuildBtn" class="btn primary" onclick="createApp()">Build website</button></div></footer>
 </div></div>
 <div id="toasts"></div>
 <div id="confirmModal" class="modal"><div class="modalbox">
