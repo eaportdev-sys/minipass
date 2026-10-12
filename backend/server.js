@@ -2280,6 +2280,17 @@ app.delete('/api/apps/:id/git-token', (req, res) => {
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+app.post('/api/apps/:id/git-repos', async (req, res) => {
+  // Repos the site's own credentials can see (site token first, then linked
+  // account) - pick one instead of typing owner/name.
+  try {
+    const meta = load().apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    if (!gh.tokenFor(meta)) return res.status(400).json({ error: 'save a site token or connect an account first' });
+    const repos = await gh.apiFor(meta, '/user/repos?per_page=100&sort=updated');
+    res.json({ repos: repos.map(r => ({ full_name: r.full_name, private: !!r.private, default_branch: r.default_branch })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 // Add a database to an existing app: appends service + volume, merges new env
 // vars without touching existing ones (passwords stay valid against kept volumes).
 app.post('/api/apps/:id/db', async (req, res) => {

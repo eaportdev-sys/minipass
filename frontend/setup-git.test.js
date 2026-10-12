@@ -6,24 +6,27 @@ const source = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
 const messages = [];
 let refreshed = 0;
 const calls = { token: [], account: [], link: [] };
-const respond = { token: { ok: true }, account: { ok: true }, link: { ok: true } };
+const respond = { token: { ok: true }, account: { ok: true }, link: { ok: true }, repos: { repos: [] } };
 const els = {
   gitSiteToken: { value: 'tok123' },
   gitRepoLink: { value: 'owner/name' },
+  gitRepoPick: { value: '', innerHTML: '', style: {} },
   gitAccount: { value: '' }
 };
 const siteMeta = {};
 const context = vm.createContext({
   currentApp: 'demo',
   document: { getElementById: id => els[id] || { value: '' }, createElement: () => ({ remove() {} }) },
+  safeHtml: text => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
   refresh: () => { refreshed++; },
   setTimeout: () => 0,
   siteById: () => siteMeta,
   fetch: async (url, opts) => {
-    const body = JSON.parse(opts.body);
+    const body = opts && opts.body ? JSON.parse(opts.body) : {};
     if (url.includes('/git-token')) { calls.token.push(body); return { json: async () => respond.token }; }
     if (url.includes('/git-account')) { calls.account.push(body); return { json: async () => respond.account }; }
     if (url.includes('/api/github/link')) { calls.link.push(body); return { json: async () => respond.link }; }
+    if (url.includes('/git-repos')) { return { json: async () => respond.repos }; }
     throw new Error('unexpected ' + url);
   }
 });
@@ -113,6 +116,21 @@ async function main() {
   assert.deepEqual(calls.account, [{ login: '' }]);
   assert.equal(calls.link.length, 0);
   assert(messages.at(-1).text.includes('unlinked'));
-  console.log('Setup git connect: repaste reuses the stored link, switch/unlink/validation: OK');
+  // repo picker: lists credential-visible repos, picking fills the input
+  reset();
+  respond.repos = { repos: [{ full_name: 'owner/name', private: true, default_branch: 'main' }, { full_name: 'owner/other', private: false }] };
+  els.gitRepoPick.value = '';
+  await run('listSiteRepos()');
+  assert(els.gitRepoPick.innerHTML.includes('owner/other') && els.gitRepoPick.innerHTML.includes('(private)'));
+  assert(messages.at(-1).text.includes('2 repos'));
+  els.gitRepoPick.value = 'owner/other';
+  await run('pickSiteRepo()');
+  assert.equal(els.gitRepoLink.value, 'owner/other');
+  // picker with no credential: backend error surfaces
+  reset();
+  respond.repos = { error: 'save a site token or connect an account first' };
+  await run('listSiteRepos()');
+  assert(messages.at(-1).ok === false && messages.at(-1).text.includes('first'));
+  console.log('Setup git connect: repaste reuses the stored link, switch/unlink/validation, repo picker: OK');
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

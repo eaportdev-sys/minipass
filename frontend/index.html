@@ -105,7 +105,8 @@
           <div class="linkrepo-row">
             <b>Repository</b>
             <div class="meta">owner/name to pull on redeploy. Already linked (see status above)? Just save — the stored link is reused, no need to refill this.</div>
-            <div class="controlrow"><input id="gitRepoLink" placeholder="owner/name" autocomplete="off"></div>
+            <div class="controlrow"><input id="gitRepoLink" placeholder="owner/name" autocomplete="off"><button onclick="listSiteRepos()">list repos</button></div>
+            <div class="controlrow"><select id="gitRepoPick" style="display:none" onchange="pickSiteRepo()" aria-label="Pick a repository"><option value="">— pick one —</option></select></div>
           </div>
           <div class="credential-grid">
             <div class="credential-option">

@@ -1135,6 +1135,24 @@ function wantedRepoLink() {
   if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) return { ok: false, error: 'repo must be owner/name — not linked' };
   return { ok: true, repo };
 }
+function pickSiteRepo() {
+  const v = document.getElementById('gitRepoPick').value;
+  if (v) document.getElementById('gitRepoLink').value = v;
+}
+async function listSiteRepos() {
+  if (!currentApp) return;
+  const sel = document.getElementById('gitRepoPick');
+  toast('listing repos this credential can see…');
+  try {
+    const r = await (await fetch(`/api/apps/${currentApp}/git-repos`, { method: 'POST' })).json();
+    if (!r.ok && r.error) { toast(r.error, false); return; }
+    const list = r.repos || [];
+    if (!list.length) { toast('no repos visible to this credential', false); return; }
+    sel.innerHTML = '<option value="">— pick one —</option>' + list.map(x => `<option value="${safeHtml(x.full_name)}">${safeHtml(x.full_name)}${x.private ? ' (private)' : ''}</option>`).join('');
+    sel.style.display = '';
+    toast(list.length + ' repos — pick one, then connect', true);
+  } catch (e) { toast('list failed: ' + e.message, false); }
+}
 async function linkSiteRepo(repo) {
   const login = (document.getElementById('gitAccount') || {}).value || undefined;
   try {
