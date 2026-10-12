@@ -654,7 +654,10 @@ function fillSiteHeader(a) {
     box.innerHTML = `<div class="local-git-status"><div><b>Direct push is enabled</b><div class="meta">Run these commands in your local repository.</div></div><span class="badge service-state on">enabled</span></div>` +
       `<div class="local-git-toggle"><button class="btn danger" onclick="disableLocalGit()">disable direct push</button></div>` +
       `<div class="local-command"><span>1 · Add the remote once</span><div class="deploy-copy-row"><code id="localRemote">${safeHtml(remoteCommand)}</code><button onclick="copyLocal()">copy</button></div></div>` +
-      `<div class="local-command"><span>2 · Push your branch</span><code>git push minipass main</code><small>Use <b>master</b> instead when that is your branch.</small></div>`;
+      `<div class="local-command"><span>2 · Push your branch</span><code>git push minipass main</code><small>Use <b>master</b> instead when that is your branch.</small></div>` +
+      (a.autoDeploy === false ? '<div class="meta">Automatic deploys are disabled — pushes land without rebuilding until re-enabled.</div>' : '');
+  } else if (a.autoDeploy === false) {
+    box.innerHTML = `<div class="local-git-disabled"><b>Direct push is parked</b><div class="meta">Automatic deploys are disabled — pushes would land without rebuilding. Manual redeploys still work.</div></div>`;
   } else {
     box.innerHTML = `<div class="local-git-disabled"><b>Direct push is not configured</b><div class="meta">Create a private bare Git remote and its deploy hook on this server.</div><button class="btn primary" onclick="initLocalGit()">enable local git push</button></div>`;
   }
@@ -666,16 +669,28 @@ function fillGithubAutomation(a) {
   const meta = document.getElementById('githubAutomationOffMeta');
   const enable = document.getElementById('githubAutomationEnable');
   if (!off || !on || !title || !meta || !enable) return;
+  const resetEnable = () => { enable.textContent = 'enable github automation'; enable.onclick = () => setGithubAutomation(true); };
   if (!a.github || !a.github.repo) {
-    off.style.display = 'block'; on.style.display = 'none'; enable.style.display = 'none';
+    off.style.display = 'block'; on.style.display = 'none'; enable.style.display = 'none'; resetEnable();
     title.textContent = 'No GitHub repository linked';
     meta.textContent = 'Connect a repository in Setup before enabling automatic deployments.';
     return;
   }
-  if (a.github.enabled !== true) {
-    off.style.display = 'block'; on.style.display = 'none'; enable.style.display = '';
+  const where = `${a.github.repo}${a.github.branch ? '@' + a.github.branch : ''}`;
+  const staleEnabled = a.github.enabled === true;
+  if (a.autoDeploy === false) {
+    off.style.display = 'block'; on.style.display = 'none';
+    title.textContent = 'Automatic deploys disabled';
+    meta.textContent = where + ' stays linked for manual redeploys. Triggers are parked while automatic deploys are disabled.' +
+      (staleEnabled ? ' This site still has automation switched on — switch it off below to remove its GitHub webhook.' : '');
+    if (staleEnabled) { enable.style.display = ''; enable.textContent = 'disable leftover automation'; enable.onclick = () => setGithubAutomation(false); }
+    else { enable.style.display = 'none'; resetEnable(); }
+    return;
+  }
+  if (!staleEnabled) {
+    off.style.display = 'block'; on.style.display = 'none'; enable.style.display = ''; resetEnable();
     title.textContent = 'GitHub automation is disabled';
-    meta.textContent = `${a.github.repo}${a.github.branch ? '@' + a.github.branch : ''} stays linked for manual repository redeploys. No webhook or polling deploys will run.`;
+    meta.textContent = where + ' stays linked for manual repository redeploys. No webhook or polling deploys will run.';
     return;
   }
   off.style.display = 'none'; on.style.display = 'block';

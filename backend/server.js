@@ -47,6 +47,9 @@ const app = express();
 const lifecycleLocks = new Set();
 const creatingSites = new Set();
 let trashBusy = false;
+// Automatic deploys are disabled for now: every release is a manual redeploy
+// or local rebuild. Flip to true to restore webhook/poll/local-push triggers.
+const AUTO_DEPLOY = false;
 app.use(cors());
 // GitHub push webhook FIRST with a raw body: HMAC verification needs exact bytes,
 // and the global json parser would already have consumed them.
@@ -54,6 +57,7 @@ const gh = require('./lib/github');
 app.post('/webhook/:id', express.raw({ type: '*/*' }), async (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta || req.query.token !== meta.token) return res.status(401).send('bad token');
+  if (!AUTO_DEPLOY) return res.status(409).send('automatic deploy disabled for now');
   if (!meta.github || meta.github.enabled !== true) return res.status(409).send('github automation disabled');
   const sig = req.headers['x-hub-signature-256'];
   if (sig && meta.github) {
@@ -311,7 +315,7 @@ function pubApp(a) {
   // detection therefore mistook /health/live for their homepage. Preserve an
   // operator-set path, otherwise frontend roots always open at /.
   const homePath = ['static', 'react'].includes(a.type) && !a.homePathManual ? '' : (a.homePath || '');
-  return { ...a, name: a.name || a.id, homePath, github: pub };
+  return { ...a, name: a.name || a.id, homePath, github: pub, autoDeploy: AUTO_DEPLOY };
 }
 function publicServices(meta, dir) {
   return svc.fullServices(meta, dir).map(s => {
@@ -414,6 +418,7 @@ app.get('/api/apps/:id/repokey', (req, res) => {
 const pollState = new Map();
 setInterval(pollGithub, 60 * 1000);
 async function pollGithub() {
+  if (!AUTO_DEPLOY) return;
   let db_;
   try { db_ = load(); } catch { return; }
   const now = Date.now();
@@ -448,6 +453,7 @@ app.post('/api/apps/:id/poll', (req, res) => {
     const db_ = load();
     const meta = db_.apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
+    if (!AUTO_DEPLOY && parseInt(req.body.minutes, 10) > 0) return res.status(409).json({ error: 'automatic deploy disabled for now' });
     if (!meta.github) return res.status(400).json({ error: 'link a github repo first' });
     if (meta.github.enabled !== true) return res.status(409).json({ error: 'enable github automation first' });
     meta.github.pollMinutes = Math.max(0, Math.min(60, parseInt(req.body.minutes, 10) || 0));
@@ -1533,6 +1539,7 @@ app.get('/api/apps/:id/doctor', async (req, res) => {
 
 app.post('/api/apps/:id/deploy', async (req, res) => {
   try {
+    if ((req.body && req.body.source) === 'local-push' && !AUTO_DEPLOY) return res.status(409).json({ error: 'automatic deploy disabled for now' });
     const only = Array.isArray(req.body && req.body.services)
       ? [...new Set(req.body.services.filter(s => /^[A-Za-z0-9_-]{1,32}$/.test(s || '')))]
       : [];
@@ -1848,6 +1855,7 @@ app.post('/api/github/link', async (req, res) => {
 // panel; deploy checks out an isolated worktree and never mutates code/.
 app.post('/api/apps/:id/git-init', (req, res) => {
   try {
+    if (!AUTO_DEPLOY) return res.status(409).json({ error: 'automatic deploy disabled for now' });
     const id = req.params.id;
     const dir = appDir(APPS_DIR, id);
     if (!fs.existsSync(path.join(dir, 'docker-compose.yml'))) return res.status(404).json({ error: 'unknown app' });
@@ -2591,6 +2599,7 @@ async function setGithubAutomation(req, res, forcedEnabled) {
     if (!meta.github || !meta.github.repo) return res.status(400).json({ error: 'no github repository linked to this site' });
     const enabled = forcedEnabled === undefined ? !!(req.body && req.body.enabled) : forcedEnabled;
     if (enabled) {
+      if (!AUTO_DEPLOY) return res.status(409).json({ error: 'automatic deploy disabled for now' });
       const head = await githubHead(meta);
       if (head) meta.github.sha = head;
       meta.github.enabled = true;
