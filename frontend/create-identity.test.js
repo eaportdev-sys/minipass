@@ -2,7 +2,9 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
-const source = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+const idxDoc = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+const idxScripts = [...idxDoc.matchAll(/<script src="([^"]+)"><\/script>/g)].map(m => m[1]).filter(f => !/^https?:\/\//.test(f));
+const source = idxScripts.map(f => fs.readFileSync(path.join(__dirname, f), 'utf8')).join('\n');
 const elements = new Map();
 function element(id) {
   if (!elements.has(id)) elements.set(id, { value: '', style: {}, classList: { remove() {} } });

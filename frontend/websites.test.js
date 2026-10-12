@@ -4,7 +4,9 @@ const path = require('path');
 const vm = require('vm');
 
 // Exercise the actual plain-JS list functions without browser dependencies.
-const source = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+const idxDoc = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+const idxScripts = [...idxDoc.matchAll(/<script src="([^"]+)"><\/script>/g)].map(m => m[1]).filter(f => !/^https?:\/\//.test(f));
+const source = idxScripts.map(f => fs.readFileSync(path.join(__dirname, f), 'utf8')).join('\n');
 const elements = new Map();
 const element = id => {
   if (!elements.has(id)) elements.set(id, {
