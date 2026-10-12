@@ -26,7 +26,7 @@ vm.runInContext(source.slice(0, source.indexOf('const SITE_TABS')) +
   section('function dbLabel(', 'function dirtyBadge(') +
   section('function safeHtml(', 'async function loadDatabases(') +
   section('function setPowerState(', 'function sourceSlot(') +
-  section('function appIsRunning(', 'function updatePowerStates('), context);
+  section('function containerUp(', 'function updatePowerStates('), context);
 const run = code => vm.runInContext(code, context);
 const json = code => JSON.parse(JSON.stringify(run(code)));
 context.fixtures = Array.from({ length: 100 }, (_, i) => ({
@@ -128,6 +128,13 @@ async function statusTests() {
   context.fetch = async () => ({ json: async () => ({ containers: [{ service: 'app', state: 'exited' }] }) });
   await run('hydrateAppCards(fixtures.slice(0,1), appsRefreshSeq)');
   assert(element('appLifecycle-site-000').innerHTML.includes('Start'), 'stopped existing containers can be started');
+  assert.equal(run(`appIsRunning({services:[{name:'app',enabled:true}],containers:[{service:'app',state:'running'}]})`), true, 'steady containers read as running');
+  assert.equal(run(`appIsRunning({services:[{name:'app',enabled:true}],containers:[{service:'app',state:'restarting',status:'Restarting (1) 3 seconds ago'}]})`), false, 'restart loops never read as running');
+  assert.equal(run(`appCrashed({containers:[{service:'app',state:'restarting'}]})`), true, 'restart loops detect as crashed');
+  assert.equal(run(`appCrashed({containers:[{service:'app',state:'running'}]})`), false, 'steady containers are not crashed');
+  context.fetch = async () => ({ json: async () => ({ containers: [{ service: 'app', state: 'restarting', status: 'Restarting (1) 3 seconds ago' }] }) });
+  await run('hydrateAppCards(fixtures.slice(0,1), appsRefreshSeq)');
+  assert.equal(element('appState-site-000').textContent, 'Unavailable', 'restart loops stay failed instead of flip-flopping Running');
   context.fetch = async () => { throw new Error('offline'); };
   await run('hydrateAppCards(fixtures.slice(0,1), appsRefreshSeq)');
   assert.equal(element('appState-site-000').textContent, 'Unavailable');

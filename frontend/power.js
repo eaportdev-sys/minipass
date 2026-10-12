@@ -35,12 +35,22 @@ function sourceSlot(source) {
   if (source === 'webhook' || source === 'poll') return 'hook';
   return null;
 }
+function containerUp(c) {
+  const state = (c && c.state) || '';
+  // A restart-looping container flickers through `running` between crashes.
+  // Counting it as up makes the card flip-flop and hides the crash loop.
+  return /^running/i.test(state) && !/^restarting/i.test(state);
+}
 function appIsRunning(st) {
   const containers = (st && st.containers) || [];
   const enabled = ((st && st.services) || []).filter(s => s.enabled !== false);
-  if (enabled.length) return enabled.every(s => containers.some(c => c.service === s.name && /^running/i.test(c.state || '')));
+  if (enabled.length) return enabled.every(s => containers.some(c => c.service === s.name && containerUp(c)));
   const appContainers = containers.filter(c => !/^db(-|$)/i.test(c.service || ''));
-  return appContainers.length > 0 && appContainers.every(c => /^running/i.test(c.state || ''));
+  return appContainers.length > 0 && appContainers.every(containerUp);
+}
+function appCrashed(st) {
+  const containers = (st && st.containers) || [];
+  return containers.some(c => /restarting|exited|dead|failed/i.test((c && c.state) || ''));
 }
 function appCanStart(st) {
   const containers = (st && st.containers) || [];

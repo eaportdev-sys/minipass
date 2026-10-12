@@ -27,6 +27,13 @@ function useMigrateDetection(button) {
     : `Detected runner selected in ${button.dataset.service} · ${where}. Review the command, then save or run it.`;
   document.getElementById('migrateOut').textContent = message + (button.dataset.warning ? `\n\nConfiguration warning: ${button.dataset.warning}` : '');
 }
+function runMigrateSuggestion(btn) {
+  const box = btn.closest('.migrate-detect-wrap');
+  const src = box && box.querySelector('.migrate-detect');
+  if (!src) return;
+  useMigrateDetection(src);
+  runMigrateNow();
+}
 async function runMigrateNow() {
   if (!currentApp) return;
   const out = document.getElementById('migrateOut');
@@ -78,7 +85,7 @@ async function loadMigrateSuggest() {
         : `${s.repoDir || 'repository'} · not runnable yet`;
       const phase = s.phase === 'initial' ? 'initial setup' : 'deployment';
       if (!s.runnable) return `<div class="migrate-detect unavailable"><div><b>${safeHtml(s.framework || 'Migration')}</b><span>${safeHtml(phase)}</span></div><small>${safeHtml(s.problem || s.why || 'Needs configuration')}</small><em>${safeHtml(location)}</em></div>`;
-      return `<button class="migrate-detect${s.warning ? ' has-warning' : ''}" data-command="${safeHtml(s.command || s.cmd)}" data-dir="${safeHtml(s.dir || '')}" data-service="${safeHtml(s.service || s.svc || '')}" data-check="${safeHtml(s.check || '')}" data-phase="${safeHtml(s.phase || 'deploy')}" data-warning="${safeHtml(s.warning || '')}" onclick="useMigrateDetection(this)" title="${safeHtml(s.why || '')}"><div><b>${safeHtml(s.framework || 'Migration')}</b><span>${safeHtml(phase)}</span></div><code>${safeHtml(s.command || s.cmd)}</code>${s.warning ? `<small>${safeHtml(s.warning)}</small>` : ''}<em>${safeHtml(location)}</em></button>`;
+      return `<div class="migrate-detect-wrap"><button class="migrate-detect${s.warning ? ' has-warning' : ''}" data-command="${safeHtml(s.command || s.cmd)}" data-dir="${safeHtml(s.dir || '')}" data-service="${safeHtml(s.service || s.svc || '')}" data-check="${safeHtml(s.check || '')}" data-phase="${safeHtml(s.phase || 'deploy')}" data-warning="${safeHtml(s.warning || '')}" onclick="useMigrateDetection(this)" title="${safeHtml(s.why || '')}"><div><b>${safeHtml(s.framework || 'Migration')}</b><span>${safeHtml(phase)}</span></div><code>${safeHtml(s.command || s.cmd)}</code>${s.warning ? `<small>${safeHtml(s.warning)}</small>` : ''}<em>${safeHtml(location)}</em></button><button class="btn primary" onclick="runMigrateSuggestion(this)">run now</button></div>`;
     }).join('')}</div>` : '<div class="migrate-suggest-label">No migration runner detected — enter the service, folder, and project command manually.</div>';
   } catch { if (currentApp === appId) box.innerHTML = ''; }
 }

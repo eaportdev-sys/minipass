@@ -15,8 +15,9 @@ async function loadDatabases() {
       const running = /^running/i.test(d.state || '');
       const toolPort = parseInt(d.toolPort, 10);
       const toolRunning = d.toolState === 'running' && toolPort >= 8900 && toolPort <= 8999;
+      const toolUrl = toolRunning ? `http://${location.hostname}:${toolPort}` : null;
       const action = toolRunning
-        ? `<button class="btn primary" onclick="openDbTool('${d.type}', ${toolPort})">open ${safeHtml(d.tool)}</button><button onclick="stopDbTool('${d.type}')">stop UI</button>`
+        ? `<button class="btn primary" onclick="openDbTool('${d.type}', ${toolPort})">open ${safeHtml(d.tool)}</button><a class="btn" href="${safeHtml(toolUrl)}" target="_blank" rel="noopener">open in tab</a><button onclick="stopDbTool('${d.type}')">stop UI</button>`
         : `<button class="btn primary" onclick="launchDbTool('${d.type}')" ${running ? '' : 'disabled'}>launch ${safeHtml(d.tool)}</button>`;
       const dumpBtn = `<button onclick="downloadDbDump('${d.type}')" ${running ? '' : 'disabled'} title="download a full dump of this database">dump</button>`;
       let toolStatus = `${safeHtml(d.tool)} is stopped`;
@@ -69,9 +70,10 @@ async function launchDbTool(type) {
     const url = `http://${location.hostname}:${r.port}`;
     toast(`${r.tool} started on port ${r.port}`, true);
     if (currentApp === appId) loadDatabases();
-    if (popup && popup.closed) await stopDbTool(type, appId, true);
-    else if (popup) { popup.location.href = url; watchDbPopup(appId, type, popup); }
-    else toast('database UI started - allow popups, then use the open button', false);
+    // The admin UI takes up to a minute to boot. A tab closed before first
+    // paint must not kill the tool - leave it running for the open button.
+    if (popup && !popup.closed) { popup.location.href = url; watchDbPopup(appId, type, popup); }
+    else toast('database UI is starting - use the open button (or the link below) when ready', true);
   } catch (e) {
     if (popup) popup.close();
     toast('database UI failed: ' + e.message, false);

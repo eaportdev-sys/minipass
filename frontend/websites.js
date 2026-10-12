@@ -126,7 +126,8 @@ async function hydrateAppCards(apps, seq, renderSeq = websiteRenderSeq) {
         if (!st || st.error) throw new Error('status unavailable');
         const running = appIsRunning(st);
         const canStart = appCanStart(st);
-        setAppCardState(a.id, st.deploying ? 'deploying' : (running ? 'deployed' : 'off'), running, canStart);
+        const crashed = !st.deploying && appCrashed(st);
+        setAppCardState(a.id, st.deploying ? 'deploying' : (crashed ? 'failed' : (running ? 'deployed' : 'off')), running, canStart);
       } catch {
         if (current() && version === (websiteStateSeq.get(a.id) || 0)) setAppCardState(a.id, 'failed', false);
       }
