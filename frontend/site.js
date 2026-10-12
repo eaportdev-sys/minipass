@@ -6,9 +6,27 @@ function siteRoute() {
   const tab = SITE_TABS.has(p.get('tab')) ? p.get('tab') : 'overview';
   return { id, tab };
 }
-function rememberSiteRoute(id, tab) {
-  const hash = `site=${encodeURIComponent(id)}&tab=${encodeURIComponent(tab)}`;
-  history.replaceState(null, '', `${location.pathname}${location.search}#${hash}`);
+function siteHash(id, tab) {
+  return `site=${encodeURIComponent(id)}&tab=${encodeURIComponent(tab)}`;
+}
+function rememberSiteRoute(id, tab, push = false) {
+  const hash = siteHash(id, tab);
+  const url = `${location.pathname}${location.search}#${hash}`;
+  if (push) {
+    // A repeat click on the open site must not stack duplicate entries.
+    if (location.hash.replace(/^#/, '') === hash) return;
+    history.pushState({ site: id, tab }, '', url);
+  } else {
+    history.replaceState({ site: id, tab }, '', url);
+  }
+}
+// Browser Back/Forward restores the panel route without adding entries.
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener('popstate', () => {
+    const route = siteRoute();
+    if (route) openSite(route.id, route.tab, false);
+    else backToSites(false);
+  });
 }
 function openSite(id, tab = 'overview', remember = true) {
   currentApp = id;
@@ -23,7 +41,9 @@ function openSite(id, tab = 'overview', remember = true) {
   document.getElementById('deployFullLog').style.display = 'none';
   showView('site');
   tab = SITE_TABS.has(tab) ? tab : 'overview';
-  if (remember) rememberSiteRoute(id, tab);
+  // Site visits are history entries (Back returns to the list/previous site);
+  // tab switches only update the current entry (see showSiteTab).
+  if (remember) rememberSiteRoute(id, tab, true);
   document.getElementById('filePath').value = '';
   document.getElementById('fileEdit').value = '';
   document.getElementById('fileOut').textContent = '';

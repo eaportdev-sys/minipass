@@ -1,6 +1,8 @@
-function backToSites() {
+function backToSites(push = true) {
   currentApp = null;
-  history.replaceState(null, '', `${location.pathname}${location.search}`);
+  const url = `${location.pathname}${location.search}`;
+  if (push && location.hash) history.pushState(null, '', url);
+  else history.replaceState(null, '', url);
   showView('websites');
   refresh();
   loadTrash();

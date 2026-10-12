@@ -7,7 +7,7 @@ async function refresh() {
   for (const id of websiteStates.keys()) if (!ids.has(id)) { websiteStates.delete(id); websiteStateSeq.delete(id); }
   renderWebsites();
   // keep detail header + global terminal picker in sync
-  if (currentApp && !apps.some(a => a.id === currentApp)) backToSites();
+  if (currentApp && !apps.some(a => a.id === currentApp)) backToSites(false);
   else if (currentApp) fillSiteHeader(apps.find(a => a.id === currentApp));
   const tsel = document.getElementById('termApp');
   if (tsel) {

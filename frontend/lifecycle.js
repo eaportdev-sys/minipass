@@ -157,7 +157,7 @@ async function rmApp(id) {
     const r = await (await fetch('/api/apps/' + id, { method: 'DELETE' })).json();
     if (!r.ok) throw new Error(r.error || 'site could not be stopped and moved to Trash');
     toast(r.trashed ? (id + ' in trash — restorable for 48h') : (id + ' deleted'), true);
-    if (id === currentApp) backToSites(); else refresh();
+    if (id === currentApp) backToSites(false); else refresh();
     loadTrash();
   } catch (e) { toast('delete failed: ' + e.message, false); refresh(); }
 }
