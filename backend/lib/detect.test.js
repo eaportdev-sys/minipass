@@ -60,6 +60,44 @@ assert.equal(spaOverPhp.type, 'react', JSON.stringify(spaOverPhp));
 const plainPhp = decideType(['composer.json', 'index.php'], null);
 assert.equal(plainPhp.type, 'php', JSON.stringify(plainPhp));
 
+// Next.js runs as a Node server (build + start) - never the nginx static
+// template, even when a vite config sits alongside next.config in one repo.
+const nextPkg = { scripts: { dev: 'node run.mjs dev', build: 'node run.mjs build', start: 'next dev -p 3000' }, dependencies: { next: '16.3.4', react: '^19.0.0', 'react-dom': '^19.0.0' } };
+const nextRoot = decideType(['package.json', 'next.config.ts', 'vite.config.ts', 'app/page.tsx'], nextPkg);
+assert.equal(nextRoot.type, 'node', JSON.stringify(nextRoot));
+assert.equal(nextRoot.detected, 'next', JSON.stringify(nextRoot));
+const nextNoBuild = decideType(['package.json', 'next.config.js'], { scripts: { start: 'next start' }, dependencies: { next: '^15.0.0' } });
+assert.equal(nextNoBuild.type, 'node', JSON.stringify(nextNoBuild));
+const nuxtRoot = decideType(['package.json', 'nuxt.config.ts'], { scripts: { build: 'nuxt build', start: 'node .output/server/index.mjs' }, dependencies: { nuxt: '^3.0.0' } });
+assert.equal(nuxtRoot.type, 'node', JSON.stringify(nuxtRoot));
+assert.equal(nuxtRoot.detected, 'start-script', JSON.stringify(nuxtRoot));
+const nuxtDev = decideType(['package.json', 'nuxt.config.ts'], { scripts: { build: 'nuxt build', start: 'nuxt dev' }, dependencies: { nuxt: '^3.0.0' } });
+assert.equal(nuxtDev.type, 'node', JSON.stringify(nuxtDev));
+assert.equal(nuxtDev.detected, 'nuxt', JSON.stringify(nuxtDev));
+// The generic rule: any unknown framework with a production start script is a
+// node server with no framework patch needed.
+const futureFw = decideType(['package.json'], { scripts: { build: 'zapp build', start: 'zapp-serve --port 3000' } });
+assert.equal(futureFw.type, 'node', JSON.stringify(futureFw));
+assert.equal(futureFw.detected, 'start-script', JSON.stringify(futureFw));
+// A declared production server wins even for SPA deps: trust the runtime.
+const spaServer = decideType(['package.json', 'vite.config.ts'], { scripts: { build: 'vite build', start: 'serve -s dist' }, dependencies: { react: '^19.0.0' } });
+assert.equal(spaServer.type, 'node', JSON.stringify(spaServer));
+
+// Next/Nuxt subdirs are not suggested as static frontends ...
+const ssrTree = ['web/package.json', 'web/next.config.js', 'web/src/app.tsx', 'shop/nuxt.config.ts', 'shop/package.json'];
+const ssrPkgs = {
+  web: { scripts: { build: 'next build', start: 'next dev' }, dependencies: { next: '^15.0.0', react: '^19.0.0' } },
+  shop: { scripts: { build: 'nuxt build', start: 'nuxt dev' }, dependencies: { nuxt: '^3.0.0' } }
+};
+const ssrFronts = findFrontends(ssrTree, ssrPkgs);
+assert(!ssrFronts.includes('web') && !ssrFronts.includes('shop'), 'next/nuxt dirs are not static frontends: ' + ssrFronts);
+// ... a Next dir with a production start script is a node backend, while a
+// dev-only start script stays unsuggested (dev servers are not backends).
+const prodNext = findBackends(['srv/package.json'], { srv: { scripts: { build: 'next build', start: 'next start' } } }, []);
+assert(prodNext.includes('srv'), 'production next start is a backend: ' + prodNext);
+const devNext = findBackends(['web/package.json'], ssrPkgs, []);
+assert(!devNext.includes('web'), 'dev-only next start is not a backend: ' + devNext);
+
 assert.deepEqual(prismaDatabaseHints(`
   generator client { provider = "prisma-client-js" }
   datasource db {

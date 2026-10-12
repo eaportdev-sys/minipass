@@ -32,9 +32,19 @@ function decideType(paths, pkg) {
   }
   if (pkgPath) {
     const scripts = (pkg && pkg.scripts) || {};
-    const reactish = deps.react || deps['react-dom'] || deps['react-scripts'] || deps.next ||
-      deps.gatsby || deps['@vitejs/plugin-react'] || deps['@vitejs/plugin-react-swc'] ||
-      any(/next\.config\.(js|mjs|ts)/);
+    // A declared production start script IS the runtime. This is the generic
+    // rule, so present and future server frameworks need no per-framework
+    // patch: dev-server commands (react-scripts start, vite, next dev, ...)
+    // are not production runtimes and fall through to the markers below.
+    if (scripts.start && !DEV_SERVER_START.some(re => re.test(String(scripts.start)))) {
+      return { type: 'node', detected: 'start-script', dbs, reason: `${pkgPath} runs "${scripts.start}"` };
+    }
+    // Next.js/Nuxt run as Node servers (build + start), never as nginx-static
+    // output. They must not fall into the React static template below.
+    if (deps.next || deps.nuxt || any(/next\.config\.(js|mjs|cjs|ts)$/) || any(/nuxt\.config\.(js|mjs|cjs|ts)$/)) {
+      return { type: 'node', detected: deps.next || any(/next\.config\.(js|mjs|cjs|ts)$/) ? 'next' : 'nuxt', dbs, reason: `${pkgPath} + Next/Nuxt markers - runs as a Node server (build + start)` };
+    }
+    const reactish = deps.react || deps['react-dom'] || deps['react-scripts'] || deps.gatsby || deps['@vitejs/plugin-react'] || deps['@vitejs/plugin-react-swc'];
     if (reactish) {
       if (!scripts.build) return { type: 'react', detected: 'react', dbs, reason: `${pkgPath} uses React but has no build script - react template needs "npm run build" -> dist/ or build/` };
       return { type: 'react', detected: 'react', dbs, reason: `${pkgPath} + React deps` };
@@ -115,20 +125,21 @@ function findBackends(tree, pkgs, skip = []) {
 }
 
 // Frontend sub-app folders, depth <= 2: framework config markers (vite,
-// Angular, Next, Nuxt, Vue), CRA layout (public/index.html + src entry), or a
-// package.json with UI deps + a build script and no server deps. pkgs is
-// optional - markers alone classify without any extra API reads.
+// Angular, Vue), CRA layout (public/index.html + src entry), or a
+// package.json with UI deps + a build script and no server deps. Next/Nuxt
+// are deliberately absent: they run as Node servers, not static output.
+// pkgs is optional - markers alone classify without any extra API reads.
 // Pure - unit-test with fixtures.
 const FRONTEND_CONFIG_MARKERS = [
   /^vite\.config\.(js|mjs|cjs|ts)$/,
   /^angular\.json$/,
-  /^next\.config\.(js|mjs|cjs|ts)$/,
-  /^nuxt\.config\.(js|mjs|cjs|ts)$/,
   /^vue\.config\.js$/,
   /^craco\.config\.js$/
 ];
-const FRONTEND_DEPS = ['react', 'react-dom', 'vue', 'nuxt', '@angular/core', 'next', 'gatsby',
+const FRONTEND_DEPS = ['react', 'react-dom', 'vue', '@angular/core', 'gatsby',
   'svelte', '@sveltejs/kit', 'solid-js', 'preact', '@solidjs/start'];
+const NEXT_NUXT_DEPS = ['next', 'nuxt'];
+const NEXT_NUXT_CONFIG = [/^next\.config\.(js|mjs|cjs|ts)$/, /^nuxt\.config\.(js|mjs|cjs|ts)$/];
 const SERVER_DEPS = ['express', 'fastify', 'koa', '@nestjs/core', 'hapi', '@hapi/hapi', 'restify'];
 const DEV_SERVER_START = [/^react-scripts start/, /^vite(\s|$)/, /^ng serve/, /^vue-cli-service serve/, /^nuxt dev/, /^next dev/];
 const CLIENT_ENTRIES = ['src/index.js', 'src/index.jsx', 'src/index.ts', 'src/index.tsx',
@@ -154,6 +165,9 @@ function findFrontends(tree, pkgs = {}) {
     if (pkg && typeof pkg === 'object') {
       const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
       const scripts = pkg.scripts || {};
+      // Next/Nuxt run as Node servers - never static frontends, even with
+      // React deps and a build script present.
+      if (NEXT_NUXT_DEPS.some(k => deps[k]) || roots.some(f => NEXT_NUXT_CONFIG.some(re => re.test(f)))) continue;
       if (scripts.build && FRONTEND_DEPS.some(k => deps[k]) && !SERVER_DEPS.some(k => deps[k])) { found.push(d); continue; }
     }
   }
