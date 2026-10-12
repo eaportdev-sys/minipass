@@ -172,6 +172,7 @@ function rememberSiteRoute(id, tab) {
 }
 function openSite(id, tab = 'overview', remember = true) {
   currentApp = id;
+  const openedId = id;
   remediateSeq++;
   remediateCache = [];
   document.getElementById('remediateCard').style.display = 'none';
@@ -200,7 +201,7 @@ function openSite(id, tab = 'overview', remember = true) {
   document.getElementById('migrateOut').textContent = '';
   serviceCheckSeq++;
   if (serviceCheckTimer) clearTimeout(serviceCheckTimer);
-  refresh().then(() => { showSiteTab(tab, false); loadDeployStatus(); loadEnv(); loadServices(); loadDatabases(); loadMigrateSuggest(); });
+  refresh().then(() => { if (currentApp !== openedId) return; showSiteTab(tab, false); loadDeployStatus(); loadEnv(); loadServices(); loadDatabases(); loadMigrateSuggest(); });
 }
 function appUrl(a) {
   if (!a.hostPort) return null;
@@ -353,9 +354,11 @@ function fillMigrateServiceOptions(services, saved) {
 }
 async function loadMigrateSuggest() {
   if (!currentApp) return;
+  const appId = currentApp;
   const box = document.getElementById('migrateSuggest');
   try {
-    const r = await (await fetch(`/api/apps/${currentApp}/migrate-suggest`)).json();
+    const r = await (await fetch(`/api/apps/${appId}/migrate-suggest`)).json();
+    if (currentApp !== appId) return;
     const list = r.suggestions || [];
     box.innerHTML = list.length ? `<div class="migrate-suggest-label">Detected migration runners</div><div class="migrate-suggest-list">${list.map(s => {
       const location = s.runnable
@@ -365,7 +368,7 @@ async function loadMigrateSuggest() {
       if (!s.runnable) return `<div class="migrate-detect unavailable"><div><b>${safeHtml(s.framework || 'Migration')}</b><span>${safeHtml(phase)}</span></div><small>${safeHtml(s.problem || s.why || 'Needs configuration')}</small><em>${safeHtml(location)}</em></div>`;
       return `<button class="migrate-detect${s.warning ? ' has-warning' : ''}" data-command="${safeHtml(s.command || s.cmd)}" data-dir="${safeHtml(s.dir || '')}" data-service="${safeHtml(s.service || s.svc || '')}" data-check="${safeHtml(s.check || '')}" data-phase="${safeHtml(s.phase || 'deploy')}" data-warning="${safeHtml(s.warning || '')}" onclick="useMigrateDetection(this)" title="${safeHtml(s.why || '')}"><div><b>${safeHtml(s.framework || 'Migration')}</b><span>${safeHtml(phase)}</span></div><code>${safeHtml(s.command || s.cmd)}</code>${s.warning ? `<small>${safeHtml(s.warning)}</small>` : ''}<em>${safeHtml(location)}</em></button>`;
     }).join('')}</div>` : '<div class="migrate-suggest-label">No migration runner detected — enter the service, folder, and project command manually.</div>';
-  } catch { box.innerHTML = ''; }
+  } catch { if (currentApp === appId) box.innerHTML = ''; }
 }
 function deploySourceName(source) {
   return ({ manual: 'Manual', local: 'Local files', webhook: 'GitHub webhook', poll: 'GitHub poll', 'local-push': 'Local push' })[source] || source || 'Unknown';
@@ -746,10 +749,12 @@ async function copyHook() {
 }
 async function loadEnv() {
   if (!currentApp) return;
+  const appId = currentApp;
   const box = document.getElementById('envList');
   box.innerHTML = '<div class="meta">loading…</div>';
   try {
-    const r = await (await fetch(`/api/apps/${currentApp}/env`)).json();
+    const r = await (await fetch(`/api/apps/${appId}/env`)).json();
+    if (currentApp !== appId) return;
     if (r.error) { box.innerHTML = '<div class="meta">' + safeHtml(r.error) + '</div>'; return; }
     box.innerHTML = (r.vars || []).map(v => {
       const key = safeHtml(v.key);
@@ -769,10 +774,9 @@ async function loadEnv() {
         `<input class="env-value" type="${isDomain ? 'text' : 'password'}" value="${value}" ${canEditValue ? '' : 'readonly'} ${isDomain ? 'placeholder="app.example.com"' : ''} aria-label="${key} value">` +
         `<div class="env-row-actions">${isDomain ? '<span class="meta">hostname</span>' : `<button onclick="toggleEnv(this)">show</button>${canEditValue ? `<button onclick="genEnvRow(this)">generate</button>` : ''}`}${v.managed ? '' : ` <button class="btn danger" onclick="envDel('${v.key}')">delete</button>`}</div></div>`;
     }).join('') || '<div class="meta">(empty env)</div>';
-  } catch { box.innerHTML = '<div class="meta">load failed</div>'; }
+  } catch { if (currentApp === appId) box.innerHTML = '<div class="meta">load failed</div>'; }
 }
-function toggleEnv(btn) {
-  const input = btn.closest('.env-row').querySelector('input.env-value');
+function toggleEnv(btn) {  const input = btn.closest('.env-row').querySelector('input.env-value');
   if (!input) return;
   const showing = btn.textContent === 'hide';
   input.type = showing ? 'password' : 'text';
@@ -915,11 +919,13 @@ function safeHtml(v) {
 }
 async function loadDatabases() {
   if (!currentApp) return;
+  const appId = currentApp;
   const box = document.getElementById('dbRuntimeList');
   if (!box) return;
   box.innerHTML = '<div class="meta">checking database services…</div>';
   try {
-    const r = await (await fetch(`/api/apps/${currentApp}/databases`)).json();
+    const r = await (await fetch(`/api/apps/${appId}/databases`)).json();
+    if (currentApp !== appId) return;
     if (r.error) { box.innerHTML = `<div class="meta">${safeHtml(r.error)}</div>`; return; }
     box.innerHTML = (r.databases || []).map(d => {
       const running = /^running/i.test(d.state || '');
@@ -938,7 +944,7 @@ async function loadDatabases() {
         `<div class="meta">${safeHtml(d.image || 'image unavailable')}</div><div class="meta"><b>${safeHtml(d.state)}</b>${d.status ? ` · ${safeHtml(d.status)}` : ''}</div>` +
         `<div class="db-tool-status">${toolStatus}</div><div class="db-runtime-actions">${action}${dumpBtn}</div></div>`;
     }).join('') || '<div class="meta">No managed databases are attached.</div>';
-  } catch (e) { box.innerHTML = '<div class="meta">database status unavailable</div>'; }
+  } catch (e) { if (currentApp === appId) box.innerHTML = '<div class="meta">database status unavailable</div>'; }
 }
 function dbPopupKey(appId, type) { return `${appId}:${type}`; }
 function watchDbPopup(appId, type, popup) {
@@ -2083,14 +2089,20 @@ async function destroyTrash(id) {
 }
 async function showLogs() {
   if (!currentApp) { logsEl.textContent = 'open a website first'; return; }
+  const appId = currentApp;
   const svc = document.getElementById('logSvc').value || 'app';
   logsEl.textContent = 'loading…';
-  logsEl.textContent = await (await fetch(`/api/apps/${currentApp}/logs?service=${encodeURIComponent(svc)}`)).text();
+  const text = await (await fetch(`/api/apps/${appId}/logs?service=${encodeURIComponent(svc)}`)).text();
+  if (currentApp !== appId) return;
+  logsEl.textContent = text;
 }
 async function showBuildLog(full) {
   if (!currentApp) { logsEl.textContent = 'open a website first'; return; }
+  const appId = currentApp;
   logsEl.textContent = 'loading…';
-  logsEl.textContent = await (await fetch(`/api/apps/${currentApp}/build-log${full ? '?tail=500' : ''}`)).text();
+  const text = await (await fetch(`/api/apps/${appId}/build-log${full ? '?tail=500' : ''}`)).text();
+  if (currentApp !== appId) return;
+  logsEl.textContent = text;
 }
 async function copyLogs() {
   const text = document.getElementById('logs').textContent;
@@ -2301,11 +2313,12 @@ async function openFile(p) {
   renderFileTree();
   try {
     const r = await (await fetch(`/api/apps/${id}/file?path=${encodeURIComponent(fp)}`)).json();
+    if (currentApp !== id) return;
     if (r.error) { document.getElementById('fileEdit').value = ''; document.getElementById('fileOut').textContent = r.error; return; }
     document.getElementById('fileEdit').value = r.content || '';
     document.getElementById('fileOut').textContent = `opened ${fp}`;
     lastOpen = { path: fp, ok: true };
-  } catch (e) { document.getElementById('fileEdit').value = 'open failed: ' + e.message; }
+  } catch (e) { if (currentApp === id) document.getElementById('fileEdit').value = 'open failed: ' + e.message; }
 }
 async function saveFile() {
   const id = currentApp;
@@ -2432,8 +2445,10 @@ function connectTerm(elId, appId, slotKey, svc) {
 }
 async function loadServices() {
   if (!currentApp) return;
+  const appId = currentApp;
   try {
-    const r = await (await fetch(`/api/apps/${currentApp}/services`)).json();
+    const r = await (await fetch(`/api/apps/${appId}/services`)).json();
+    if (currentApp !== appId) return;
     const list = r.services || [];
     const dirty = !!r.dirty;
     document.getElementById('svcList').innerHTML = list.map(s => {
@@ -2460,7 +2475,8 @@ async function loadServices() {
       if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
     }
     try {
-      const sug = await (await fetch(`/api/apps/${currentApp}/suggest`)).json();
+      const sug = await (await fetch(`/api/apps/${appId}/suggest`)).json();
+      if (currentApp !== appId) return;
       const candidate = (folder, type, role) => `<button class="service-suggestion" data-folder="${safeHtml(folder)}" data-type="${type}" onclick="fillService(this.dataset.folder, this.dataset.type)"><span><b>${safeHtml(folder)}</b><small>${role}</small></span><span class="badge">${type}</span></button>`;
       const fronts = (sug.suggestions || []).map(f => candidate(f, 'react', 'Web frontend')).join('');
       const backs = (sug.backends || []).map(b => candidate(b, 'node', 'API or worker')).join('');
