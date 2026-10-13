@@ -32,8 +32,9 @@ const context = vm.createContext({
   fetch: null
 });
 const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
-vm.runInContext('let createModalSession=1, createConnectRequest=0, createDetectRequest=0, createDetectRepo="", createDetectedManager="npm", modalLogin=null;\n' +
+vm.runInContext('let createModalSession=1, createConnectRequest=0, createDetectRequest=0, createDetectRepo="", createDetectedManager="npm", modalLogin=null, createBusyOps=0;\n' +
   section('function storageSize(', 'function storageMarkup(') +
+  section('function setBuildBusy(', 'async function modalListRepos(') +
   section('async function modalListRepos(', 'async function ghDisconnect(') +
   section('async function detectType(', 'function setSubdir('), context);
 const run = code => vm.runInContext(code, context);
@@ -58,10 +59,12 @@ async function main() {
   assert.equal(element('ghModalConnect').textContent, 'Loading…');
   assert.equal(element('ghModalToken').disabled, true, 'token waits while preview runs');
   assert.equal(element('ghrepo').disabled, true, 'repo picker waits while preview runs');
+  assert.equal(element('createBuildBtn').disabled, true, 'build waits while listing runs');
   assert(element('ghConnState').textContent.includes('GitHub'));
   assert(element('ghConnState').classList.has('inline-dots'), 'waiting dots show while preview runs');
   release(); await listing;
   assert.equal(element('ghModalConnect').disabled, false, 'controls restore after listing');
+  assert.equal(element('createBuildBtn').disabled, false, 'build restores after listing');
   assert.equal(element('ghModalToken').disabled, false);
   assert.equal(element('ghrepo').disabled, false);
   assert.equal(element('ghConnState').classList.has('inline-dots'), false);
@@ -95,10 +98,12 @@ async function main() {
   const detecting = run('detectType()');
   await tick();
   assert.equal(element('ghrepo').disabled, true, 'repo picker waits while detection runs');
+  assert.equal(element('createBuildBtn').disabled, true, 'build waits while detection runs');
   assert(element('createDetectState').textContent.includes('Detecting'));
   assert(element('createDetectState').classList.has('inline-dots'), 'waiting dots show while detection runs');
   release(); await detecting;
   assert.equal(element('ghrepo').disabled, false, 'picker restores after detection');
+  assert.equal(element('createBuildBtn').disabled, false, 'build restores after detection');
   assert.equal(element('createDetectState').classList.has('inline-dots'), false);
   assert(element('createDetectState').textContent.includes('Detected'));
 
@@ -111,6 +116,21 @@ async function main() {
   release(); await staleDetect;
   assert.equal(element('ghrepo').disabled, false, 'stale detection still restores the picker');
   assert(!element('createDetectState').textContent.includes('Detected PHP'), 'stale detection cannot overwrite a new form');
+  // overlapping runs: build stays down until the last one finishes
+  run('createModalSession=1');
+  element('ghModalToken').value = 'tok123';
+  let releaseList, releaseDetect;
+  context.fetch = url => url.includes('/preview')
+    ? new Promise(resolve => { releaseList = () => resolve({ json: async () => ({ login: 'someone', repos: [] }) }); })
+    : new Promise(resolve => { releaseDetect = () => resolve({ json: async () => ({ type: 'node', dbs: [] }) }); });
+  const opList = run('modalListRepos()');
+  const opDetect = run('detectType()');
+  await tick();
+  assert.equal(element('createBuildBtn').disabled, true, 'build waits while both run');
+  releaseList(); await opList;
+  assert.equal(element('createBuildBtn').disabled, true, 'build still waits while detection runs');
+  releaseDetect(); await opDetect;
+  assert.equal(element('createBuildBtn').disabled, false, 'build restores after the last run finishes');
   console.log('Create connect UI: token list and repo select wait with visible loading, stale-safe restore: OK');
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

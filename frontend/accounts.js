@@ -57,6 +57,14 @@ let createStandardDockerfile = false;
 let createStorageAvailable = null;
 let createCleanupPromise = Promise.resolve();
 let createPendingId = null;
+// Shared busy count for the create modal: token listing and repo detection
+// each hold it while running, and Build stays disabled until the last one
+// finishes - so a site can never be built from a half-loaded form.
+let createBusyOps = 0;
+function setBuildBusy(on) {
+  createBusyOps = Math.max(0, createBusyOps + (on ? 1 : -1));
+  try { document.getElementById('createBuildBtn').disabled = createBusyOps > 0; } catch {}
+}
 async function modalListRepos() {
   const session = createModalSession;
   const request = ++createConnectRequest;
@@ -68,12 +76,13 @@ async function modalListRepos() {
   const picker = document.getElementById('ghrepo');
   const conn = document.getElementById('ghConnState');
   // Listing hits the GitHub API: lock the row so a second click or an
-  // edited token cannot race the in-flight preview.
+  // edited token cannot race the in-flight preview. Build waits too.
   const busy = on => {
     button.disabled = on;
     tokenInput.disabled = on;
     picker.disabled = on;
     button.textContent = on ? 'Loading…' : 'List repos';
+    setBuildBusy(on);
   };
   busy(true);
   conn.textContent = 'Contacting GitHub — validating token and listing repos…';

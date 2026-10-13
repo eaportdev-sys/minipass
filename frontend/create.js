@@ -99,12 +99,14 @@ async function detectType() {
   const branch = branchInput.value.trim();
   state.textContent = 'Detecting runtime and databases…';
   // Detection reads the repo tree + package.json: lock the picker so a
-  // second selection cannot race the in-flight read.
+  // second selection cannot race the in-flight read. Build waits too.
   sel.disabled = true;
+  setBuildBusy(true);
   try { state.classList.add('inline-dots'); } catch {}
   try {
     const r = await (await fetch('/api/github/detect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo, branch, ...(token ? { token } : {}) }) })).json();
     sel.disabled = false;
+    setBuildBusy(false);
     try { state.classList.remove('inline-dots'); } catch {}
     if (session !== createModalSession || request !== createDetectRequest) return;
     if (branchInput.value.trim() !== branch) return;
@@ -148,6 +150,7 @@ async function detectType() {
     sel.disabled = false;
   } catch {
     sel.disabled = false;
+    setBuildBusy(false);
     try { state.classList.remove('inline-dots'); } catch {}
     if (session === createModalSession && request === createDetectRequest) state.textContent = 'Detection unavailable. Select the runtime manually.';
   }
