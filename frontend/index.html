@@ -447,6 +447,7 @@
       <div class="create-docker-copy"><b>Dockerfile required</b><span>Add the standard Dockerfile and retry. Existing Dockerfiles stay unchanged.</span></div>
       <button class="btn primary" onclick="useCreateStandardDockerfile()">Use standard Dockerfile</button>
     </div>
+    <div id="createWait" class="create-wait" style="display:none" role="status"><span class="create-wait-dots" aria-hidden="true"></span><span>Creating site — cloning and scaffolding. Large repos can take minutes; leave this open…</span></div>
     <pre id="out" class="compact-output"></pre>
   </div>
   <footer class="create-footer"><span class="meta">Manual redeploys anytime in Deploy.</span><div class="modalbtns"><button id="createCancelBtn" onclick="closeCreate()">Cancel</button><button id="createBuildBtn" class="btn primary" onclick="createApp()">Build website</button></div></footer>
