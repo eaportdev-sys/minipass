@@ -46,17 +46,9 @@ RUN if [ "$PACKAGE_MANAGER" = "pnpm" ]; then pnpm run build --if-present; \
 # A Next.js production server needs the build output. Fail here with the
 # reason instead of shipping an image that crash-loops on `next start`
 # (e.g. repos whose build script targets a worker bundle, never .next/).
-# A bare `.next/` directory is not proof: only BUILD_ID means `next build`
-# ran. Framework builds that emit a standalone server instead
-# (dist/standalone/server.js) are runnable output too - the container boots
-# that directly (see CMD below).
 RUN if node -e "const p=require('./package.json');const d={...(p.dependencies||{}),...(p.devDependencies||{})};process.exit(d.next?0:1)"; then \
-      if [ -f .next/BUILD_ID ]; then \
-        echo "Next.js production build present."; \
-      elif [ -f dist/standalone/server.js ]; then \
-        echo "No .next production build, but dist/standalone/server.js exists - the container will run the built standalone server."; \
-      else \
-        echo "BUILD PRODUCED NO .next/BUILD_ID and no dist/standalone/server.js BUT next IS A DEPENDENCY. The repo build did not run 'next build' (this repo may target a different runtime, e.g. a worker bundle). Add a repo Dockerfile that serves the real output, or a start:prod script for it - 'next start' can never work without a production build."; \
+      if [ ! -d .next ]; then \
+        echo "BUILD PRODUCED NO .next/ BUT next IS A DEPENDENCY. The repo build did not run 'next build' (this repo may target a different runtime, e.g. a worker bundle). Add a repo Dockerfile that serves the real output, or a start:prod script for it - 'next start' can never work without .next/."; \
         exit 1; \
       fi; \
     fi
@@ -82,8 +74,4 @@ EXPOSE 3000
 # only accepts loopback inside the container's own network namespace), so known
 # server bind flags are normalized to 0.0.0.0 - same class of environment
 # adaptation as PORT injection. Anything else runs untouched.
-# Framework builds that emit a standalone server (dist/standalone/server.js)
-# without a .next production build boot that directly: `next start` can never
-# work without .next/BUILD_ID, and the standalone server honors PORT while
-# HOSTNAME is pinned to 0.0.0.0 so the published port can reach it.
-CMD ["sh", "-c", "if [ ! -f .next/BUILD_ID ] && [ -f dist/standalone/server.js ]; then echo \"panel: no .next production build - running built standalone server dist/standalone/server.js\"; export HOSTNAME=0.0.0.0; exec node dist/standalone/server.js; fi; pm=npm; if [ \"$PACKAGE_MANAGER\" = \"pnpm\" ]; then corepack enable >/dev/null 2>&1; pm=pnpm; elif [ \"$PACKAGE_MANAGER\" = \"yarn\" ]; then corepack enable >/dev/null 2>&1; pm=yarn; fi; script=$(node -e \"const p=require('./package.json');const s=p.scripts||{};const dev=/^(next dev|nuxt dev|vite($| )|react-scripts start|ng serve|vue-cli-service serve)/;for (const k of ['start:prod','start:production','start:built','serve']) if(s[k]){console.log(k);process.exit(0)} if(s.start&&!dev.test(s.start)){console.log('start');process.exit(0)} process.exit(1)\" 2>/dev/null || true); if [ -n \"$script\" ]; then body=$(node -e \"console.log((require('./package.json').scripts||{})['$script']||'')\" 2>/dev/null || true); case \"$body\" in *-H\\ 127.0.0.1*|*-H127.0.0.1*|*--hostname*127.0.0.1*|*--host*127.0.0.1*) echo \"panel: start script binds 127.0.0.1, rebinding to 0.0.0.0 so the published port can reach it\"; body=$(printf '%s' \"$body\" | sed -e 's/-H  *127\\.0\\.0\\.1/-H 0.0.0.0/g' -e 's/-H127\\.0\\.0\\.1/-H0.0.0.0/g' -e 's/--hostname[= ]127\\.0\\.0\\.1/--hostname 0.0.0.0/g' -e 's/--host[= ]127\\.0\\.0\\.1/--host 0.0.0.0/g'); exec sh -c \"export PATH=\\\"$PWD/node_modules/.bin:$PATH\\\"; $body\";; *) exec $pm run $script;; esac; elif node -e \"const p=require('./package.json');process.exit((p.dependencies&&p.dependencies.next)||(p.devDependencies&&p.devDependencies.next)?0:1)\"; then exec $pm exec next start -H 0.0.0.0 -p ${PORT:-3000}; elif [ -f index.js ]; then exec node index.js; else echo 'No production start script found (start was a dev server). Add start:prod/start:built/serve or index.js.'; exit 1; fi"]
+CMD ["sh", "-c", "pm=npm; if [ \"$PACKAGE_MANAGER\" = \"pnpm\" ]; then corepack enable >/dev/null 2>&1; pm=pnpm; elif [ \"$PACKAGE_MANAGER\" = \"yarn\" ]; then corepack enable >/dev/null 2>&1; pm=yarn; fi; script=$(node -e \"const p=require('./package.json');const s=p.scripts||{};const dev=/^(next dev|nuxt dev|vite($| )|react-scripts start|ng serve|vue-cli-service serve)/;for (const k of ['start:prod','start:production','start:built','serve']) if(s[k]){console.log(k);process.exit(0)} if(s.start&&!dev.test(s.start)){console.log('start');process.exit(0)} process.exit(1)\" 2>/dev/null || true); if [ -n \"$script\" ]; then body=$(node -e \"console.log((require('./package.json').scripts||{})['$script']||'')\" 2>/dev/null || true); case \"$body\" in *-H\\ 127.0.0.1*|*-H127.0.0.1*|*--hostname*127.0.0.1*|*--host*127.0.0.1*) echo \"panel: start script binds 127.0.0.1, rebinding to 0.0.0.0 so the published port can reach it\"; body=$(printf '%s' \"$body\" | sed -e 's/-H  *127\\.0\\.0\\.1/-H 0.0.0.0/g' -e 's/-H127\\.0\\.0\\.1/-H0.0.0.0/g' -e 's/--hostname[= ]127\\.0\\.0\\.1/--hostname 0.0.0.0/g' -e 's/--host[= ]127\\.0\\.0\\.1/--host 0.0.0.0/g'); exec sh -c \"export PATH=\\\"$PWD/node_modules/.bin:$PATH\\\"; $body\";; *) exec $pm run $script;; esac; elif node -e \"const p=require('./package.json');process.exit((p.dependencies&&p.dependencies.next)||(p.devDependencies&&p.devDependencies.next)?0:1)\"; then exec $pm exec next start -H 0.0.0.0 -p ${PORT:-3000}; elif [ -f index.js ]; then exec node index.js; else echo 'No production start script found (start was a dev server). Add start:prod/start:built/serve or index.js.'; exit 1; fi"]
