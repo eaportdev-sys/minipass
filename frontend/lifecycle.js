@@ -199,7 +199,18 @@ function trashProgress(text) {
   trashOpActive = text || null;
   try {
     const prog = document.getElementById('trashProg');
-    if (prog) { prog.style.display = text ? 'block' : 'none'; if (text) prog.textContent = text; }
+    if (prog) {
+      prog.style.display = text ? 'block' : 'none';
+      if (text) {
+        const esc = (typeof safeHtml === 'function') ? safeHtml(text) : String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        prog.innerHTML = '<div class="trash-walk" role="status"><div class="trash-walk-track" aria-hidden="true">' +
+          '<span class="trash-walker">🚶</span><span class="trash-bag">📦</span><span class="trash-bin">🗑️</span></div>' +
+          '<span class="trash-walk-text">' + esc + '</span></div>';
+        // vm-test mock keeps innerHTML/textContent as separate fields (no
+        // querySelector); mirror the label so textContent assertions still hold.
+        try { if (typeof prog.querySelector !== 'function') prog.textContent = text; } catch {}
+      }
+    }
   } catch {}
   try {
     if (typeof document.querySelectorAll === 'function') {
@@ -220,7 +231,8 @@ async function emptyTrash() {
   trashProgress(`Destroying ${count} site${count === 1 ? '' : 's'}… this can take minutes, please wait.`);
   try {
     const r = await (await fetch('/api/trash', { method: 'DELETE' })).json();
-    toast(r.ok ? `trash emptied (${(r.destroyed || []).length} destroyed)` : `${(r.destroyed || []).length} destroyed; ${r.error || 'cleanup failed'}`, !!r.ok);
+    const base = r.ok ? `trash emptied (${(r.destroyed || []).length} destroyed)` : `${(r.destroyed || []).length} destroyed; ${r.error || 'cleanup failed'}`;
+    toast(r.cacheWarning ? `${base} (build-cache prune: ${r.cacheWarning})` : base, !!r.ok);
     loadTrash(); refresh();
   } catch (e) { toast('empty failed: ' + e.message, false); }
   finally { trashProgress(null); }

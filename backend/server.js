@@ -3547,20 +3547,28 @@ app.delete('/api/trash/:id', async (req, res) => {
 });
 app.delete('/api/trash', async (req, res) => {
   // empty trash: permanently destroy everything held, oldest first.
+  // The global build-cache prune runs once at the end (not per site):
+  // it is the slowest Docker step, so per-site pruning made bulk empty
+  // take N times longer than a single destroy.
   try {
     await trashOperation(async () => {
       const records = load().trash || [];
       const selected = new Set(records.map(trashKey));
       const destroyed = [], failed = [];
       for (const record of records) {
-        try { await destroyTrashRecord(record, selected); destroyed.push(record.id); }
+        try { await destroyTrashRecord(record, selected, { skipPrune: true }); destroyed.push(record.id); }
         catch (e) { failed.push({ id: record.id, error: e.message }); }
       }
-      res.json({ ok: !failed.length, destroyed, failed, ...(failed.length ? { error: `${failed.length} site(s) could not be fully cleaned; kept in Trash. Open Trash for the error and retry.` } : {}) });
+      let cacheWarning = null;
+      if (destroyed.length) {
+        try { await trashLib.pruneBuildCache(trashOptions()); }
+        catch (e) { cacheWarning = String(e.message || e).slice(0, 300); }
+      }
+      res.json({ ok: !failed.length, destroyed, failed, ...(cacheWarning ? { cacheWarning } : {}), ...(failed.length ? { error: `${failed.length} site(s) could not be fully cleaned; kept in Trash. Open Trash for the error and retry.` } : {}) });
     });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
-async function destroyTrashRecord(record, selected) {
+async function destroyTrashRecord(record, selected, opts = {}) {
   return siteLifecycle(record.id, async () => {
     try {
       const db_ = load();
@@ -3575,7 +3583,7 @@ async function destroyTrashRecord(record, selected) {
         if (trashKey(item) === trashKey(record)) { item.trashImages = images; item.cleanupAttemptAt = Date.now(); delete item.cleanupError; }
       }
       save(before);
-      const cleanup = await trashLib.destroySite({ record, trashRoot: TRASH_DIR, images,
+      const cleanup = await trashLib.destroySite({ record, trashRoot: TRASH_DIR, images, skipPrune: !!opts.skipPrune,
         protectedImages: [...Object.values(require('./lib/generator').DB_IMAGES), ...dbTools.IMAGES, 'minipass-panel:latest'], ...trashOptions() });
       if (record.storageQuota && record.storageQuota.projectId) await quotas.release(record.id);
       const fresh = load();

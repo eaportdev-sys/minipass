@@ -109,7 +109,7 @@ async function stopSiteTools({ id, ...options }) {
   if (ids.length) await cli.docker(['container', 'rm', '--force', ...ids]);
 }
 
-async function destroySite({ record, trashRoot, images, protectedImages = [], ...options }) {
+async function destroySite({ record, trashRoot, images, protectedImages = [], skipPrune = false, ...options }) {
   const dir = trashPath(trashRoot, record);
   const cli = runners(options);
   const protect = new Set(protectedImages);
@@ -179,12 +179,21 @@ async function destroySite({ record, trashRoot, images, protectedImages = [], ..
   // Best-effort global UNUSED cache cleanup: no image/volume/system prune.
   // A prune failure (e.g. missing buildx component) must never abort the
   // site's own destruction - the files and record are still removed.
-  let buildCachePruned = true, buildCacheWarning = null;
-  try {
-    await step('Unused build cache cleanup', () => cli.docker(['builder', 'prune', '--all', '--force']));
-  } catch (e) { buildCachePruned = false; buildCacheWarning = e.message; }
+  // Bulk empty-trash passes skipPrune so N sites share one prune at the end
+  // instead of paying this slowest step N times.
+  let buildCachePruned = true, buildCacheWarning = null, buildCacheSkipped = !!skipPrune;
+  if (!skipPrune) {
+    try {
+      await step('Unused build cache cleanup', () => cli.docker(['builder', 'prune', '--all', '--force']));
+    } catch (e) { buildCachePruned = false; buildCacheWarning = e.message; }
+  }
   await step('Site files removal', async () => fs.rmSync(dir, { recursive: true, force: true }));
-  return { removedImages, sharedImages, buildCachePruned, ...(buildCacheWarning ? { buildCacheWarning } : {}) };
+  return { removedImages, sharedImages, buildCachePruned, ...(buildCacheSkipped ? { buildCacheSkipped: true } : {}), ...(buildCacheWarning ? { buildCacheWarning } : {}) };
 }
 
-module.exports = { validId, trashPath, builtServices, ownedTags, collectImages, rememberImages, stopSiteTools, destroySite };
+async function pruneBuildCache(options = {}) {
+  const cli = runners(options);
+  await cli.docker(['builder', 'prune', '--all', '--force']);
+}
+
+module.exports = { validId, trashPath, builtServices, ownedTags, collectImages, rememberImages, stopSiteTools, destroySite, pruneBuildCache };

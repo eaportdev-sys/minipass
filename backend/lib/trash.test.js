@@ -114,6 +114,14 @@ async function main() {
     assert.equal(cacheResult.buildCachePruned, false);
     assert.match(cacheResult.buildCacheWarning || '', /prune failed/);
     assert(!fs.existsSync(dir), 'prune failure still removes site files');
+    // Bulk empty-trash skips the per-site prune so N sites share one prune.
+    dir = setup(); fake = fakeDocker();
+    const skipped = await trash.destroySite({ record, trashRoot: root, run: fake.run, skipPrune: true });
+    assert(!fs.existsSync(dir), 'skipped prune still removes site files');
+    assert(skipped.buildCacheSkipped === true);
+    assert(!fake.calls.some(c => c.args[0] === 'builder'), 'skipped prune runs no builder prune');
+    await trash.pruneBuildCache({ run: fake.run });
+    assert.equal(fake.calls.filter(c => c.args[0] === 'builder').length, 1, 'bulk path prunes once at the end');
     assert.throws(() => trash.trashPath(root, { id: 'demo', trashDir: '../other' }), /invalid trash directory/);
     assert.throws(() => trash.trashPath(root, { id: 'demo', trashDir: 'other-site' }), /does not match/);
     assert.throws(() => trash.trashPath(root, { id: 'minipass' }), /invalid trash site/);
