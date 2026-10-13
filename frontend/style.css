@@ -558,6 +558,15 @@ a { color: var(--accent); }
 .create-token-row button { white-space: nowrap; }
 .create-source-options { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin-top: 14px; }
 #createDetectState { margin: 0 0 10px; overflow-wrap: anywhere; }
+.inline-dots::after { content: '●○○'; color: var(--accent); font-weight: 800; animation: inline-dots 1.2s linear infinite; }
+@keyframes inline-dots {
+  0% { content: '●○○'; }
+  33% { content: '●●○'; }
+  66% { content: '●●●'; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .inline-dots::after { content: '…'; animation: none; }
+}
 .create-dialog .typerow { grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 16px; gap: 6px; }
 .create-dialog .typepill { position: relative; padding: 10px 22px 10px 8px; text-align: left; font-size: 12px; }
 .create-dialog .typepill:has(input:checked)::after { content: '✓'; position: absolute; right: 8px; top: 10px; color: var(--accent); }

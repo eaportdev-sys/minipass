@@ -61,19 +61,31 @@ async function modalListRepos() {
   const session = createModalSession;
   const request = ++createConnectRequest;
   // fresh token every build - preview WITHOUT saving to the shared pool
-  const token = document.getElementById('ghModalToken').value.trim();
+  const tokenInput = document.getElementById('ghModalToken');
+  const token = tokenInput.value.trim();
   if (!token) { toast('paste a token first', false); return; }
   const button = document.getElementById('ghModalConnect');
-  button.disabled = true;
-  button.textContent = 'Loading…';
+  const picker = document.getElementById('ghrepo');
+  const conn = document.getElementById('ghConnState');
+  // Listing hits the GitHub API: lock the row so a second click or an
+  // edited token cannot race the in-flight preview.
+  const busy = on => {
+    button.disabled = on;
+    tokenInput.disabled = on;
+    picker.disabled = on;
+    button.textContent = on ? 'Loading…' : 'List repos';
+  };
+  busy(true);
+  conn.textContent = 'Contacting GitHub — validating token and listing repos…';
+  try { conn.classList.add('inline-dots'); } catch {}
   let r;
   try {
     r = await (await fetch('/api/github/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })).json();
   } catch (e) { r = { error: e.message }; }
+  busy(false);
+  try { conn.classList.remove('inline-dots'); } catch {}
   if (session !== createModalSession || request !== createConnectRequest) return;
-  button.disabled = false;
-  button.textContent = 'List repos';
-  if (r.error) { toast(r.error, false); return; }
+  if (r.error) { conn.textContent = 'Token check failed — paste a fresh token and retry.'; toast(r.error, false); return; }
   modalLogin = r.login;
   const sel = document.getElementById('ghrepo');
   sel.innerHTML = '<option value="">GitHub repo…</option>' + (r.repos || []).map(x =>

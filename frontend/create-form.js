@@ -83,6 +83,8 @@ function resetCreateForm() {
   document.getElementById('ghStoreNote').textContent = 'Saved to this site only.';
   document.getElementById('ghModalConnect').disabled = false;
   document.getElementById('ghModalConnect').textContent = 'List repos';
+  document.getElementById('ghModalToken').disabled = false;
+  document.getElementById('ghrepo').disabled = false;
   document.getElementById('createBuildBtn').disabled = false;
   document.getElementById('createCancelBtn').disabled = false;
   document.getElementById('createDockerAction').style.display = 'none';
