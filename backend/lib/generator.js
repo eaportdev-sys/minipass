@@ -24,6 +24,20 @@ function normDbs(db) {
 
 // Seed a Dockerfile only when the repo shape makes the choice unambiguous.
 // Anything else fails loud with exactly what's missing - never a bare build error.
+function repoDockerfileAlt(ctxDir) {
+  // Repos authored for container hosts (Coolify/Dokploy convention) often ship
+  // their blessed recipe as Dockerfile.web instead of Dockerfile. When there is
+  // no exact Dockerfile, that file IS the author's container recipe and wins
+  // over the panel's generic template - same standing as a repo-owned Dockerfile.
+  // Only this exact name is adopted: Dockerfile.dev/local/api siblings belong
+  // to other environments or services and must never be grabbed as the app's.
+  try {
+    const files = fs.readdirSync(ctxDir);
+    if (files.some(f => /^dockerfile$/i.test(f))) return null;
+    const hit = files.find(f => /^dockerfile\.web$/i.test(f));
+    return hit ? path.join(ctxDir, hit) : null;
+  } catch { return null; }
+}
 function ensureDockerfile(ctxDir, type, templatesDir, options = {}) {
   if (type === 'static' && readBuildProfile(ctxDir).kind === 'jekyll') {
     const result = prepareStaticBuild(ctxDir, templatesDir, options);
@@ -37,6 +51,11 @@ function ensureDockerfile(ctxDir, type, templatesDir, options = {}) {
     const files = fs.readdirSync(ctxDir);
     if (files.some(f => /^dockerfile$/i.test(f))) return 'present';
   } catch { return 'no-context'; }
+  const alt = repoDockerfileAlt(ctxDir);
+  if (alt) {
+    fs.copyFileSync(alt, path.join(ctxDir, 'Dockerfile'));
+    return 'adopted-repo-dockerfile';
+  }
   const has = (...names) => names.some(n => {
     try { return fs.existsSync(path.join(ctxDir, n)); } catch { return false; }
   });
@@ -72,6 +91,7 @@ function needsDockerfileOptIn(ctxDir, type) {
   let files = [];
   try { files = fs.readdirSync(ctxDir); } catch { return false; }
   if (files.some(f => /^dockerfile$/i.test(f))) return false;
+  if (files.some(f => /^dockerfile\.web$/i.test(f))) return false;
   if (type === 'static' && readBuildProfile(ctxDir).kind === 'jekyll') return false;
   const has = (...names) => names.some(n => {
     try { return fs.existsSync(path.join(ctxDir, n)); } catch { return false; }
@@ -372,4 +392,4 @@ function nginxConf(proxy) {
   return `# minipass-managed (rewritten on link/unlink/redeploy - keep custom confs unmarked)\nserver {\n  listen 80;\n  root /usr/share/nginx/html;\n  index index.html;\n${api}  location / {\n    try_files $uri $uri/ /index.html;\n  }\n}\n`;
 }
 
-module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbEnv, dbService, DB_IMAGES, inferPort, nginxConf, ensureDockerfile, needsDockerfileOptIn, serviceBlock };
+module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbEnv, dbService, DB_IMAGES, inferPort, nginxConf, ensureDockerfile, needsDockerfileOptIn, repoDockerfileAlt, serviceBlock };

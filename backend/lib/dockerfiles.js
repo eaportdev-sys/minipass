@@ -207,7 +207,24 @@ function refreshStandardDockerfile(ctxDir, type, templatesDir) {
   catch (e) { if (e.code === 'ENOENT') return 'missing'; throw e; }
   const template = fs.readFileSync(path.join(templatesDir, type, 'Dockerfile'), 'utf8');
   if (normalized(current) === normalized(template)) return 'current';
+  // Adopted copy still in sync with the repo file: nothing to do.
+  try {
+    const adopted = fs.readdirSync(ctxDir).find(f => /^dockerfile\.web$/i.test(f));
+    if (adopted && normalized(fs.readFileSync(path.join(ctxDir, adopted), 'utf8')) === normalized(current)) return 'current';
+  } catch {}
   if (!legacyMatch(type, current)) return 'custom';
+  // A legacy panel seed loses to a repo-shipped Dockerfile.web: adopt the
+  // author's recipe verbatim instead of re-seeding the generic template.
+  // Later repo edits to Dockerfile.web do not re-propagate once adopted -
+  // delete the box Dockerfile and redeploy to re-adopt.
+  try {
+    const alt = fs.readdirSync(ctxDir).find(f => /^dockerfile\.web$/i.test(f));
+    if (alt) {
+      const repo = fs.readFileSync(path.join(ctxDir, alt), 'utf8');
+      if (normalized(repo) !== normalized(current)) fs.writeFileSync(file, repo);
+      return 'updated';
+    }
+  } catch {}
   fs.writeFileSync(file, template);
   return 'updated';
 }

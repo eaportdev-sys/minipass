@@ -346,6 +346,39 @@ try {
   fs.writeFileSync(path.join(folder, 'Dockerfile'), previousNativeNode);
   assert.equal(standardDockerfileType(folder, templates), 'node', 'legacy Node detected');
 
+  // Test 8: repo-shipped Dockerfile.web beats the generic template
+  const { ensureDockerfile, needsDockerfileOptIn, repoDockerfileAlt } = require('./generator');
+  const webRecipe = 'FROM node:24-alpine\nWORKDIR /app\nCOPY . .\nRUN ./node_modules/.bin/next build\nEXPOSE 3000\nCMD ["node", "server.js"]\n';
+  // ensure adopts instead of seeding the template
+  const adoptDir = path.join(tmp, 'node', 'adopt');
+  fs.mkdirSync(adoptDir, { recursive: true });
+  fs.writeFileSync(path.join(adoptDir, 'package.json'), JSON.stringify({ scripts: { start: 'next start' } }));
+  fs.writeFileSync(path.join(adoptDir, 'Dockerfile.web'), webRecipe);
+  assert.equal(needsDockerfileOptIn(adoptDir, 'node'), false, 'Dockerfile.web needs no standard-template opt-in');
+  assert.equal(repoDockerfileAlt(adoptDir), path.join(adoptDir, 'Dockerfile.web'));
+  assert.equal(ensureDockerfile(adoptDir, 'node', templates), 'adopted-repo-dockerfile');
+  assert.equal(fs.readFileSync(path.join(adoptDir, 'Dockerfile'), 'utf8'), webRecipe, 'adopted verbatim, template untouched');
+  // exact Dockerfile still wins over the variant
+  fs.writeFileSync(path.join(adoptDir, 'Dockerfile'), 'FROM node:22\n');
+  assert.equal(repoDockerfileAlt(adoptDir), null);
+  assert.equal(ensureDockerfile(adoptDir, 'node', templates), 'present');
+  // dev-only siblings are never grabbed as the app recipe
+  const devDir = path.join(tmp, 'node', 'devonly');
+  fs.mkdirSync(devDir, { recursive: true });
+  fs.writeFileSync(path.join(devDir, 'Dockerfile.dev'), webRecipe);
+  assert.equal(repoDockerfileAlt(devDir), null);
+  // refresh heals a legacy panel seed to the repo recipe on redeploy
+  const healDir = path.join(tmp, 'node', 'heal');
+  fs.mkdirSync(healDir, { recursive: true });
+  fs.writeFileSync(path.join(healDir, 'Dockerfile'), previousNativeNode);
+  fs.writeFileSync(path.join(healDir, 'Dockerfile.web'), webRecipe);
+  assert.equal(refreshStandardDockerfile(healDir, 'node', templates), 'updated', 'legacy seed heals to repo recipe');
+  assert.equal(fs.readFileSync(path.join(healDir, 'Dockerfile'), 'utf8'), webRecipe);
+  assert.equal(refreshStandardDockerfile(healDir, 'node', templates), 'current', 'adopted copy steady');
+  // genuinely custom files stay sacred even beside a variant
+  fs.writeFileSync(path.join(healDir, 'Dockerfile'), webRecipe + 'RUN echo owner-edit\n');
+  assert.equal(refreshStandardDockerfile(healDir, 'node', templates), 'custom', 'owner edits after adoption are preserved');
+
   console.log('native npm toolchain and exact-match standard Dockerfile upgrades: OK');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
