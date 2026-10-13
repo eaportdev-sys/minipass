@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { readComposeTopo } = require('./compose-read');
 
 const ENV_SCAN_SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'vendor', '__pycache__', '.venv', 'venv']);
 const ENV_SCAN_NOISE = new Set(['PATH', 'HOME', 'USER', 'SHELL', 'PWD', 'OLDPWD', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP', 'TMP', 'NODE_PATH']);
@@ -64,13 +65,37 @@ function readEnvVars(envPath) {
 }
 
 // Code-referenced vars missing (or empty) in the site .env. Empty counts as
-// unset: a referenced key with no value can't function.
+// unset: a referenced key with no value can't function. Compose-required vars
+// (${VAR:?}) join the unset list with their messages - the repo authors marked
+// them non-optional, so silence would just defer the crash.
 function missingEnvVars(dir) {
   const need = scanEnvNeeds(dir);
   const valOf = new Map(readEnvVars(path.join(dir, '.env')).map(v => [v.key, v.value]));
   const missing = need.filter(k => !valOf.has(k));
   const empty = need.filter(k => valOf.has(k) && !String(valOf.get(k)).trim());
-  return { need, missing, empty, unset: [...missing, ...empty] };
+  const unset = [...missing, ...empty];
+  let compose = [];
+  try {
+    compose = composeEnvNeeds(path.join(dir, 'code'));
+  } catch { compose = []; }
+  const composeRequired = [];
+  for (const e of compose) {
+    if (!e.required) continue;
+    if (valOf.has(e.key) && String(valOf.get(e.key)).trim()) continue;
+    if (!unset.includes(e.key)) unset.push(e.key);
+    composeRequired.push(e);
+  }
+  return { need, missing, empty, unset, compose: composeRequired };
 }
 
-module.exports = { ENV_SCAN_SKIP_DIRS, ENV_SCAN_NOISE, scanEnvNeeds, readEnvVars, missingEnvVars };
+// Env needs declared by the repo compose file(s). Only :?-required keys join
+// the unset list (:- defaults work without the operator); messages ride along
+// so surfaces can quote the repo's own words instead of guessing.
+function composeEnvNeeds(codeDir) {
+  let topo = null;
+  try { topo = readComposeTopo(codeDir); } catch { return []; }
+  if (!topo) return [];
+  return (topo.envNeeds || []).map(e => ({ ...e, file: topo.file }));
+}
+
+module.exports = { ENV_SCAN_SKIP_DIRS, ENV_SCAN_NOISE, scanEnvNeeds, readEnvVars, missingEnvVars, composeEnvNeeds };

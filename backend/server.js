@@ -1847,12 +1847,30 @@ app.get('/api/apps/:id/doctor', async (req, res) => {
   } catch (e) { checks.push({ name: 'logs', status: 'warn', detail: 'could not read logs' }); }
   // env-needs: vars the repo code reads but .env doesn't set (read-only scan).
   // Empty counts as unset: a referenced key with no value can't function.
+  // Compose-required vars (${VAR:?}) join with the repo's own message.
   try {
-    const { need, missing, empty, unset } = missingEnvVars(dir);
-    if (!need.length) checks.push({ name: 'env-needs', status: 'ok', detail: 'no env references found in code' });
+    const { need, missing, empty, unset, compose } = missingEnvVars(dir);
+    const composeMsg = (compose || []).filter(e => unset.includes(e.key))
+      .map(e => `${e.key}${e.message ? ` (${e.message})` : ''}`).join(', ');
+    if (!need.length && !compose.length) checks.push({ name: 'env-needs', status: 'ok', detail: 'no env references found in code or compose' });
     else if (!unset.length) checks.push({ name: 'env-needs', status: 'ok', detail: `all ${need.length} code-referenced var${need.length === 1 ? '' : 's'} set` });
-    else checks.push({ name: 'env-needs', status: 'fail', detail: `code reads ${unset.length} unset var${unset.length === 1 ? '' : 's'}: ${unset.slice(0, 12).join(', ')}${unset.length > 12 ? '…' : ''}${empty.length ? ` (${empty.length} present but empty)` : ''} — add via environment card` });
+    else checks.push({ name: 'env-needs', status: 'fail', detail: `code reads ${unset.length} unset var${unset.length === 1 ? '' : 's'}: ${unset.slice(0, 12).join(', ')}${unset.length > 12 ? '…' : ''}${empty.length ? ` (${empty.length} present but empty)` : ''}${composeMsg ? ` — compose requires: ${composeMsg}` : ''} — add via environment card` });
   } catch (e) { checks.push({ name: 'env-needs', status: 'warn', detail: 'scan failed' }); }
+  // topology: repo-shipped compose file the panel does not apply itself.
+  // Read-only: names the services, one-shot tasks and required env so the
+  // operator can mirror what matters (services, migrations) by hand.
+  try {
+    const topo = readComposeTopo(path.join(dir, 'code'));
+    if (!topo) checks.push({ name: 'topology', status: 'ok', detail: 'no repo compose file - panel manages services' });
+    else {
+      const names = topo.services.map(s => s.name).join(', ') || 'no services parsed';
+      const shots = topo.services.filter(s => s.oneShot).map(s => s.name);
+      const reqEnv = (topo.envNeeds || []).filter(e => e.required).map(e => e.key);
+      const actions = [...(shots.length ? [`one-shot: ${shots.join(', ')} (run via Migrations)`] : []),
+        ...(reqEnv.length ? [`compose requires env: ${reqEnv.join(', ')}`] : [])];
+      checks.push({ name: 'topology', status: actions.length ? 'warn' : 'ok', detail: `repo ${topo.file} defines: ${names}${actions.length ? ' — ' + actions.join('; ') : ''}` });
+    }
+  } catch (e) { checks.push({ name: 'topology', status: 'warn', detail: 'topology scan failed' }); }
   const fails = checks.filter(c => c.status === 'fail').length;
   const warns = checks.filter(c => c.status === 'warn').length;
   res.json({ app: meta.id, checks, summary: fails ? `${fails} fail${warns ? `, ${warns} warn` : ''}` : (warns ? `${warns} warn` : 'all clear') });
@@ -3222,6 +3240,7 @@ app.post('/api/apps/:id/start', async (req, res) => {
 // Static env-need scan lives in lib/env-needs.js (shared by doctor,
 // create-time reporting and deploy warnings). Read-only, key names only.
 const { scanEnvNeeds, readEnvVars, missingEnvVars } = require('./lib/env-needs');
+const { readComposeTopo } = require('./lib/compose-read');
 // Sensible self-generated defaults: values the panel can compute without asking.
 function suggestedDefaults(meta) {
   return { ...envDefaults.BUILT_INS };

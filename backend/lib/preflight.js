@@ -7,6 +7,7 @@ const { detectMigrations } = require('./migrations');
 const { parseExample, exampleFiles, exampleDefaults } = require('./env-defaults');
 const { readBuildProfile, localBuildProfile } = require('./build-profile');
 const { refreshStandardDockerfile, standardDockerfileType, findDockerfiles } = require('./dockerfiles');
+const { readComposeTopo } = require('./compose-read');
 const { routes: routeLib } = require('./routes');
 const { inferPort } = require('./generator');
 
@@ -220,12 +221,15 @@ function analyzeRepository(codeDir, explicitType, explicitSubdir) {
   for (const b of backends) services.push(analyzeService(path.join(codeDir, b), 'node', b));
   if (!services.length && typeResult.type) services.push(analyzeService(codeDir, typeResult.type, ''));
 
+  let topology = null;
+  try { topology = readComposeTopo(codeDir); } catch { topology = null; }
   return {
     services,
     monorepo: services.length > 1,
     detectedType: typeResult.type,
     detectedReason: typeResult.reason,
-    rootDbs: typeResult.dbs
+    rootDbs: typeResult.dbs,
+    topology
   };
 }
 
@@ -235,6 +239,21 @@ function readinessReport(analysis) {
   const recommendations = [];
   const blockers = [];
   const warnings = [];
+
+  // Repo-shipped topology the panel manages itself: surface what it declares
+  // (services, one-shot tasks, required env) so nothing is discovered via a
+  // failed build. Advisory only - the panel does not apply repo compose.
+  const topo = analysis.topology;
+  if (topo && Array.isArray(topo.services)) {
+    const shots = topo.services.filter(s => s.oneShot).map(s => s.name);
+    for (const name of shots) {
+      recommendations.push({ code: 'TOPOLOGY_ONESHOT', service: '', message: `Repo ${topo.file} runs '${name}' as a one-shot task - run it via Migrations, not as a service.`, fixable: false });
+    }
+    const reqEnv = (topo.envNeeds || []).filter(e => e.required);
+    for (const e of reqEnv) {
+      recommendations.push({ code: 'TOPOLOGY_ENV', service: (e.services || []).join(', ') || '', message: `Repo ${topo.file} requires env ${e.key}${e.message ? ` (${e.message})` : ''} - provide it in Environment.`, fixable: false });
+    }
+  }
 
   for (const s of analysis.services) {
     // Dockerfile

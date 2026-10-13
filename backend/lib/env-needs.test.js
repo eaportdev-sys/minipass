@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { scanEnvNeeds, readEnvVars, missingEnvVars } = require('./env-needs');
+const { scanEnvNeeds, readEnvVars, missingEnvVars, composeEnvNeeds } = require('./env-needs');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-env-needs-'));
 try {
@@ -40,5 +40,16 @@ try {
     { key: 'DATABASE_URL', value: 'postgres://x' }
   ]);
   assert.deepEqual(readEnvVars(path.join(tmp, 'no-such-file')), []);
+  // compose-declared needs: required joins, optional stays out, satisfied filtered
+  fs.writeFileSync(path.join(code, 'compose.yaml'),
+    'services:\n  api:\n    environment:\n      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}\n      APP_ORIGIN: https://${CLINIC_DOMAIN:?Set CLINIC_DOMAIN}\n      OPT: ${OPT:-plain}\n');
+  const cneeds = composeEnvNeeds(code);
+  assert(cneeds.some(e => e.key === 'DATABASE_URL' && e.required && e.message === 'Set DATABASE_URL'));
+  assert(cneeds.some(e => e.key === 'CLINIC_DOMAIN' && e.required));
+  assert(cneeds.some(e => e.key === 'OPT' && !e.required));
+  const rep2 = missingEnvVars(tmp);
+  assert(rep2.unset.includes('APP_ORIGIN'), 'code-referenced unset key stays reported');
+  assert(!rep2.unset.includes('OPT'), 'optional compose defaults never join');
+  assert(rep2.compose.some(e => e.key === 'CLINIC_DOMAIN' && e.message === 'Set CLINIC_DOMAIN'), 'messages ride along');
   console.log('Env needs: nested scan, skips, noise, missing/empty split: OK');
 } finally { fs.rmSync(tmp, { recursive: true, force: true }); }

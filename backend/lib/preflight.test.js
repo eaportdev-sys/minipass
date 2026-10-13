@@ -122,6 +122,21 @@ try {
     assert(ambReport.blockers.some(b => b.code === 'AMBIGUOUS_DOCKERFILE' && b.message.includes('Dockerfile.api') && b.message.includes('Dockerfile.web')), 'ambiguous names every candidate');
   } finally { fs.rmSync(varDir, { recursive: true, force: true }); }
 
+  // Test 9: repo compose topology rides the analysis with one-shots + env needs
+  const topoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-preflight-topo-'));
+  try {
+    fs.writeFileSync(path.join(topoDir, 'package.json'), '{"scripts":{"start":"node index.js"}}');
+    fs.writeFileSync(path.join(topoDir, 'compose.yaml'),
+      'services:\n  web:\n    build: .\n    ports: ["8000:3000"]\n  migrate:\n    build: ./api\n    command: ["node", "migrate.mjs"]\n    restart: "no"\n    environment:\n      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}\n');
+    const analysis = preflight.analyzeRepository(topoDir, null, null);
+    assert(analysis.topology && analysis.topology.file === 'compose.yaml', 'topology attached');
+    assert.deepEqual(analysis.topology.services.map(s => s.name), ['web', 'migrate']);
+    const report = preflight.readinessReport(analysis);
+    assert(report.recommendations.some(r => r.code === 'TOPOLOGY_ONESHOT' && r.message.includes('migrate')), 'one-shot routed to Migrations');
+    assert(report.recommendations.some(r => r.code === 'TOPOLOGY_ENV' && r.message.includes('DATABASE_URL') && r.message.includes('Set DATABASE_URL')), 'required env quoted with repo words');
+    assert(!report.blockers.some(b => b.code === 'AMBIGUOUS_DOCKERFILE'), 'no false ambiguity');
+  } finally { fs.rmSync(topoDir, { recursive: true, force: true }); }
+
   console.log('Preflight analysis and readiness report: OK');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
