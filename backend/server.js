@@ -28,7 +28,7 @@ const remediate = require('./lib/remediate');
 const importProtection = require('./lib/import-protection');
 const dockerfileProtection = require('./lib/dockerfile-protection');
 const siteIdentity = require('./lib/site-identity');
-const { refreshStandardDockerfile, standardDockerfileType } = require('./lib/dockerfiles');
+const { refreshStandardDockerfile, standardDockerfileType, findDockerfiles, validDockerfileName, resolveServiceDockerfile } = require('./lib/dockerfiles');
 const { buildProfile, readBuildProfile, localBuildProfile, isJekyll } = require('./lib/build-profile');
 const preflight = require('./lib/preflight');
 
@@ -324,7 +324,21 @@ function publicServices(meta, dir) {
     const homePath = s.name === 'app'
       ? (frontendRoot ? '' : (meta.homePath || ''))
       : (frontendRoot ? '' : (s.homePath || ''));
-    return { ...s, homePath };
+    // Build file candidates for this service folder + the effective file.
+    // Lenient here: ambiguous or stale selections fall back to the default
+    // and fail loud with names at deploy/add time.
+    const ctxDir = path.join(dir, 'code', s.subdir || '');
+    let dockerfiles = [];
+    let dockerfile = 'Dockerfile';
+    try { dockerfiles = findDockerfiles(ctxDir); } catch {}
+    if (s.dockerfile && validDockerfileName(s.dockerfile) && dockerfiles.includes(s.dockerfile)) dockerfile = s.dockerfile;
+    else {
+      try {
+        const r = resolveServiceDockerfile(ctxDir, null, s.type, TEMPLATES_DIR);
+        if (r) dockerfile = r.file;
+      } catch {}
+    }
+    return { ...s, homePath, dockerfile, dockerfiles };
   });
 }
 // Portable compose: prefer `docker compose` (v2), fallback to `docker-compose` (v1).
@@ -696,6 +710,9 @@ function firstSyncClone({ codeDir, templatesDir, type, url, env }) {
   for (const f of ['Dockerfile', 'nginx.conf']) {
     const dst = path.join(codeDir + '.new', f);
     const src = path.join(templatesDir, type || 'static', f);
+    // Never seed a template Dockerfile over repo variants: an exact-name miss
+    // with Dockerfile.* present means the author chose a variant recipe.
+    if (f === 'Dockerfile' && findDockerfiles(codeDir + '.new').length) continue;
     if (!fs.existsSync(dst) && fs.existsSync(src)) fs.copyFileSync(src, dst);
   }
   fs.rmSync(codeDir, { recursive: true, force: true });
@@ -853,15 +870,26 @@ function createLocalPushStage(dir, meta, pushedSha, pushedBranch) {
     for (const s of enabled) {
       const ctxDir = path.join(stageCode, s.subdir || '');
       if (!fs.existsSync(ctxDir)) throw new Error(`service '${s.name}' build folder '${s.subdir || '.'}' is absent from pushed commit`);
-      ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR, { modernize: !!((s.buildOptions || (s.name === 'app' && meta.buildOptions) || {}).modernize) });
-      // Upgrade only exact historical Node/React templates, including monorepo
-      // services and detached local-push checkouts. Never rewrite custom files.
-      refreshStandardDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+      // The pushed commit chooses the build file: strict resolution so an
+      // ambiguous or stale selection fails loud instead of building wrong.
+      let dfName = 'Dockerfile';
+      try {
+        const df = resolveServiceDockerfile(ctxDir, s.dockerfile, s.type, TEMPLATES_DIR);
+        if (df) {
+          dfName = df.file;
+          if (/^dockerfile$/i.test(df.file)) refreshStandardDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+        } else {
+          ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR, { modernize: !!((s.buildOptions || (s.name === 'app' && meta.buildOptions) || {}).modernize) });
+          // Upgrade only exact historical Node/React templates, including monorepo
+          // services and detached local-push checkouts. Never rewrite custom files.
+          refreshStandardDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+        }
+      } catch (e) { throw new Error(`service '${s.name}': ${e.message}`); }
       if (s.type === 'static' || s.type === 'react') {
         const nc = path.join(ctxDir, 'nginx.conf');
         if (!fs.existsSync(nc)) fs.writeFileSync(nc, nginxConf(null));
       }
-      lines.push(`  ${s.name}:`, `    build:\n      context: ${JSON.stringify(ctxDir.replace(/\\/g, '/'))}\n      dockerfile: Dockerfile\n      args:\n        BUILDKIT_INLINE_CACHE: 1`);
+      lines.push(`  ${s.name}:`, `    build:\n      context: ${JSON.stringify(ctxDir.replace(/\\/g, '/'))}\n      dockerfile: ${dfName}\n      args:\n        BUILDKIT_INLINE_CACHE: 1`);
     }
     const override = path.join(stageRoot, 'compose.override.yml');
     fs.writeFileSync(override, lines.join('\n') + '\n');
@@ -1390,9 +1418,12 @@ async function deployNow(id, opts = {}) {
   try {
     for (const s of svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false)) {
       const ctxDir = path.join(buildCodeDir, s.subdir || '');
-      let hasDockerfile = false;
-      try { hasDockerfile = fs.readdirSync(ctxDir).some(f => /^dockerfile$/i.test(f)); } catch {}
-      if (!hasDockerfile) {
+      // Strict build-file resolution: ambiguous variants or a stale saved
+      // selection fail loud here with candidate names before anything builds.
+      let df = null;
+      try { df = resolveServiceDockerfile(ctxDir, s.dockerfile, s.type, TEMPLATES_DIR); }
+      catch (e) { throw new Error(`service '${s.name}': ${e.message}`); }
+      if (!df) {
         const detected = svc.detectServiceType(ctxDir);
         if (detected.type && detected.type !== s.type) {
           throw new Error(`service '${s.name}' is configured as '${s.type}' but '${s.subdir || '.'}' is detected as '${detected.type}' - change the service type`);
@@ -1402,9 +1433,15 @@ async function deployNow(id, opts = {}) {
       if (profile.kind === 'jekyll' && s.type !== 'static' && standardDockerfileType(ctxDir, TEMPLATES_DIR)) {
         throw new Error(`service '${s.name}' is a Jekyll static site, not ${s.type} - open Setup and choose Use Jekyll static build`);
       }
-      ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR, { modernize: !!((s.buildOptions || (s.name === 'app' && meta.buildOptions) || {}).modernize) });
-      // Native build prerequisites also apply to ordinary repo/local rebuilds.
-      refreshStandardDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+      if (!df) {
+        ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR, { modernize: !!((s.buildOptions || (s.name === 'app' && meta.buildOptions) || {}).modernize) });
+        // Native build prerequisites also apply to ordinary repo/local rebuilds.
+        refreshStandardDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+      } else if (/^dockerfile$/i.test(df.file)) {
+        // Native build prerequisites also apply to ordinary repo/local rebuilds.
+        // Variant recipes are author-owned: never template-refresh them.
+        refreshStandardDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+      }
       // Refresh panel-owned PHP images so existing sites gain standard Apache
       // rewrite support. The pre-marker legacy file is recognized only by an
       // exact byte-normalized match; repository/custom Dockerfiles stay sacred.
@@ -2217,7 +2254,18 @@ function serviceCandidate(meta, dir, input, requireSubdir = false) {
   const detected = svc.detectServiceType(ctxDir);
   const type = detected.type || (requestedType === 'auto' ? null : requestedType);
   if (!type) return { error: `could not detect a runnable service: ${detected.reason}` };
-  return { name, requestedType, subdir, ctxDir, services, detected, type };
+  // Build file candidates for this folder. An explicit pick is validated;
+  // otherwise the effective file resolves automatically (exact Dockerfile,
+  // lone variant, legacy-seed heal) or fails loud with names when ambiguous.
+  const inputDockerfile = input && input.dockerfile != null && String(input.dockerfile) !== '' ? String(input.dockerfile) : null;
+  let dockerfiles = [];
+  let dockerfile = null, dockerSource = null;
+  try {
+    dockerfiles = findDockerfiles(ctxDir);
+    const r = resolveServiceDockerfile(ctxDir, inputDockerfile, type, TEMPLATES_DIR);
+    if (r) { dockerfile = r.file; dockerSource = r.source; }
+  } catch (e) { return { error: e.message, dockerfiles }; }
+  return { name, requestedType, subdir, ctxDir, services, detected, type, dockerfiles, dockerfile, dockerSource };
 }
 app.get('/api/apps/:id/services', (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
@@ -2229,6 +2277,36 @@ app.get('/api/apps/:id/services', (req, res) => {
     catch (e) { buildProfiles[s.name] = { kind: null, warnings: [e.message] }; }
   }
   res.json({ services: publicServices(meta, dir), buildProfiles, dirty: meta.dirty || null, homePath: pubApp(meta).homePath, homePathManual: !!meta.homePathManual });
+});
+// Select which Dockerfile variant a service builds with (Dockerfile.web
+// etc.). Save without redeploying; toasts say redeploy to apply. Clearing
+// back to the default resumes automatic resolution.
+app.post('/api/apps/:id/services/:name/dockerfile', async (req, res) => {
+  try {
+    if (deployQueues.has(req.params.id) || deployLocks.has(req.params.id)) return res.status(409).json({ error: 'wait for the current deployment to finish' });
+    const db_ = load();
+    const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const dir = appDir(APPS_DIR, meta.id);
+    const services = svc.fullServices(meta, dir);
+    const service = services.find(s => s.name === req.params.name);
+    if (!service) return res.status(404).json({ error: 'unknown service' });
+    const ctxDir = path.join(dir, 'code', service.subdir || '');
+    const raw = req.body && req.body.dockerfile != null ? String(req.body.dockerfile) : '';
+    if (!raw || raw === 'Dockerfile') {
+      delete service.dockerfile;
+    } else {
+      let r;
+      try { r = resolveServiceDockerfile(ctxDir, raw, service.type, TEMPLATES_DIR); }
+      catch (e) { return res.status(400).json({ error: e.message, dockerfiles: findDockerfiles(ctxDir) }); }
+      service.dockerfile = r.file;
+    }
+    meta.services = services;
+    svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
+    save(db_);
+    await markDirty(meta.id, 'service ' + service.name + ' build file set');
+    res.json({ ok: true, saved: true, pending: true, dockerfile: service.dockerfile || 'Dockerfile' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/apps/:id/services/:name/build-profile', async (req, res) => {
   try {
@@ -2265,7 +2343,7 @@ app.get('/api/apps/:id/services/check', (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta) return res.status(404).json({ error: 'unknown app' });
   const check = serviceCandidate(meta, appDir(APPS_DIR, meta.id), req.query, true);
-  if (check.error) return res.status(400).json({ ok: false, error: check.error });
+  if (check.error) return res.status(400).json({ ok: false, error: check.error, dockerfiles: check.dockerfiles || [] });
   const profile = localBuildProfile(check.ctxDir, TEMPLATES_DIR);
   if (profile.blockedReason && !profile.customDockerfile) return res.status(400).json({ ok: false, error: profile.blockedReason });
   res.json({
@@ -2276,6 +2354,8 @@ app.get('/api/apps/:id/services/check', (req, res) => {
     detected: check.detected.detected,
     reason: check.detected.reason,
     needsDockerfile: needsDockerfileOptIn(check.ctxDir, check.type),
+    dockerfiles: check.dockerfiles || [],
+    dockerfile: check.dockerfile || 'Dockerfile',
     buildProfile: profile
   });
 });
@@ -2302,8 +2382,9 @@ app.post('/api/apps/:id/services/dockerfile', async (req, res) => {
     try { if (!fs.statSync(ctxDir).isDirectory()) return res.status(400).json({ error: 'subfolder is not a directory in the repository' }); }
     catch { return res.status(400).json({ error: 'subfolder does not exist in the repository' }); }
     try {
-      if (fs.readdirSync(ctxDir).some(f => /^dockerfile$/i.test(f)))
-        return res.status(409).json({ error: 'a Dockerfile is already there - edit it instead' });
+      const have = findDockerfiles(ctxDir);
+      if (have.length)
+        return res.status(409).json({ error: `a Dockerfile is already there (${have.join(', ')}) - edit it instead` });
     } catch (e) { return res.status(500).json({ error: e.message }); }
     const tpl = path.join(TEMPLATES_DIR, type, 'Dockerfile');
     try {
@@ -2430,19 +2511,19 @@ app.post('/api/apps/:id/services', async (req, res) => {
     if (!meta) return res.status(404).json({ error: 'unknown app' });
     const dir = appDir(APPS_DIR, meta.id);
     const candidate = serviceCandidate(meta, dir, req.body);
-    if (candidate.error) return res.status(400).json({ error: candidate.error });
+    if (candidate.error) return res.status(400).json({ error: candidate.error, dockerfiles: candidate.dockerfiles || [] });
     const { name, requestedType, subdir, detected, type, services } = candidate;
     const { inferPort, TYPE_PORT } = require('./lib/generator');
     const profile = localBuildProfile(path.join(dir, 'code', subdir), TEMPLATES_DIR);
     if (profile.blockedReason && !profile.customDockerfile) return res.status(400).json({ error: profile.blockedReason });
     if (profile.needsModernization && req.body.modernizeBuild !== true) return res.status(409).json({ error: 'enable build-only modernization for this service' });
     const port = type === 'static' && profile.kind === 'jekyll' && !profile.customDockerfile
-      ? 80 : inferPort(path.join(dir, 'code', subdir), TYPE_PORT[type] || 3000);
+      ? 80 : inferPort(path.join(dir, 'code', subdir), TYPE_PORT[type] || 3000, candidate.dockerfile || undefined);
     const used = hostPortsInUse();
     let hostPort = 8000;
     while (used.has(hostPort) && hostPort < 9000) hostPort++;
     used.add(hostPort);
-    meta.services = [...services, { name, subdir, type, port, hostPort, enabled: true, buildOptions: { modernize: req.body.modernizeBuild === true } }];
+    meta.services = [...services, { name, subdir, type, port, hostPort, enabled: true, buildOptions: { modernize: req.body.modernizeBuild === true }, ...(candidate.dockerSource === 'selected' ? { dockerfile: candidate.dockerfile } : {}) }];
     const out = svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
     meta.services = out.normalized;
     // A new service contributes its .env/.env.example exactly once. This also
@@ -3679,6 +3760,12 @@ app.post('/api/panel/scan', (req, res) => {
 // File manager for apps without git (static default page etc.)
 function codeDir(id) { return path.join(appDir(APPS_DIR, id), 'code'); }
 const JUNK = new Set(['__MACOSX', '.DS_Store', 'Thumbs.db']);
+// Managed build files uploads must never overwrite: the exact Dockerfile,
+// any Dockerfile.* variant recipe, and nginx.conf. The only sanctioned
+// Dockerfile writer is POST /:id/services/dockerfile.
+function isInfraFile(base) {
+  return base === 'Dockerfile' || base === 'nginx.conf' || /^dockerfile\.[A-Za-z0-9][A-Za-z0-9._-]*$/i.test(base || '');
+}
 function safeRel(base, rel) {
   const resolved = path.resolve(base, '.' + path.sep + (rel || ''));
   if (resolved !== base && !resolved.startsWith(base + path.sep)) throw new Error('bad path');
@@ -3739,7 +3826,7 @@ app.post('/api/apps/:id/upload-files', uploadMany.array('files', 100), async (re
     req.files.forEach((f, i) => {
       const rel = String(paths[i] || f.originalname || '').replace(/\\/g, '/');
       const base = rel.split('/').pop();
-      if (!rel || rel.includes('..') || !base || JUNK.has(base) || base.startsWith('._') || base === 'Dockerfile' || base === 'nginx.conf') {
+      if (!rel || rel.includes('..') || !base || JUNK.has(base) || base.startsWith('._') || isInfraFile(base)) {
         skipped.push(rel || f.originalname || '?');
         try { fs.unlinkSync(f.path); } catch {}
         return;
@@ -3785,7 +3872,7 @@ app.post('/api/apps/:id/upload', upload.single('zip'), async (req, res) => {
     // merge into code, but keep managed infra files (Dockerfile, nginx.conf)
     let n = 0;
     for (const e of fs.readdirSync(src)) {
-      if (e === 'Dockerfile' || e === 'nginx.conf' || JUNK.has(e) || e.startsWith('._')) continue;
+      if (isInfraFile(e) || JUNK.has(e) || e.startsWith('._')) continue;
       fs.cpSync(path.join(src, e), path.join(code, e), { recursive: true });
       n++;
     }

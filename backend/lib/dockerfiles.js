@@ -207,32 +207,15 @@ function refreshStandardDockerfile(ctxDir, type, templatesDir) {
   catch (e) { if (e.code === 'ENOENT') return 'missing'; throw e; }
   const template = fs.readFileSync(path.join(templatesDir, type, 'Dockerfile'), 'utf8');
   if (normalized(current) === normalized(template)) return 'current';
-  // Adopted copy still in sync with the repo file: nothing to do.
-  try {
-    const adopted = fs.readdirSync(ctxDir).find(f => /^dockerfile\.web$/i.test(f));
-    if (adopted && normalized(fs.readFileSync(path.join(ctxDir, adopted), 'utf8')) === normalized(current)) return 'current';
-  } catch {}
   if (!legacyMatch(type, current)) return 'custom';
-  // A legacy panel seed loses to a repo-shipped Dockerfile.web: adopt the
-  // author's recipe verbatim instead of re-seeding the generic template.
-  // Later repo edits to Dockerfile.web do not re-propagate once adopted -
-  // delete the box Dockerfile and redeploy to re-adopt.
-  try {
-    const alt = fs.readdirSync(ctxDir).find(f => /^dockerfile\.web$/i.test(f));
-    if (alt) {
-      const repo = fs.readFileSync(path.join(ctxDir, alt), 'utf8');
-      if (normalized(repo) !== normalized(current)) fs.writeFileSync(file, repo);
-      return 'updated';
-    }
-  } catch {}
   fs.writeFileSync(file, template);
   return 'updated';
 }
 
-function standardDockerfileType(ctxDir, templatesDir) {
+function standardDockerfileType(ctxDir, templatesDir, filename) {
   let current;
   try {
-    const file = path.join(ctxDir, 'Dockerfile');
+    const file = path.join(ctxDir, filename || 'Dockerfile');
     if (!fs.lstatSync(file).isFile()) return null;
     current = normalized(fs.readFileSync(file, 'utf8'));
   } catch { return null; }
@@ -244,4 +227,60 @@ function standardDockerfileType(ctxDir, templatesDir) {
   return null;
 }
 
-module.exports = { refreshStandardDockerfile, standardDockerfileType };
+// Candidate build files at a service context root: the exact Dockerfile
+// first, then Dockerfile.* variants alphabetically (bounded). Repos authored
+// for container hosts (Coolify/Dokploy convention) often ship their blessed
+// recipe as Dockerfile.web instead of Dockerfile - detection must see those
+// instead of silently seeding the generic template over them.
+function findDockerfiles(ctxDir, limit = 10) {
+  let files = [];
+  try { files = fs.readdirSync(ctxDir); } catch { return []; }
+  const exact = files.find(f => /^dockerfile$/i.test(f));
+  const variants = files.filter(f => /^dockerfile\.[A-Za-z0-9][A-Za-z0-9._-]*$/i.test(f))
+    .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+  const out = [...(exact ? [exact] : []), ...variants];
+  return out.slice(0, Math.max(1, limit));
+}
+
+function validDockerfileName(n) {
+  return typeof n === 'string' && n.length <= 64 &&
+    /^dockerfile(\.[A-Za-z0-9][A-Za-z0-9._-]*)?$/i.test(n || '');
+}
+
+// Effective build file for a service context. selected is the stored service
+// choice (exact filename); null selects automatically: exact Dockerfile wins,
+// a lone variant is used, several variants fail loud with names (never guess),
+// none returns null so callers fall back to seeding/failing as before.
+// A legacy panel seed loses to repo variants: the seed was generated, the
+// variant was authored. type/templatesDir enable that check - without them
+// an exact Dockerfile always wins.
+function resolveServiceDockerfile(ctxDir, selected, type, templatesDir) {
+  const cands = findDockerfiles(ctxDir);
+  const list = cands.length ? cands.join(', ') : 'none found';
+  if (selected != null && String(selected) !== '') {
+    if (!validDockerfileName(selected)) throw new Error(`bad Dockerfile name '${selected}'`);
+    const target = path.join(path.resolve(ctxDir), path.basename(selected));
+    let st = null;
+    try { st = fs.statSync(target); } catch {}
+    if (!st || !st.isFile()) throw new Error(`selected Dockerfile '${selected}' not found in this service folder (found: ${list})`);
+    return { file: path.basename(selected), source: 'selected' };
+  }
+  const exact = cands.find(f => /^dockerfile$/i.test(f));
+  const variants = cands.filter(f => !/^dockerfile$/i.test(f));
+  if (exact) {
+    if (type && templatesDir && variants.length) {
+      try {
+        if (legacyMatch(type, fs.readFileSync(path.join(ctxDir, exact), 'utf8'))) {
+          if (variants.length === 1) return { file: variants[0], source: 'repo-variant' };
+          throw new Error(`multiple Dockerfiles found (${[exact, ...variants].join(', ')}) - select the build file in Setup > services`);
+        }
+      } catch (e) { if (/multiple Dockerfiles/.test(e.message)) throw e; }
+    }
+    return { file: exact, source: 'repo' };
+  }
+  if (variants.length === 1) return { file: variants[0], source: 'auto' };
+  if (variants.length > 1) throw new Error(`multiple Dockerfiles found (${variants.join(', ')}) - select the build file in Setup > services`);
+  return null;
+}
+
+module.exports = { refreshStandardDockerfile, standardDockerfileType, findDockerfiles, validDockerfileName, resolveServiceDockerfile };

@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { serviceBlock, ensureDockerfile, nginxConf, inferPort, TYPE_PORT } = require('./generator');
+const { findDockerfiles, resolveServiceDockerfile, validDockerfileName } = require('./dockerfiles');
 const { decideType } = require('./detect');
 const { readBuildProfile } = require('./build-profile');
 
@@ -78,13 +79,16 @@ function parseServiceBlock(b) {
   if (m) ctx = './code' + (m[1] ? '/' + m[1] : '');
   let port = null;
   let host = null;
+  let dockerfile = null;
+  const dm = text.match(/^[ \t]+dockerfile:\s*(\S+)\s*$/m);
+  if (dm) dockerfile = dm[1];
   const pm = text.match(/- "(\d+):(\d+)"/);
   if (pm) { host = parseInt(pm[1], 10); port = parseInt(pm[2], 10); }
   else {
     const em = text.match(/- "(\d+)"/);
     if (em) port = parseInt(em[1], 10);
   }
-  return { ctx, port, host };
+  return { ctx, port, host, dockerfile };
 }
 
 // Normalize meta to a services list, migrating legacy single-service layouts once.
@@ -103,11 +107,14 @@ function fullServices(meta, dir) {
       entry.subdir = p.ctx === './code' ? '' : p.ctx.replace(/^\.\/code\/?/, '');
       if (p.port) entry.port = p.port;
       if (p.host) entry.hostPort = p.host;
+      if (p.dockerfile && p.dockerfile !== 'Dockerfile') entry.dockerfile = p.dockerfile;
     }
   } catch {}
   if (!entry.port) {
     try {
-      entry.port = inferPort(path.join(dir, 'code', entry.subdir), TYPE_PORT[meta.type] || 3000);
+      const cdir = path.join(dir, 'code', entry.subdir);
+      const rdf = resolveServiceDockerfile(cdir, entry.dockerfile, meta.type, null);
+      entry.port = inferPort(cdir, TYPE_PORT[meta.type] || 3000, rdf && rdf.file);
     } catch { entry.port = TYPE_PORT[meta.type] || 3000; }
   }
   return [entry];
@@ -141,7 +148,27 @@ function renderProject({ dir, templatesDir, meta }) {
   const chunks = [];
   for (const s of enabled) {
     const ctxDir = path.join(dir, 'code', s.subdir || '');
-    ensureDockerfile(ctxDir, s.type, templatesDir, { modernize: !!((s.buildOptions || (s.name === 'app' && meta.buildOptions) || {}).modernize) });
+    // Effective build file: an explicit stored pin wins when present,
+    // otherwise exact Dockerfile, lone variant, or legacy-seed heal (see
+    // resolveServiceDockerfile). Ambiguous or stale selections fall back to
+    // the default here and fail loud with names at deploy/add time - an
+    // unrelated mutation must never break on them.
+    let dockerfile = 'Dockerfile';
+    let pinned = false;
+    if (s.dockerfile && validDockerfileName(s.dockerfile)) {
+      try {
+        if (findDockerfiles(ctxDir).includes(s.dockerfile)) { dockerfile = s.dockerfile; pinned = true; }
+      } catch {}
+    }
+    if (!pinned) {
+      try {
+        const r = resolveServiceDockerfile(ctxDir, null, s.type, templatesDir);
+        if (r) dockerfile = r.file;
+      } catch {}
+    }
+    if (!findDockerfiles(ctxDir).length) {
+      ensureDockerfile(ctxDir, s.type, templatesDir, { modernize: !!((s.buildOptions || (s.name === 'app' && meta.buildOptions) || {}).modernize) });
+    }
     if (s.type === 'static' || s.type === 'react') {
       try {
         if (!fs.existsSync(path.join(ctxDir, 'nginx.conf'))) fs.writeFileSync(path.join(ctxDir, 'nginx.conf'), nginxConf(null));
@@ -160,7 +187,8 @@ function renderProject({ dir, templatesDir, meta }) {
       port: parseInt(s.port, 10) || 3000,
       host: s.hostPort || null,
       portEnv: penv,
-      type: s.type
+      type: s.type,
+      dockerfile
     }));
   }
   let out = `services:\n${chunks.join('')}`;

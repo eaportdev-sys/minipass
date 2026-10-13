@@ -135,6 +135,7 @@
               <button id="svcAddBtn" class="btn primary" onclick="addService()" disabled>add service</button>
             </div>
             <div class="meta" id="svcAddCheck">Enter a unique name and an existing repository subfolder.</div>
+            <div class="controlrow" id="svcDockerfileRow" style="display:none"><label for="svcDockerfilePick">Build file</label><select id="svcDockerfilePick" aria-label="Build file for the new service"></select></div>
             <label id="svcModernBuildRow" class="radiorow" style="display:none"><input id="svcModernBuild" type="checkbox" onchange="scheduleServiceCheck()"> Modernize legacy dependencies in this build only</label>
           </div>
           <div id="svcList"></div>

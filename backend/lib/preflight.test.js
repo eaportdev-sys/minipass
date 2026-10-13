@@ -106,6 +106,22 @@ try {
   const migAnalysis = preflight.analyzeService(tmp, 'node', '');
   assert(migAnalysis.migrationInfo.some(m => m.framework === 'Knex' && m.runnable), 'knex migration detected');
 
+  // Test 8: Dockerfile variants surface instead of a bare missing file
+  const varDir = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-preflight-variant-'));
+  try {
+    fs.writeFileSync(path.join(varDir, 'package.json'), '{"scripts":{"start":"node index.js"}}');
+    fs.writeFileSync(path.join(varDir, 'Dockerfile.web'), 'FROM node:22\n');
+    const lone = preflight.analyzeService(varDir, 'node', '');
+    assert.equal(lone.dockerfile, 'Dockerfile.web', 'lone variant counts as the recipe');
+    assert.deepEqual(lone.dockerfileCandidates, ['Dockerfile.web']);
+    fs.writeFileSync(path.join(varDir, 'Dockerfile.api'), 'FROM node:22\n');
+    const amb = preflight.analyzeService(varDir, 'node', '');
+    assert.equal(amb.dockerfile, null, 'ambiguous variants pick nothing');
+    assert.equal(amb.dockerfileStatus, 'ambiguous');
+    const ambReport = preflight.readinessReport({ services: [amb] });
+    assert(ambReport.blockers.some(b => b.code === 'AMBIGUOUS_DOCKERFILE' && b.message.includes('Dockerfile.api') && b.message.includes('Dockerfile.web')), 'ambiguous names every candidate');
+  } finally { fs.rmSync(varDir, { recursive: true, force: true }); }
+
   console.log('Preflight analysis and readiness report: OK');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });

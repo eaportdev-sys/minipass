@@ -12,12 +12,17 @@ async function loadServices() {
       const label = s.hostPort ? `${location.hostname}:${s.hostPort}${openPath}` : '';
       const enabled = s.enabled !== false;
       const profile = (r.buildProfiles || {})[s.name];
+      const dfs = Array.isArray(s.dockerfiles) ? s.dockerfiles : [];
+      const dfCurrent = s.dockerfile || 'Dockerfile';
+      const dfCell = dfs.length > 1
+        ? `<div><span>Build file</span><span class="controlrow"><select id="svcDockerfile-${safeHtml(s.name)}" aria-label="Build file for ${safeHtml(s.name)}">${dfs.map(f => `<option value="${safeHtml(f)}"${f === dfCurrent ? ' selected' : ''}>${safeHtml(f)}</option>`).join('')}${dfs.includes('Dockerfile') ? '' : `<option value="Dockerfile"${dfCurrent === 'Dockerfile' ? ' selected' : ''}>Dockerfile (default)</option>`}</select><button onclick="saveServiceDockerfile('${safeHtml(s.name)}')">use file</button></span></div>`
+        : (dfCurrent !== 'Dockerfile' ? `<div><span>Build file</span><b>${safeHtml(dfCurrent)}</b></div>` : '');
       const buildCard = profile && profile.kind === 'jekyll'
         ? `<div class="service-build-profile"><b>Jekyll static build</b><div class="meta">${profile.customDockerfile ? 'Custom Dockerfile preserved. Configure its build steps in that file.' : `Ruby + Node → ${safeHtml(profile.output)} → nginx${profile.modernize ? ' · build-only modernization enabled' : ''}`}</div>${profile.customDockerfile ? '' : `<div class="meta">${safeHtml((profile.warnings || []).filter(w => !profile.modernize || !w.includes('Enable the build-only')).join(' '))}</div><button onclick="configureStaticBuild('${s.name}', ${!!profile.needsModernization})">${s.type !== 'static' ? 'Use Jekyll static build' : profile.needsModernization && !profile.modernize ? 'Enable build modernization' : 'Configure build'}</button>`}</div>` : '';
       return `<div class="service-card" id="svc-${s.name}"><div class="service-card-head"><div><b>${safeHtml(s.name)}</b><span class="badge type">${safeHtml(s.type)}</span>` +
         `<div class="meta">${s.subdir ? `/${safeHtml(s.subdir)}` : 'repository root'}</div></div><span class="badge service-state ${enabled ? 'on' : 'off'}">${enabled ? 'enabled' : 'disabled'}</span></div>` +
         `<div class="service-facts"><div><span>Published port</span><b>${s.hostPort ? `:${s.hostPort} → ${s.port}` : 'not published'}</b></div>` +
-        `<div><span>Local URL</span>${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${safeHtml(label)}</a>` : '<b>unavailable</b>'}</div></div>` +
+        `<div><span>Local URL</span>${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${safeHtml(label)}</a>` : '<b>unavailable</b>'}</div>${dfCell}</div>` +
         buildCard +
         `<div class="service-card-actions"><button onclick="deploySvc('${s.name}')" ${dirty ? '' : 'disabled'}>redeploy</button>` +
         `<button onclick="toggleService('${s.name}', ${!enabled})">${enabled ? 'stop' : 'start'}</button>` +
@@ -99,6 +104,16 @@ function scheduleServiceCheck() {
       if (seq !== serviceCheckSeq || appId !== currentApp) return;
       const modern = r.buildProfile && r.buildProfile.needsModernization;
       document.getElementById('svcModernBuildRow').style.display = modern ? 'flex' : 'none';
+      const dfPick = document.getElementById('svcDockerfilePick');
+      const dfRow = document.getElementById('svcDockerfileRow');
+      if (dfPick && dfRow) {
+        const cands = r.dockerfiles || [];
+        if (r.ok && cands.length > 1) {
+          const cur = r.dockerfile || 'Dockerfile';
+          dfPick.innerHTML = cands.map(f => `<option value="${safeHtml(f)}"${f === cur ? ' selected' : ''}>${safeHtml(f)}</option>`).join('');
+          dfRow.style.display = '';
+        } else { dfRow.style.display = 'none'; dfPick.innerHTML = ''; }
+      }
       btn.disabled = !r.ok || !!r.needsDockerfile || (modern && !document.getElementById('svcModernBuild').checked);
       if (r.ok && r.needsDockerfile)
         showStandardDockerfile(out, `${r.subdir} was detected as ${r.type}, but it needs a Dockerfile.`);
@@ -121,6 +136,9 @@ async function addService() {
     type: document.getElementById('svcType').value,
     modernizeBuild: document.getElementById('svcModernBuild').checked
   };
+  const dfRow = document.getElementById('svcDockerfileRow');
+  const dfPick = document.getElementById('svcDockerfilePick');
+  if (dfRow && dfPick && dfRow.style.display !== 'none' && dfPick.value) body.dockerfile = dfPick.value;
   const r = await (await fetch(`/api/apps/${currentApp}/services`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
   toast(r.ok ? (`service ${body.name} added as ${r.type || body.type}${r.correctedFrom ? ` (corrected from ${r.correctedFrom})` : ''} - redeploy to start it`) : (r.error || 'failed'), !!r.ok);
   if (r.ok) {
@@ -129,6 +147,8 @@ async function addService() {
     document.getElementById('svcType').value = 'auto';
     document.getElementById('svcModernBuild').checked = false;
     document.getElementById('svcModernBuildRow').style.display = 'none';
+    document.getElementById('svcDockerfileRow').style.display = 'none';
+    document.getElementById('svcDockerfilePick').innerHTML = '';
     check.textContent = 'Enter a unique name and an existing repository subfolder.';
   } else {
     const msg = r.error || 'service could not be added';
@@ -160,6 +180,19 @@ async function seedStandardDockerfile() {
     check.textContent = 'Dockerfile added - rechecking…';
   } catch (e) { check.textContent = e.message; return; }
   scheduleServiceCheck();
+}
+async function saveServiceDockerfile(name) {
+  if (!currentApp) return;
+  const appId = currentApp;
+  const sel = document.getElementById('svcDockerfile-' + name);
+  const value = sel ? sel.value : 'Dockerfile';
+  toast('saving build file for ' + name + '…');
+  try {
+    const r = await (await fetch(`/api/apps/${appId}/services/${name}/dockerfile`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dockerfile: value }) })).json();
+    if (currentApp !== appId) return;
+    toast(r.ok ? (name + ' builds with ' + (r.dockerfile || value) + ' - redeploy to apply') : (r.error || 'failed'), !!r.ok);
+  } catch (e) { toast('save failed: ' + e.message, false); }
+  refreshSiteData();
 }
 async function toggleService(name, enable) {
   toast((enable ? 'starting ' : 'stopping ') + name + '… (applies on redeploy)');

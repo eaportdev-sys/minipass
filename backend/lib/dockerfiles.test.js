@@ -346,38 +346,49 @@ try {
   fs.writeFileSync(path.join(folder, 'Dockerfile'), previousNativeNode);
   assert.equal(standardDockerfileType(folder, templates), 'node', 'legacy Node detected');
 
-  // Test 8: repo-shipped Dockerfile.web beats the generic template
-  const { ensureDockerfile, needsDockerfileOptIn, repoDockerfileAlt } = require('./generator');
+  // Test 8: Dockerfile variant detection and selection (no copies, no guessing)
+  const { ensureDockerfile, needsDockerfileOptIn } = require('./generator');
+  const { findDockerfiles, validDockerfileName, resolveServiceDockerfile } = require('./dockerfiles');
   const webRecipe = 'FROM node:24-alpine\nWORKDIR /app\nCOPY . .\nRUN ./node_modules/.bin/next build\nEXPOSE 3000\nCMD ["node", "server.js"]\n';
-  // ensure adopts instead of seeding the template
-  const adoptDir = path.join(tmp, 'node', 'adopt');
-  fs.mkdirSync(adoptDir, { recursive: true });
-  fs.writeFileSync(path.join(adoptDir, 'package.json'), JSON.stringify({ scripts: { start: 'next start' } }));
-  fs.writeFileSync(path.join(adoptDir, 'Dockerfile.web'), webRecipe);
-  assert.equal(needsDockerfileOptIn(adoptDir, 'node'), false, 'Dockerfile.web needs no standard-template opt-in');
-  assert.equal(repoDockerfileAlt(adoptDir), path.join(adoptDir, 'Dockerfile.web'));
-  assert.equal(ensureDockerfile(adoptDir, 'node', templates), 'adopted-repo-dockerfile');
-  assert.equal(fs.readFileSync(path.join(adoptDir, 'Dockerfile'), 'utf8'), webRecipe, 'adopted verbatim, template untouched');
-  // exact Dockerfile still wins over the variant
-  fs.writeFileSync(path.join(adoptDir, 'Dockerfile'), 'FROM node:22\n');
-  assert.equal(repoDockerfileAlt(adoptDir), null);
-  assert.equal(ensureDockerfile(adoptDir, 'node', templates), 'present');
-  // dev-only siblings are never grabbed as the app recipe
+  const varDir = path.join(tmp, 'node', 'variants');
+  fs.mkdirSync(varDir, { recursive: true });
+  fs.writeFileSync(path.join(varDir, 'package.json'), JSON.stringify({ scripts: { start: 'next start' } }));
+  fs.writeFileSync(path.join(varDir, 'Dockerfile.web'), webRecipe);
+  fs.writeFileSync(path.join(varDir, 'Dockerfile.api'), webRecipe);
+  assert.deepEqual(findDockerfiles(varDir).sort(), ['Dockerfile.api', 'Dockerfile.web']);
+  assert.deepEqual(findDockerfiles(path.join(tmp, 'node', 'no-such-dir')), []);
+  assert(validDockerfileName('Dockerfile') && validDockerfileName('Dockerfile.web'));
+  assert(!validDockerfileName('Dockerfile..x') && !validDockerfileName('../Dockerfile') && !validDockerfileName('Dockerfile ') && !validDockerfileName('evil.sh'));
+  // lone variant resolves automatically; exact wins when present; several fail loud
+  const loneDir = path.join(tmp, 'node', 'lone');
+  fs.mkdirSync(loneDir, { recursive: true });
+  fs.writeFileSync(path.join(loneDir, 'Dockerfile.web'), webRecipe);
+  assert.equal(needsDockerfileOptIn(loneDir, 'node'), false, 'a variant is already a build file - no template opt-in');
+  assert.deepEqual(resolveServiceDockerfile(loneDir, null, 'node', templates), { file: 'Dockerfile.web', source: 'auto' });
+  fs.writeFileSync(path.join(loneDir, 'Dockerfile'), 'FROM node:22\n');
+  assert.deepEqual(resolveServiceDockerfile(loneDir, null, 'node', templates), { file: 'Dockerfile', source: 'repo' });
+  assert.throws(() => resolveServiceDockerfile(varDir, null, 'node', templates), /multiple Dockerfiles found.*Dockerfile\.api.*Dockerfile\.web|multiple Dockerfiles found.*Dockerfile\.web.*Dockerfile\.api/);
+  assert.deepEqual(resolveServiceDockerfile(varDir, 'Dockerfile.api', 'node', templates), { file: 'Dockerfile.api', source: 'selected' });
+  assert.throws(() => resolveServiceDockerfile(varDir, 'Dockerfile.missing', 'node', templates), /not found/);
+  assert.throws(() => resolveServiceDockerfile(varDir, '../x', 'node', templates), /bad Dockerfile name/);
+  assert.equal(resolveServiceDockerfile(path.join(tmp, 'node', 'no-such-dir'), null, 'node', templates), null);
+  // every Dockerfile.* shape is listed (dev included) - picking stays explicit
   const devDir = path.join(tmp, 'node', 'devonly');
   fs.mkdirSync(devDir, { recursive: true });
   fs.writeFileSync(path.join(devDir, 'Dockerfile.dev'), webRecipe);
-  assert.equal(repoDockerfileAlt(devDir), null);
-  // refresh heals a legacy panel seed to the repo recipe on redeploy
+  assert.deepEqual(findDockerfiles(devDir), ['Dockerfile.dev']);
+  // a legacy panel seed loses to a lone repo variant (seed was generated, variant authored)
   const healDir = path.join(tmp, 'node', 'heal');
   fs.mkdirSync(healDir, { recursive: true });
   fs.writeFileSync(path.join(healDir, 'Dockerfile'), previousNativeNode);
   fs.writeFileSync(path.join(healDir, 'Dockerfile.web'), webRecipe);
-  assert.equal(refreshStandardDockerfile(healDir, 'node', templates), 'updated', 'legacy seed heals to repo recipe');
-  assert.equal(fs.readFileSync(path.join(healDir, 'Dockerfile'), 'utf8'), webRecipe);
-  assert.equal(refreshStandardDockerfile(healDir, 'node', templates), 'current', 'adopted copy steady');
-  // genuinely custom files stay sacred even beside a variant
+  assert.deepEqual(resolveServiceDockerfile(healDir, null, 'node', templates), { file: 'Dockerfile.web', source: 'repo-variant' });
+  // ...but an explicit selection of the exact name pins it
+  assert.deepEqual(resolveServiceDockerfile(healDir, 'Dockerfile', 'node', templates), { file: 'Dockerfile', source: 'selected' });
+  // an explicit standard-template choice still refreshes (variant files are never rewritten)
+  assert.equal(refreshStandardDockerfile(healDir, 'node', templates), 'updated');
   fs.writeFileSync(path.join(healDir, 'Dockerfile'), webRecipe + 'RUN echo owner-edit\n');
-  assert.equal(refreshStandardDockerfile(healDir, 'node', templates), 'custom', 'owner edits after adoption are preserved');
+  assert.equal(refreshStandardDockerfile(healDir, 'node', templates), 'custom', 'owner edits stay sacred');
 
   console.log('native npm toolchain and exact-match standard Dockerfile upgrades: OK');
 } finally {

@@ -64,6 +64,44 @@ volumes:
   assert(nodeTemplate.includes('start:built') && nodeTemplate.includes('next start'), 'standard Node image prefers production start scripts/framework start');
   assert(nodeTemplate.includes('exec node index.js'), 'standard Node image retains the simple index.js fallback');
 
+  const { serviceBlock } = require('./generator');
+  const rootDefault = serviceBlock({ svcName: 'app', ctx: './code', port: 3000, host: 8000, portEnv: null });
+  assert(!/dockerfile:/.test(rootDefault), 'root default omits the dockerfile line (legacy bytes)');
+  const rootVariant = serviceBlock({ svcName: 'app', ctx: './code', port: 3000, host: 8000, portEnv: null, dockerfile: 'Dockerfile.web' });
+  assert(rootVariant.includes('dockerfile: Dockerfile.web'), 'root variant names its build file');
+  const subDefault = serviceBlock({ svcName: 'web', ctx: './code/web', port: 80, host: 8001, portEnv: 'PORT_WEB' });
+  assert(subDefault.includes('dockerfile: Dockerfile'), 'subfolder default keeps the explicit line (legacy bytes)');
+
+  // renderProject builds with the detected variant, never seeds over it
+  const variant = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-services-variant-'));
+  try {
+    fs.mkdirSync(path.join(variant, 'code'), { recursive: true });
+    fs.writeFileSync(path.join(variant, 'code', 'Dockerfile.web'), 'FROM node:24-alpine\nEXPOSE 3000\n');
+    fs.writeFileSync(path.join(variant, '.env'), 'HOST_PORT=8000\n');
+    fs.writeFileSync(path.join(variant, 'docker-compose.yml'), 'services:\n  app:\n    build:\n      context: ./code\n      args:\n        BUILDKIT_INLINE_CACHE: 1\n    ports:\n      - "8000:3000"\n    expose:\n      - "3000"\n');
+    const meta = { type: 'node', hostPort: 8000, services: [{ name: 'app', subdir: '', type: 'node', port: 3000, hostPort: 8000, enabled: true }] };
+    renderProject({ dir: variant, templatesDir: path.resolve(__dirname, '../../templates'), meta });
+    const yml = fs.readFileSync(path.join(variant, 'docker-compose.yml'), 'utf8');
+    assert(yml.includes('dockerfile: Dockerfile.web'), 'compose builds the detected variant');
+    assert(!fs.existsSync(path.join(variant, 'code', 'Dockerfile')), 'no template seeded over the variant');
+    // a compose file naming a variant migrates the pin forward
+    const migrated = fullServices({ type: 'node', hostPort: 8000 }, variant);
+    assert.equal(migrated[0].dockerfile, 'Dockerfile.web', 'legacy compose variant migrates to the pin');
+    // explicit pin wins even beside an exact file
+    fs.writeFileSync(path.join(variant, 'code', 'Dockerfile'), 'FROM node:22\n');
+    const pinned = { type: 'node', hostPort: 8000, services: [{ name: 'app', subdir: '', type: 'node', port: 3000, hostPort: 8000, enabled: true, dockerfile: 'Dockerfile.web' }] };
+    renderProject({ dir: variant, templatesDir: path.resolve(__dirname, '../../templates'), meta: pinned });
+    assert(fs.readFileSync(path.join(variant, 'docker-compose.yml'), 'utf8').includes('dockerfile: Dockerfile.web'), 'stored pin beats the exact file');
+    // ambiguous variants render the default here and fail loud at deploy/add time
+    fs.writeFileSync(path.join(variant, 'code', 'Dockerfile.api'), 'FROM node:22\n');
+    fs.unlinkSync(path.join(variant, 'code', 'Dockerfile'));
+    const amb = { type: 'node', hostPort: 8000, services: [{ name: 'app', subdir: '', type: 'node', port: 3000, hostPort: 8000, enabled: true }] };
+    renderProject({ dir: variant, templatesDir: path.resolve(__dirname, '../../templates'), meta: amb });
+    const ambYml = fs.readFileSync(path.join(variant, 'docker-compose.yml'), 'utf8');
+    assert(!/dockerfile:/.test(ambYml), 'ambiguity never auto-picks (default omits the line at root)');
+    assert(!fs.existsSync(path.join(variant, 'code', 'Dockerfile')), 'ambiguity never seeds a shadowing template');
+  } finally { fs.rmSync(variant, { recursive: true, force: true }); }
+
   console.log('service context and Dockerfile validation: OK');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });

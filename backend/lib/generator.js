@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { execSync } = require('child_process');
 const { appGitEnv } = require('./ssh');
 const { readBuildProfile, prepareStaticBuild } = require('./build-profile');
+const { resolveServiceDockerfile } = require('./dockerfiles');
 
 const DB_IMAGES = {
   postgres: 'postgres:16-alpine',
@@ -24,20 +25,8 @@ function normDbs(db) {
 
 // Seed a Dockerfile only when the repo shape makes the choice unambiguous.
 // Anything else fails loud with exactly what's missing - never a bare build error.
-function repoDockerfileAlt(ctxDir) {
-  // Repos authored for container hosts (Coolify/Dokploy convention) often ship
-  // their blessed recipe as Dockerfile.web instead of Dockerfile. When there is
-  // no exact Dockerfile, that file IS the author's container recipe and wins
-  // over the panel's generic template - same standing as a repo-owned Dockerfile.
-  // Only this exact name is adopted: Dockerfile.dev/local/api siblings belong
-  // to other environments or services and must never be grabbed as the app's.
-  try {
-    const files = fs.readdirSync(ctxDir);
-    if (files.some(f => /^dockerfile$/i.test(f))) return null;
-    const hit = files.find(f => /^dockerfile\.web$/i.test(f));
-    return hit ? path.join(ctxDir, hit) : null;
-  } catch { return null; }
-}
+// Variant selection (Dockerfile.web etc.) lives in resolveServiceDockerfile:
+// this seeder only ever writes the exact Dockerfile name.
 function ensureDockerfile(ctxDir, type, templatesDir, options = {}) {
   if (type === 'static' && readBuildProfile(ctxDir).kind === 'jekyll') {
     const result = prepareStaticBuild(ctxDir, templatesDir, options);
@@ -51,11 +40,6 @@ function ensureDockerfile(ctxDir, type, templatesDir, options = {}) {
     const files = fs.readdirSync(ctxDir);
     if (files.some(f => /^dockerfile$/i.test(f))) return 'present';
   } catch { return 'no-context'; }
-  const alt = repoDockerfileAlt(ctxDir);
-  if (alt) {
-    fs.copyFileSync(alt, path.join(ctxDir, 'Dockerfile'));
-    return 'adopted-repo-dockerfile';
-  }
   const has = (...names) => names.some(n => {
     try { return fs.existsSync(path.join(ctxDir, n)); } catch { return false; }
   });
@@ -91,7 +75,9 @@ function needsDockerfileOptIn(ctxDir, type) {
   let files = [];
   try { files = fs.readdirSync(ctxDir); } catch { return false; }
   if (files.some(f => /^dockerfile$/i.test(f))) return false;
-  if (files.some(f => /^dockerfile\.web$/i.test(f))) return false;
+  // A variant (Dockerfile.web etc.) is already a build file - offering the
+  // standard template would seed a shadowing exact Dockerfile over it.
+  if (files.some(f => /^dockerfile\.[A-Za-z0-9][A-Za-z0-9._-]*$/i.test(f))) return false;
   if (type === 'static' && readBuildProfile(ctxDir).kind === 'jekyll') return false;
   const has = (...names) => names.some(n => {
     try { return fs.existsSync(path.join(ctxDir, n)); } catch { return false; }
@@ -133,9 +119,9 @@ function seedEnvExample(ctxDir, haveKeys) {
 
 // Read the build context's Dockerfile for EXPOSE - any repo, any stack.
 // First EXPOSE wins; falls back when absent or unreadable.
-function inferPort(codeDir, fallback) {
+function inferPort(codeDir, fallback, filename) {
   try {
-    const m = fs.readFileSync(path.join(codeDir, 'Dockerfile'), 'utf8').match(/^\s*EXPOSE\s+(\d+)/im);
+    const m = fs.readFileSync(path.join(codeDir, filename || 'Dockerfile'), 'utf8').match(/^\s*EXPOSE\s+(\d+)/im);
     if (m) {
       const p = parseInt(m[1], 10);
       if (p > 0 && p < 65536) return p;
@@ -294,10 +280,16 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   }
   // No Dockerfile anywhere is a loud, specific error - unless the repo shape makes
   // a template choice unambiguous (static index, spa build script, php entry, node index).
+  // A lone Dockerfile variant (Dockerfile.web etc.) is used directly, never seeded over.
   // Never invent an entrypoint: node without index.js must bring its own Dockerfile.
-  ensureDockerfile(buildDir, type, templatesDir, { modernize: modernizeBuild });
+  let createDockerfile = 'Dockerfile';
+  {
+    const resolved = resolveServiceDockerfile(buildDir, null, type, templatesDir);
+    if (resolved) createDockerfile = resolved.file;
+    else ensureDockerfile(buildDir, type, templatesDir, { modernize: modernizeBuild });
+  }
   let appPort = port || TYPE_PORT[type] || 3000;
-  if (!port) appPort = inferPort(sub ? path.join(dir, 'code', sub) : path.join(dir, 'code'), appPort);
+  if (!port) appPort = inferPort(sub ? path.join(dir, 'code', sub) : path.join(dir, 'code'), appPort, createDockerfile);
   // static/react always need our nginx.conf (SPA fallback; proxy added on link).
   // Never overwrite a repo's own conf - only fill the gap (react template has none).
   if (type === 'static' || type === 'react') {
@@ -365,7 +357,7 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
     }
   }
   const ctx = sub ? `./code/${sub}` : './code';
-  const compose = `services:\n${serviceBlock({ svcName: 'app', ctx, port: appPort, host, portEnv: null })}${dbBlock}${volBlock}\n`;
+  const compose = `services:\n${serviceBlock({ svcName: 'app', ctx, port: appPort, host, portEnv: null, dockerfile: createDockerfile })}${dbBlock}${volBlock}\n`;
   fs.writeFileSync(path.join(dir, 'docker-compose.yml'), compose);
   return { dir, appPort, hostPort: host, subdir: sub, type };
 }
@@ -373,10 +365,12 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
 // One app-service block. Primary ('app') renders exactly the legacy shape;
 // secondaries add a PORT override from their own PORT_<NAME> env key.
 // Build arg for BuildKit inline cache (helps cache import/export on rebuild).
-function serviceBlock({ svcName, ctx, port, host, portEnv, type }) {
+function serviceBlock({ svcName, ctx, port, host, portEnv, type, dockerfile }) {
+  const df = dockerfile || 'Dockerfile';
+  const dfLine = (ctx !== './code' || df !== 'Dockerfile') ? `      dockerfile: ${df}\n` : '';
   const build = ctx === './code'
-    ? `    build:\n      context: ./code\n      args:\n        BUILDKIT_INLINE_CACHE: 1\n`
-    : `    build:\n      context: ./${ctx}\n      dockerfile: Dockerfile\n      args:\n        BUILDKIT_INLINE_CACHE: 1\n`;
+    ? `    build:\n      context: ./code\n${dfLine}      args:\n        BUILDKIT_INLINE_CACHE: 1\n`
+    : `    build:\n      context: ./${ctx}\n      dockerfile: ${df}\n      args:\n        BUILDKIT_INLINE_CACHE: 1\n`;
   const env = portEnv ? `    environment:\n      PORT: \${${portEnv}}\n` : '';
   const ports = host ? `    ports:\n      - "${host}:${port}"\n` : '';
   return `  ${svcName}:\n${build}    restart: unless-stopped\n    env_file: .env\n${env}${ports}    expose:\n      - "${port}"\n`;
@@ -392,4 +386,4 @@ function nginxConf(proxy) {
   return `# minipass-managed (rewritten on link/unlink/redeploy - keep custom confs unmarked)\nserver {\n  listen 80;\n  root /usr/share/nginx/html;\n  index index.html;\n${api}  location / {\n    try_files $uri $uri/ /index.html;\n  }\n}\n`;
 }
 
-module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbEnv, dbService, DB_IMAGES, inferPort, nginxConf, ensureDockerfile, needsDockerfileOptIn, repoDockerfileAlt, serviceBlock };
+module.exports = { createApp, appDir, TYPE_PORT, pw, normDbs, dbEnv, dbService, DB_IMAGES, inferPort, nginxConf, ensureDockerfile, needsDockerfileOptIn, serviceBlock };

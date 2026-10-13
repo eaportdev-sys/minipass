@@ -6,7 +6,7 @@ const { decideType, detectPackageManager, findBackends, findFrontends, prismaDat
 const { detectMigrations } = require('./migrations');
 const { parseExample, exampleFiles, exampleDefaults } = require('./env-defaults');
 const { readBuildProfile, localBuildProfile } = require('./build-profile');
-const { refreshStandardDockerfile, standardDockerfileType } = require('./dockerfiles');
+const { refreshStandardDockerfile, standardDockerfileType, findDockerfiles } = require('./dockerfiles');
 const { routes: routeLib } = require('./routes');
 const { inferPort } = require('./generator');
 
@@ -86,17 +86,23 @@ function analyzeService(ctxDir, type, subdir) {
   // Internal port
   const port = inferPort(ctxDir, type === 'react' || type === 'static' ? 80 : 3000);
 
-  // Dockerfile
+  // Dockerfile (exact name wins; a lone variant counts as the recipe;
+  // several variants with no exact pick stay ambiguous for the operator).
   let dockerfile = null;
   let dockerfileStatus = 'missing';
+  let dockerfileCandidates = [];
   try {
     const files = fs.readdirSync(ctxDir);
-    const dfName = files.find(f => /^dockerfile$/i.test(f));
+    dockerfileCandidates = findDockerfiles(ctxDir);
+    const exact = files.find(f => /^dockerfile$/i.test(f));
+    const variants = dockerfileCandidates.filter(f => !/^dockerfile$/i.test(f));
+    const dfName = exact || (variants.length === 1 ? variants[0] : null);
     if (dfName) {
       dockerfile = dfName;
-      const text = fs.readFileSync(path.join(ctxDir, dfName), 'utf8');
-      const seeded = standardDockerfileType(ctxDir, path.join(__dirname, '..', '..', 'templates'));
+      const seeded = standardDockerfileType(ctxDir, path.join(__dirname, '..', '..', 'templates'), dfName);
       dockerfileStatus = seeded ? 'panel-seeded' : 'repository-owned';
+    } else if (variants.length > 1) {
+      dockerfileStatus = 'ambiguous';
     }
   } catch {}
 
@@ -161,6 +167,7 @@ function analyzeService(ctxDir, type, subdir) {
     port,
     dockerfile,
     dockerfileStatus,
+    dockerfileCandidates,
     requiredEnv,
     buildTimeNeeds,
     gitIgnored,
@@ -199,7 +206,7 @@ function analyzeRepository(codeDir, explicitType, explicitSubdir) {
 
   const services = [];
   const rootScripts = (pkg && pkg.scripts) || {};
-  let rootDockerfileIsRuntime = paths.some(p => /^Dockerfile$/i.test(p));
+  let rootDockerfileIsRuntime = paths.some(p => /^dockerfile(\.[A-Za-z0-9][A-Za-z0-9._-]*)?$/i.test(p));
   try { if (rootDockerfileIsRuntime && standardDockerfileType(codeDir, path.join(__dirname, '..', '..', 'templates'))) rootDockerfileIsRuntime = false; } catch {}
   const rootHasRuntimeMarker = !!(paths.includes('package.json') && (
     rootScripts.start || paths.some(p => /^(?:next|nuxt)\.config\.(?:js|mjs|cjs|ts)$/.test(p)) ||
@@ -232,7 +239,11 @@ function readinessReport(analysis) {
   for (const s of analysis.services) {
     // Dockerfile
     if (!s.dockerfile) {
-      blockers.push({ code: 'NO_DOCKERFILE', service: s.subdir || 'root', message: `No Dockerfile in ${s.subdir || 'repository root'}. Add one or use the panel standard template.`, fixable: true, fix: 'use-standard-dockerfile' });
+      if (s.dockerfileStatus === 'ambiguous') {
+        blockers.push({ code: 'AMBIGUOUS_DOCKERFILE', service: s.subdir || 'root', message: `Multiple Dockerfiles in ${s.subdir || 'repository root'} (${(s.dockerfileCandidates || []).join(', ')}). Select the build file in Setup > services.`, fixable: false });
+      } else {
+        blockers.push({ code: 'NO_DOCKERFILE', service: s.subdir || 'root', message: `No Dockerfile in ${s.subdir || 'repository root'}. Add one or use the panel standard template.`, fixable: true, fix: 'use-standard-dockerfile' });
+      }
     } else if (s.dockerfileStatus === 'repository-owned') {
       // Check if it's a legacy panel template that needs upgrade
       const legacy = refreshStandardDockerfile(path.dirname(path.join('/tmp', s.dockerfile || '')), s.type, path.join(__dirname, '..', '..', 'templates'));
