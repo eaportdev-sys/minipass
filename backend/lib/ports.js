@@ -10,7 +10,7 @@ function parsePublishedPorts(text) {
   for (const line of String(text || '').split('\n')) {
     const m = line.match(/^(\S+)\s+(.*)$/);
     if (!m) continue;
-    const re = /(\d{1,3}(?:\.\d{1,3}){3}|::|[0-9a-f:]*):(\d+)->\d+\/tcp/gi;
+    const re = /(\d{1,3}(?:\.\d{1,3}){3}|::|[0-9a-f:]*):(\d+)->\d+\/(?:tcp|udp)/gi;
     let mm;
     while ((mm = re.exec(m[2]))) {
       const p = parseInt(mm[2], 10);

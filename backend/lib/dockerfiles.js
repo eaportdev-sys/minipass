@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { readSource, sourceFile, isDockerfile } = require('./repository-files');
 
 // Historical standard files are frozen here. A marker alone is not ownership:
@@ -193,7 +194,7 @@ const previousManagerReact = text => text.startsWith('# minipass template\n# Uni
   (text.includes('RUN npm run build &&') || text.includes('pnpm run build; elif')) &&
   text.includes('COPY --from=build /app/dist /usr/share/nginx/html') &&
   text.trim().endsWith('EXPOSE 80');
-const LEGACY = { node: [previousManagerNode, previousNpmNode, previousNativeNode, oldNode, oldSimpleNode], react: [previousManagerReact, previousNpmReact, previousNativeReact, oldReact, oldViteReact, oldLooseReact, oldUnmarkedReact, firstReact] };
+const LEGACY = { node: [previousManagerNode, previousNpmNode, previousNativeNode, oldNode, oldSimpleNode], react: [previousManagerReact, previousNpmReact, previousNativeReact, oldReact, oldViteReact, oldLooseReact, oldUnmarkedReact, firstReact], php: [text => crypto.createHash('sha256').update(text).digest('hex') === 'ebef546784e8100d87c463c82be91b631c825d886a37f5ec2adaf68809078f0f'] };
 
 function legacyMatch(type, current) {
   const n = normalized(current);
@@ -220,7 +221,7 @@ function standardDockerfileType(ctxDir, templatesDir, filename) {
     if (!fs.lstatSync(file).isFile()) return null;
     current = normalized(fs.readFileSync(file, 'utf8'));
   } catch { return null; }
-  for (const type of ['static', 'node', 'react']) {
+  for (const type of ['static', 'node', 'react', 'php']) {
     let template = '';
     try { template = normalized(fs.readFileSync(path.join(templatesDir, type, 'Dockerfile'), 'utf8')); } catch {}
     if ((template && current === template) || legacyMatch(type, current)) return type;

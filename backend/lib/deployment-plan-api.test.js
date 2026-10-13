@@ -90,7 +90,7 @@ async function main() {
     assert.equal(plan.selected.file, 'compose.dockerfile');
     assert(plan.candidates.some(c => c.kind === 'compose' && c.file === 'Dockerfile.compose'), 'upload classification follows content, not a Dockerfile-looking name');
     assert.notEqual(plan.fingerprint, oldFingerprint);
-    assert(plan.blockers.some(b => b.code === 'COMPOSE_EXECUTOR_UNSUPPORTED'));
+    assert(!plan.blockers.some(b => b.code === 'COMPOSE_EXECUTOR_UNSUPPORTED'));
     assert(fs.existsSync(path.join(apps, 'test-upload/.deployment-plan.json')), 'upload persists shared analysis');
     const picked = await call('/api/apps/test-upload/deployment-plan', 'POST', { selection: { kind: 'compose', file: 'compose.dockerfile' } });
     assert.equal(picked.status, 200);
@@ -98,17 +98,17 @@ async function main() {
     assert.equal((await call('/api/apps/test-upload/deployment-plan', 'POST', { selection: { kind: 'dockerfile', file: 'Dockerfile' } })).status, 409, 'no single-service escape from declared topology');
     const unchanged = fs.readFileSync(path.join(apps, 'test-upload/docker-compose.yml'), 'utf8');
     const blocked = await call('/api/apps/test-upload/deploy', 'POST', { source: 'local' });
-    assert.equal(blocked.status, 409, JSON.stringify(blocked));
-    assert(blocked.data.error.includes('Deployment plan blocked'));
+    assert.equal(blocked.status, 500, JSON.stringify(blocked));
+    assert(/docker|ENOENT/i.test(blocked.data.error), 'Windows has no Docker: actual Compose resolution is attempted, not a blanket executor refusal');
     assert.equal(fs.readFileSync(path.join(apps, 'test-upload/docker-compose.yml'), 'utf8'), unchanged);
-    assert(fs.readFileSync(path.join(apps, 'test-upload/deploy.log'), 'utf8').includes('running containers untouched'));
+    assert(!fs.readFileSync(path.join(apps, 'test-upload/deploy.log'), 'utf8').includes('Docker image build'));
 
     // Pull a real new commit with unconventional deployment instructions. It
     // must be read after sync, before generated-project edits or Docker calls.
     fs.writeFileSync(path.join(remote, 'new.instructions'), 'services:\n  database:\n    image: postgres:17\n  api:\n    image: node:24\n');
     git(remote, 'add', '.'); git(remote, 'commit', '-m', 'declare deployment topology');
     const pulled = await call('/api/apps/test-pull/deploy', 'POST', {});
-    assert.equal(pulled.status, 409, JSON.stringify(pulled));
+    assert.equal(pulled.status, 500, JSON.stringify(pulled));
     assert(fs.existsSync(path.join(checkout, 'new.instructions')), 'real pull completes before revalidation');
     assert.equal((await call('/api/apps/test-pull/deployment-plan')).data.selected.file, 'new.instructions');
     assert.equal(fs.readFileSync(path.join(apps, 'test-pull/docker-compose.yml'), 'utf8'), compose);

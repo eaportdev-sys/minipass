@@ -74,8 +74,10 @@ function parseCompose(text, file) {
       envFiles: [].concat(s.env_file || []).map(v => typeof v === 'string' ? { path: v, required: true } : { path: v.path, required: v.required !== false }) });
   }
   if (!services.length) errors.push('NO_SERVICES');
-  if (data.include || Object.values(data.services).some(s => object(s) && s.extends)) errors.push('EXTERNAL_COMPOSE_REFERENCES_REQUIRE_REVIEW');
-  return { file, complete: errors.length === 0, errors, services, envNeeds: [...agg.values()] };
+  const references = [];
+  for (const include of [].concat(data.include || [])) for (const value of [].concat(typeof include === 'string' ? include : include.path || [])) references.push({ file: value, kind: 'include' });
+  for (const s of Object.values(data.services)) if (object(s) && object(s.extends) && s.extends.file) references.push({ file: s.extends.file, kind: 'extends' });
+  return { file, complete: errors.length === 0, errors, services, envNeeds: [...agg.values()], references };
 }
 function readComposeTopo(codeDir, selected) {
   const names = selected ? [selected] : COMPOSE_FILES;

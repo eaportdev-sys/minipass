@@ -12,6 +12,7 @@ function logPath() {
 function redact(text) {
   return String(text || '')
     .replace(/x-access-token:[^@\s]+@/g, 'x-access-token:***@')
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)([^\s/@:]+):[^\s/@]+@/gi, '$1$2:***@')
     .replace(/(bearer\s+)[A-Za-z0-9\-._~+/=]{8,}/gi, '$1***')
     .replace(/((?<!access-)(?:password|passwd|secret|token)[-_a-z]*["'\s:=]+)(["']?)([^\s"';,]{4,})/gi, (m, k, q) => k + q + '***');
 }

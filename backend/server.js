@@ -33,6 +33,9 @@ const { buildProfile, readBuildProfile, localBuildProfile, isJekyll } = require(
 const repoAnalysis = require('./lib/repo-analysis');
 const deploymentPlan = require('./lib/deployment-plan');
 const { sourceFile, readSource, isDockerfile } = require('./lib/repository-files');
+const repositoryCompose = require('./lib/repository-compose');
+const browserVerification = require('./lib/browser-verification');
+const publication = require('./lib/publication');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -322,6 +325,7 @@ function pubApp(a) {
 }
 function publicServices(meta, dir) {
   return svc.fullServices(meta, dir).map(s => {
+    if (s.repositoryOwned) return { ...s, homePath: s.primary ? meta.homePath || s.homePath || '' : s.homePath || '', dockerfiles: [], dockerfile: s.dockerfile || null };
     const frontendRoot = ['static', 'react'].includes(s.type) && !(s.name === 'app' && meta.homePathManual);
     const homePath = s.name === 'app'
       ? (frontendRoot ? '' : (meta.homePath || ''))
@@ -361,9 +365,12 @@ function sh(cmd, cwd, env) {
 // reports the shell's reason instead of a bare exit code.
 function runOut(bin, args, opts = {}) {
   return new Promise((res, rej) => {
-    const { onSpawn, captureStderr, ...spawnOpts } = opts;
+    const { onSpawn, captureStderr, input, timeout, acceptExitCodes = [0], ...spawnOpts } = opts;
     const p = spawn(bin, args, spawnOpts);
+    p.stdin.on('error', () => {}); // cancellation may close an interactive verifier's input
     if (onSpawn) onSpawn(p);
+    if (input !== undefined) p.stdin.end(input);
+    const timer = timeout ? setTimeout(() => p.kill(), timeout) : null;
     const chunks = [];
     const errChunks = [];
     let settled = false;
@@ -381,11 +388,12 @@ function runOut(bin, args, opts = {}) {
       errChunks.push(d);
       if (errChunks.length > 32) errChunks.shift();
     });
-    p.on('error', e => { if (!settled) { settled = true; rej(e); } });
+    p.on('error', e => { if (timer) clearTimeout(timer); if (!settled) { settled = true; rej(e); } });
     p.on('close', code => {
+      if (timer) clearTimeout(timer);
       if (settled) return;
       settled = true;
-      if (code === 0) res(Buffer.concat(chunks));
+      if (acceptExitCodes.includes(code)) res(Buffer.concat(chunks));
       else {
         const detail = errDetail();
         rej(new Error(`${bin} exited with code ${code}${detail ? `: ${detail}` : ''}`));
@@ -637,13 +645,13 @@ app.post('/api/apps', async (req, res) => {
     quotas.bindDatabases(created.dir);
     envSetManaged(created.dir, { COMPOSE_PROJECT_NAME: id });
     const db_ = load();
-    const meta = { id, name: rawName, type: created.type || type, repoUrl: finalRepoUrl, github: ghLink, db: dbs, domain: appDomain, token, hostPort, packageManager, subdir: created.subdir || '', storageQuota, buildOptions: { modernize: req.body.modernizeBuild === true }, createdAt: new Date().toISOString() };
+    const meta = { id, name: rawName, type: created.type || type, repoUrl: finalRepoUrl, github: ghLink, db: created.hasDeclaredCompose ? [] : dbs, domain: appDomain, token, hostPort, accessHost: req.hostname, packageManager, subdir: created.subdir || '', storageQuota, buildOptions: { modernize: req.body.modernizeBuild === true }, createdAt: new Date().toISOString() };
     let detectedServices = [];
     try { if (!created.hasDeclaredCompose) detectedServices = configureDetectedServices(meta, created.dir); }
     catch (e) { console.error(id, 'auto service detection:', e.message); }
     // Capture repository env sources before the first deploy. Never fail an
     // otherwise valid create solely because the private snapshot could not be written.
-    try { applyEnvDefaults(meta, created.dir, req.hostname, req.protocol); }
+    try { if (!created.hasDeclaredCompose) applyEnvDefaults(meta, created.dir, req.hostname, req.protocol); }
     catch (e) { console.error(id, 'env defaults snapshot:', e.message); }
     db_.apps = db_.apps.filter(a => a.id !== id).concat([meta]);
     save(db_);
@@ -668,7 +676,6 @@ app.post('/api/apps', async (req, res) => {
     if (detectedServices.length) panelLog.logEvent({ level: 'info', area: 'create', site: id, message: 'services detected: ' + detectedServices.join(', ') });
     // First build is manual. AUTO_DEPLOY is intentionally false for now, so a
     // create/link flow cannot surprise-run a half-reviewed repository.
-    if (AUTO_DEPLOY) deploy(id).catch(e => console.error(id, e.message));
     if (storageWarning) panelLog.logEvent({ level: 'warn', area: 'create', site: id, message: 'storage allowance recorded but not enforced: ' + storageWarning });
     // Creation-time env report: code-referenced vars missing from the generated
     // .env, so the operator knows before the first deploy instead of via a
@@ -716,7 +723,9 @@ const redactUrl = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-tok
 // so connecting post-create behaves exactly like creating with the repo.
 function firstSyncClone({ codeDir, templatesDir, type, url, env }) {
   execSync(`git clone --depth 1 "${url}" "${codeDir}.new"`, { stdio: 'pipe', env });
+  const plan = deploymentPlan.analyze(codeDir + '.new', { templatesDir });
   for (const f of ['Dockerfile', 'nginx.conf']) {
+    if (plan.selected && plan.selected.kind === 'compose') continue;
     const dst = path.join(codeDir + '.new', f);
     const src = path.join(templatesDir, type || 'static', f);
     // Never seed a template Dockerfile over repo variants: an exact-name miss
@@ -862,9 +871,11 @@ function createLocalPushStage(dir, meta, pushedSha, pushedBranch) {
     throw new Error(`commit ${pushedSha.slice(0, 7)} or pushed branch '${pushedBranch}' is not available in the local repository`);
   }
 
-  const stageRoot = path.join(dir, '.local-deploy');
+  const stageRoot = path.join(dir, '.local-deploy-' + crypto.randomBytes(8).toString('hex'));
   const stageCode = path.join(stageRoot, 'code');
+  let retained = false;
   const cleanup = () => {
+    if (retained) return;
     try { execFileSync('git', ['--git-dir', bareRepo, 'worktree', 'remove', '--force', stageCode], { stdio: 'ignore' }); } catch {}
     try { fs.rmSync(stageRoot, { recursive: true, force: true }); } catch {}
     try { execFileSync('git', ['--git-dir', bareRepo, 'worktree', 'prune'], { stdio: 'ignore' }); } catch {}
@@ -873,6 +884,9 @@ function createLocalPushStage(dir, meta, pushedSha, pushedBranch) {
   try {
     fs.mkdirSync(stageRoot, { recursive: true });
     execFileSync('git', ['--git-dir', bareRepo, 'worktree', 'add', '--force', '--detach', stageCode, pushedSha], { stdio: 'pipe' });
+
+    const sourcePlan = deploymentPlan.analyze(stageCode, { selection: meta.deploymentEntrypoint, templatesDir: TEMPLATES_DIR });
+    if (sourcePlan.selected && sourcePlan.selected.kind === 'compose') return { codeDir: stageCode, sha: pushedSha.slice(0, 7), cleanup, retain: () => { retained = true; } };
 
     const enabled = svc.fullServices(meta || {}, dir).filter(s => s.enabled !== false);
     const lines = ['services:'];
@@ -954,18 +968,43 @@ async function markDirty(id, reason) {
   // refresh the same persisted plan. Analysis errors never undo a saved file.
   try {
     const meta = load().apps.find(a => a.id === id);
-    if (meta) refreshDeploymentPlan(meta, appDir(APPS_DIR, id));
+    if (meta) {
+      const dir = appDir(APPS_DIR, id);
+      const plan = refreshDeploymentPlan(meta, dir);
+      if (plan.selected && plan.selected.kind === 'compose') {
+        // Keep existing values/data, but stop locking legacy generated aliases
+        // as though they were authoritative repository deployment inputs.
+        fs.writeFileSync(path.join(dir, '.env.managed'), 'COMPOSE_PROJECT_NAME\nDOMAIN\n');
+      }
+    }
   } catch (e) { panelLog.logEvent({ level: 'warn', area: 'deployment-plan', site: id, message: 'Plan refresh failed: ' + e.message }); }
 }
 function refreshDeploymentPlan(meta, dir, root = path.join(dir, 'code')) {
-  return deploymentPlan.persist(dir, deploymentPlan.analyze(root, {
+  let entryDir = root;
+  if (meta.deploymentEntrypoint && meta.deploymentEntrypoint.kind === 'compose') entryDir = path.dirname(path.join(root, meta.deploymentEntrypoint.file));
+  const defaultEnv = readEnvVars(path.join(entryDir, '.env'));
+  const plan = deploymentPlan.analyze(root, {
     selection: meta.deploymentEntrypoint || null, services: svc.fullServices(meta, dir), templatesDir: TEMPLATES_DIR,
-    env: Object.fromEntries(readEnvVars(path.join(dir, '.env')).map(v => [v.key, v.value]))
-  }));
+    env: Object.fromEntries([...defaultEnv, ...readEnvVars(path.join(dir, '.env'))].map(v => [v.key, v.value]))
+  });
+  try {
+    const resolved = JSON.parse(fs.readFileSync(path.join(dir,'.resolved-plan.json'),'utf8'));
+    if (resolved.fingerprint === plan.fingerprint && resolved.envDigest === crypto.createHash('sha256').update(fs.readFileSync(path.join(dir,'.env'))).digest('hex')) {
+      plan.topology = resolved.topology;
+      plan.resolved = true;
+      plan.blockers = plan.blockers.filter(b=>!['REQUIRED_ENV','MISSING_RECIPE','MISSING_DEPENDENCY','MISSING_ENV_FILE'].includes(b.code));
+      plan.ready = plan.blockers.length===0;
+    }
+  } catch {}
+  return deploymentPlan.persist(dir, plan);
 }
 async function enforceDeploymentPlan(meta, dir, root, deferEnvironment = false) {
   const plan = refreshDeploymentPlan(meta, dir, root);
-  const blockers = plan.blockers.filter(b => !deferEnvironment || b.code !== 'MISSING_BUILD_ENVIRONMENT');
+  const blockers = plan.blockers.filter(b => (!deferEnvironment || b.code !== 'MISSING_BUILD_ENVIRONMENT') &&
+    // Compose resolves overrides, includes, interpolation and profiles. Static
+    // first-file advice must not reject valid values supplied by an overlay or
+    // a referenced env file before the engine's authoritative config validation.
+    !(plan.selected && plan.selected.kind === 'compose' && ['REQUIRED_ENV','MISSING_RECIPE','MISSING_DEPENDENCY','MISSING_ENV_FILE'].includes(b.code)));
   if (!blockers.length) return plan;
   const failure = 'Deployment plan blocked - running containers untouched: ' + blockers.map(b => b.message).join(' ');
   fs.appendFileSync(path.join(dir, 'deploy.log'), failure + '\n');
@@ -1311,6 +1350,7 @@ async function deployNow(id, opts = {}) {
   // One log per attempt. Clear before any preflight/pre-build output, not just
   // before Docker build (which used to erase successful pre-build evidence).
   fs.writeFileSync(buildLog, `--- deploy ${opSource} started ${new Date().toISOString()} ---\n`);
+  fs.writeFileSync(path.join(dir, '.verification.json'), JSON.stringify({ ok: false, pending: true, phase: 'configuration/build', at: new Date().toISOString(), pages: [], probes: [], errors: [] }), { mode: 0o600 });
   let buildCodeDir = codeDir;
   let composeCmd = meta.storageQuota ? `${COMPOSE_BIN} -p ${id}` : COMPOSE_BIN;
   let sourceSha = null;
@@ -1319,7 +1359,7 @@ async function deployNow(id, opts = {}) {
     try {
       localStage = createLocalPushStage(dir, meta, opts.pushedSha, opts.pushedBranch);
       buildCodeDir = localStage.codeDir;
-      composeCmd = localStage.compose + (meta.storageQuota ? ` -p ${id}` : '');
+      if (localStage.compose) composeCmd = localStage.compose + (meta.storageQuota ? ` -p ${id}` : '');
       sourceSha = localStage.sha;
     } catch (e) {
       await recordDeploy(id, {
@@ -1365,7 +1405,14 @@ async function deployNow(id, opts = {}) {
   }
   // The actual pulled/detached source, not yesterday's checkout, owns the plan.
   // Stop before database wiring, recipe repair, pre-build or image building.
-  await enforceDeploymentPlan(meta, dir, buildCodeDir, true);
+  const sourcePlan = await enforceDeploymentPlan(meta, dir, buildCodeDir, true);
+  if (sourcePlan.selected && sourcePlan.selected.kind === 'compose') {
+    deployOps.get(id).executor = 'repository-compose';
+    const result = await deployRepositoryCompose(meta, dir, buildCodeDir, sourcePlan, opts, sourceSha);
+    if (localStage && localStage.retain) localStage.retain();
+    return result;
+  }
+  if (meta.executor === 'repository-compose') throw new Error('The repository Compose entrypoint is missing; restore its instructions before deploying (existing services are untouched)');
   // Only a supported, complete source plan may reach the panel's executor.
   // Normalize the persisted project before its first Docker command.
   try {
@@ -1477,7 +1524,7 @@ async function deployNow(id, opts = {}) {
         const tpl = path.join(TEMPLATES_DIR, 'php', 'Dockerfile');
         try {
           const current = fs.readFileSync(df, 'utf8').replace(/\r\n/g, '\n').trim();
-          if ((current.startsWith('# minipass template') || current === LEGACY_PANEL_PHP_DOCKERFILE) && fs.existsSync(tpl)) {
+          if ((standardDockerfileType(ctxDir, TEMPLATES_DIR) === 'php' || current === LEGACY_PANEL_PHP_DOCKERFILE) && fs.existsSync(tpl)) {
             fs.copyFileSync(tpl, df);
           }
         } catch {}
@@ -1601,6 +1648,7 @@ async function deployNow(id, opts = {}) {
   // atomic deploy: snapshot running images, build WITHOUT touching containers,
   // swap only on success, health-gate the new containers, roll back on failure.
   const snaps = await snapshotImages(id, dir);
+  const verifierImage = await ensureBrowserVerifier(id, dir);
   checkCancelled(id);
   const scopeSuffix = scope ? ` ${scope}` : '';
   fs.appendFileSync(buildLog, '--- Docker image build ---\n');
@@ -1668,7 +1716,15 @@ async function deployNow(id, opts = {}) {
     await recordDeploy(id, { sha, at: stamp(), status: 'error', error: ('new containers unhealthy - rolled back: ' + gate.detail).slice(-500) });
     throw new Error('new containers unhealthy - rolled back: ' + gate.detail);
   }
-  await recordDeploy(id, { sha, at: stamp(), status: 'ok', services: only.length ? only : svc.fullServices(meta, dir).filter(s => s.enabled !== false).map(s => s.name) });
+  const verification = await verifyPublishedApplication(meta, dir, buildCodeDir, verifierImage, null, opts.originHost);
+  if (!verification.ok) {
+    await rollbackImages(dir, snaps);
+    if (!snaps.length) await sh(`${composeCmd} stop`, dir);
+    const failure = 'Browser/API verification failed: ' + verification.errors.join('; ');
+    await recordDeploy(id, { sha, at: stamp(), status: 'error', error: failure.slice(0, 2000), verification });
+    throw new Error(failure);
+  }
+  await recordDeploy(id, { sha, at: stamp(), status: 'ok', verification, services: only.length ? only : svc.fullServices(meta, dir).filter(s => s.enabled !== false).map(s => s.name) });
   // Landing-path discovery is optional follow-up work. Do not hold the deploy
   // lock (and keep the UI pulsing) after the release is already healthy/live.
   autodetectHome(id).catch(e => console.error(id, 'home detection:', e.message));
@@ -1677,6 +1733,11 @@ async function deployNow(id, opts = {}) {
     // Also retain failures before the build stage (quota checks, staging, etc.).
     // Stage-specific failures already recorded above must not be duplicated.
     const op = deployOps.get(id);
+    try {
+      const verificationFile = path.join(appDir(APPS_DIR, id), '.verification.json');
+      const current = JSON.parse(fs.readFileSync(verificationFile, 'utf8'));
+      if (current.pending) fs.writeFileSync(verificationFile, JSON.stringify({ ...current, pending: false, errors: ['Browser verification was not reached: ' + panelLog.redact(e.message).slice(0, 1000)] }), { mode: 0o600 });
+    } catch {}
     if (op && !op.failureRecorded) {
       await recordDeploy(id, { at: new Date().toISOString(), status: 'error',
         error: panelLog.redact(e.message).slice(0, 2000) });
@@ -1697,6 +1758,93 @@ async function deployNow(id, opts = {}) {
       } catch (e) { console.error(id, 'image inventory unavailable:', e.message); }
     }
   }
+}
+function deploymentRunners(id, dir) {
+  const options = { cwd: dir, detached: process.platform !== 'win32', onSpawn: child => trackDeployChild(id, child) };
+  return {
+    run: (bin, args, extra = {}) => { const { cleanup, ...opts } = extra; if (!cleanup) checkCancelled(id); return runOut(bin, args, { ...options, ...opts }); },
+    logged: (bin, args, extra = {}) => { checkCancelled(id); return runLogged(bin, args, { ...options, logFile: path.join(dir, 'deploy.log'), ...extra }); }
+  };
+}
+async function ensureBrowserVerifier(id, dir) {
+  fs.appendFileSync(path.join(dir, 'deploy.log'), '--- checking isolated browser verification engine ---\n');
+  return browserVerification.ensure({ docker: DOCKER_BIN, templates: TEMPLATES_DIR, dataDir: path.dirname(DATA_FILE), ...deploymentRunners(id, dir) });
+}
+async function verifyPublishedApplication(meta, dir, root, image, model = null, requestedHost = null) {
+  const services = model ? model.services.filter(s => s.role === 'application') : svc.fullServices(meta, dir).filter(s => s.enabled !== false);
+  const host = requestedHost || meta.accessHost || 'host.docker.internal';
+  const originHost = /^(?:localhost|127\.0\.0\.1|::1)$/.test(host) ? 'host.docker.internal' : host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  const publicUrl = meta.publicUrl || (meta.domain ? `https://${meta.domain}` : null);
+  const targets = browserVerification.targetsFor({ services, config: model && model.config, root, originHost, publicUrl, homePath: meta.homePath || '' });
+  // The helper joins an actual project network, not an assumed *_default.
+  const inspected = await repositoryCompose.inspectProject({ id: meta.id, docker: DOCKER_BIN, ...deploymentRunners(meta.id, dir) });
+  const names = new Set(services.map(s => s.name));
+  const network = [...new Set(inspected.filter(c => names.has(c.Config.Labels['com.docker.compose.service']) || model && model.categories && model.categories[c.Config.Labels['com.docker.compose.service']] === 'routing').flatMap(c => Object.keys(c.NetworkSettings.Networks || {})))];
+  if (!network.length) throw new Error('No application network is available for website/API verification');
+  if (model && model.config['x-minipass']) for (const target of targets.targets) {
+    const route = (model.config['x-minipass'].routes || []).find(r => r.service === target.service);
+    if (route) target.release = route.release;
+  }
+  return browserVerification.execute({ id: meta.id, dir, image, docker: DOCKER_BIN, network, ...targets, ...deploymentRunners(meta.id, dir), check: () => checkCancelled(meta.id) });
+}
+async function deployRepositoryCompose(meta, dir, root, plan, opts, sourceSha) {
+  const io = deploymentRunners(meta.id, dir);
+  const entrypoint = { ...plan.selected };
+  const config = await repositoryCompose.resolve({ compose: composeArgv(), id: meta.id, dir, root, entrypoint, run: io.run });
+  // Publish only keys and redacted command summaries from the authoritative
+  // combined model. Literal env values never enter the report/API response.
+  const resolvedTopology = require('./lib/compose-read').parseCompose(require('yaml').stringify(config),entrypoint.file);
+  const safeSummary = deploymentPlan.analyzeResolvedTopology(resolvedTopology);
+  fs.writeFileSync(path.join(dir,'.resolved-plan.json'),JSON.stringify({fingerprint:plan.fingerprint,envDigest:crypto.createHash('sha256').update(fs.readFileSync(path.join(dir,'.env'))).digest('hex'),topology:safeSummary}),{mode:0o600});
+  plan.topology=safeSummary;plan.resolved=true;
+  plan.blockers=plan.blockers.filter(b=>!['REQUIRED_ENV','MISSING_RECIPE','MISSING_DEPENDENCY','MISSING_ENV_FILE'].includes(b.code));
+  plan.ready=plan.blockers.length===0;deploymentPlan.persist(dir,plan);
+  await repositoryCompose.inferImagePorts(config, { docker: DOCKER_BIN, ...io });
+  await quotas.ensure(meta);
+  // Preserve claims held by the same declared service, but do not steal a port
+  // from a differently named old service during executor/source migration.
+  const bound = portsLib.parsePublishedPorts(String(await io.run(DOCKER_BIN, ['ps', '--format', '{{.ID}} {{.Ports}}'])));
+  const own = await repositoryCompose.inspectProject({ id: meta.id, docker: DOCKER_BIN, run: io.run });
+  const occupied = new Set(bound.keys());
+  for (const c of own) {
+    let service = c.Config.Labels['com.docker.compose.service'];
+    if (!config.services[service] && String(c.Config.Image).startsWith('minipass/publisher:')) {
+      const upstream = (c.Config.Env || []).find(e => e.startsWith('UPSTREAM='));
+      try { service = new URL(upstream.slice('UPSTREAM='.length)).hostname; } catch {}
+    }
+    if (!config.services[service]) continue;
+    for (const values of Object.values(c.NetworkSettings.Ports || {})) for (const p of values || []) {
+      const port = Number(p.HostPort), holders = bound.get(port) || new Set();
+      if ([...holders].every(cid => own.some(own => own.Id.startsWith(cid)))) occupied.delete(port);
+    }
+  }
+  for (const site of load().apps.filter(a => a.id !== meta.id)) for (const s of svc.fullServices(site, appDir(APPS_DIR, site.id))) if (s.hostPort) occupied.add(Number(s.hostPort));
+  const model = repositoryCompose.prepare(config, { id: meta.id, dir, root, meta: { ...meta, deploymentEntrypoint: entrypoint }, occupied: [...occupied] });
+  const apps = model.services.filter(s => s.role === 'application').sort((a, b) => Number(b.frontend) - Number(a.frontend));
+  const primary = apps.find(s => s.hostPort) || apps[0];
+  if (primary) primary.primary = true;
+  model.services = [...apps, ...model.services.filter(s => s.role !== 'application')];
+  const browser = await ensureBrowserVerifier(meta.id, dir);
+  const publisher = await publication.ensure({ docker: DOCKER_BIN, templates: TEMPLATES_DIR, ...io });
+  publication.add(model, publisher, meta.id);
+  model.services.push(...repositoryCompose.publicServices(model.config, root).filter(s => s.role === 'routing'));
+  const result = await repositoryCompose.deploy({ model, compose: composeArgv(), docker: DOCKER_BIN, id: meta.id, dir, ...io,
+    check: () => checkCancelled(meta.id), notify: phase => fs.appendFileSync(path.join(dir, 'deploy.log'), `--- repository ${phase} ---\n`),
+    verify: m => verifyPublishedApplication(meta, dir, root, browser, m, opts.originHost) });
+  const db_ = load();
+  const stored = db_.apps.find(a => a.id === meta.id);
+  Object.assign(stored, { executor: 'repository-compose', deploymentEntrypoint: entrypoint, services: apps, repositoryServices: model.services,
+    composePorts: model.ports, hostPort: primary && primary.hostPort || null, type: primary && primary.type || meta.type,
+    composeSource: root === path.join(dir, 'code') ? null : root, publicUrl: meta.publicUrl || null, db: [] });
+  for (const page of result.verification.pages || []) {
+    const service = apps.find(s => s.name === page.service);
+    if (service) service.homePath = new URL(page.url).pathname;
+  }
+  if (primary) stored.homePath = primary.homePath === '/' ? '' : primary.homePath || '';
+  save(db_);
+  await recordDeploy(meta.id, { sha: sourceSha || await currentSha(dir), at: new Date().toISOString(), status: 'ok',
+    services: apps.map(s => s.name), verification: result.verification, tasks: result.tasks });
+  return true;
 }
 
 app.get('/api/apps/:id/build-log', (req, res) => {
@@ -1762,7 +1910,8 @@ async function appContainers(id) {
       service: c.Service || c.service || c.Name || c.name,
       image: c.Image || c.image,
       state: c.State || c.state,
-      status: c.Status || c.status
+      status: c.Status || c.status,
+      role: ((load().apps.find(a => a.id === id) || {}).repositoryServices || []).find(s => s.name === (c.Service || c.service))?.role || 'application'
     }));
   } catch {}
   return containers;
@@ -1904,7 +2053,7 @@ app.post('/api/apps/:id/deploy', async (req, res) => {
     const skipSync = (req.body && req.body.source) === 'local';
     const pushedSha = /^[0-9a-f]{40}$/.test((req.body && req.body.sha) || '') ? req.body.sha : null;
     const pushedBranch = /^[A-Za-z0-9._/-]{1,64}$/.test((req.body && req.body.branch) || '') ? req.body.branch : null;
-    await deploy(req.params.id, { only, source, skipSync, pushedSha, pushedBranch });
+    await deploy(req.params.id, { only, source, skipSync, pushedSha, pushedBranch, originHost: req.hostname });
     res.json({ ok: true, redeployed: true, services: only.length ? only : undefined });
   }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
@@ -2293,7 +2442,10 @@ app.get('/api/apps/:id/deployment-plan', (req, res) => {
     // while it is being reviewed/built. Otherwise rescan source, including edits
     // performed outside the panel; persisted reports are not trusted as current.
     if (deployLocks.has(meta.id) && fs.existsSync(path.join(dir, '.deployment-plan.json'))) return res.json(JSON.parse(fs.readFileSync(path.join(dir, '.deployment-plan.json'), 'utf8')));
-    res.json(refreshDeploymentPlan(meta, dir));
+    const plan = refreshDeploymentPlan(meta, dir, meta.composeSource || path.join(dir, 'code'));
+    try { plan.verification = JSON.parse(fs.readFileSync(path.join(dir, '.verification.json'), 'utf8')); } catch {}
+    plan.publicUrl = meta.publicUrl || '';
+    res.json(plan);
   } catch (e) { res.status(500).json({ error: 'Deployment analysis failed: ' + e.message }); }
 });
 app.post('/api/apps/:id/deployment-plan', async (req, res) => {
@@ -2305,7 +2457,8 @@ app.post('/api/apps/:id/deployment-plan', async (req, res) => {
     const dir = appDir(APPS_DIR, meta.id);
     const previous = refreshDeploymentPlan(meta, dir);
     const choice = req.body.selection;
-    if (choice !== null && (!choice || !previous.candidates.some(c => c.kind === choice.kind && c.file === choice.file))) return res.status(400).json({ error: 'choose a discovered deployment entrypoint' });
+    if (meta.executor === 'repository-compose' && choice && choice.kind !== 'compose') return res.status(409).json({ error: 'This site runs a repository-owned topology; changing to a single generated service requires an explicit site/data migration' });
+    if (choice !== null && (!choice || !previous.candidates.some(c => c.kind === choice.kind && c.file === choice.file && JSON.stringify(c.files || [c.file]) === JSON.stringify(choice.files || [choice.file]) && JSON.stringify(c.profiles || []) === JSON.stringify(choice.profiles || [])))) return res.status(400).json({ error: 'choose a discovered deployment entrypoint' });
     if (choice && choice.kind === 'dockerfile' && previous.candidates.some(c => c.kind === 'compose')) return res.status(409).json({ error: 'a single Dockerfile cannot replace the declared Compose topology' });
     if (choice && choice.kind === 'dockerfile') {
       const services = svc.fullServices(meta, dir);
@@ -2317,12 +2470,40 @@ app.post('/api/apps/:id/deployment-plan', async (req, res) => {
       meta.services = services;
       svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
     }
-    if (choice) meta.deploymentEntrypoint = { kind: choice.kind, file: choice.file };
+    if (choice) meta.deploymentEntrypoint = { kind: choice.kind, file: choice.file, ...(choice.files ? { files: choice.files, profiles: choice.profiles || [] } : {}) };
     else delete meta.deploymentEntrypoint;
     save(db_);
     await markDirty(meta.id, 'deployment entrypoint saved');
     res.json({ ok: true, saved: true, pending: true, plan: refreshDeploymentPlan(meta, dir) });
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/apps/:id/verification', async (req, res) => {
+  try {
+    if (deployQueues.has(req.params.id) || deployLocks.has(req.params.id)) return res.status(409).json({ error: 'wait for deployment to finish' });
+    const db_ = load(); const meta = db_.apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    meta.publicUrl = req.body.url ? browserVerification.validPublicUrl(String(req.body.url).trim()) : null;
+    save(db_);
+    await markDirty(meta.id, 'public verification URL saved');
+    res.json({ ok: true, saved: true, publicUrl: meta.publicUrl });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/apps/:id/verification/screenshot/:index', (req, res) => {
+  if (!load().apps.some(a => a.id === req.params.id) || !/^\d{1,2}$/.test(req.params.index)) return res.status(404).end();
+  const file = path.join(appDir(APPS_DIR, req.params.id), `.verification-${Number(req.params.index)}.png`);
+  if (!fs.existsSync(file)) return res.status(404).end();
+  res.set('Cache-Control', 'no-store').sendFile(file);
+});
+// Repository-owned services are changed in their source instructions, not by
+// reconstructing topology through the generated-service/database controls.
+app.use('/api/apps/:id', (req, res, next) => {
+  if (req.method === 'GET' || !/^\/(?:services(?:\/|$)|db$|api-backend$)/.test(req.path)) return next();
+  const meta = load().apps.find(a => a.id === req.params.id);
+  if (!meta) return next();
+  let owned = meta.executor === 'repository-compose';
+  try { const plan = JSON.parse(fs.readFileSync(path.join(appDir(APPS_DIR, meta.id), '.deployment-plan.json'), 'utf8')); owned = owned || plan.selected && plan.selected.kind === 'compose'; } catch {}
+  if (owned) return res.status(409).json({ error: 'This service/database/routing topology is repository-owned. Edit its Compose instructions or environment, then redeploy the whole project.' });
+  next();
 });
 app.get('/api/apps/:id/services', (req, res) => {
   const meta = load().apps.find(a => a.id === req.params.id);
@@ -2333,7 +2514,9 @@ app.get('/api/apps/:id/services', (req, res) => {
     try { buildProfiles[s.name] = { ...localBuildProfile(path.join(dir, 'code', s.subdir || ''), TEMPLATES_DIR), modernize: !!((s.buildOptions || (s.name === 'app' && meta.buildOptions) || {}).modernize) }; }
     catch (e) { buildProfiles[s.name] = { kind: null, warnings: [e.message] }; }
   }
-  res.json({ services: publicServices(meta, dir), buildProfiles, dirty: meta.dirty || null, homePath: pubApp(meta).homePath, homePathManual: !!meta.homePathManual });
+  let repositoryOwned = meta.executor === 'repository-compose';
+  try { const p = JSON.parse(fs.readFileSync(path.join(dir, '.deployment-plan.json'), 'utf8')); repositoryOwned = repositoryOwned || p.selected && p.selected.kind === 'compose'; } catch {}
+  res.json({ services: publicServices(meta, dir), repositoryServices: meta.repositoryServices || [], repositoryOwned: !!repositoryOwned, buildProfiles, dirty: meta.dirty || null, homePath: pubApp(meta).homePath, homePathManual: !!meta.homePathManual });
 });
 // Select which Dockerfile variant a service builds with (Dockerfile.web
 // etc.). Save without redeploying; toasts say redeploy to apply. Clearing
@@ -3035,7 +3218,10 @@ app.post('/api/apps/:id/regenerate', (req, res) => {
 app.get('/api/apps/:id/logs', async (req, res) => {
   try {
     // service names go to the shell - strict charset or no logs
-    const svcName = /^[A-Za-z0-9_-]{1,32}$/.test(req.query.service || '') ? req.query.service : 'app';
+    const meta = load().apps.find(a => a.id === req.params.id);
+    if (!meta) return res.status(404).json({ error: 'unknown app' });
+    const fallback = (svc.fullServices(meta, appDir(APPS_DIR, meta.id))[0] || {}).name || 'app';
+    const svcName = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(req.query.service || '') ? req.query.service : fallback;
     const tail = Math.max(10, Math.min(500, parseInt(req.query.tail, 10) || 100));
     const out = await sh(`${COMPOSE_BIN} logs --tail=${tail} ${svcName}`, appDir(APPS_DIR, req.params.id));
     res.type('text/plain').send(out);
@@ -3242,7 +3428,14 @@ app.post('/api/apps/:id/sync-github', async (req, res) => {
 app.post('/api/apps/:id/stop', async (req, res) => {
   try {
     const cancelledDeploy = cancelDeploy(req.params.id);
-    await siteLifecycle(req.params.id, async () => { dbTools.stopAll(req.params.id); await sh(`${COMPOSE_BIN} stop`, appDir(APPS_DIR, req.params.id)); }, { allowDeploy: cancelledDeploy });
+    await siteLifecycle(req.params.id, async () => {
+      dbTools.stopAll(req.params.id);
+      const meta = load().apps.find(a => a.id === req.params.id);
+      if (meta && (meta.executor === 'repository-compose' || deployOps.get(meta.id) && deployOps.get(meta.id).executor === 'repository-compose')) {
+        const all = await repositoryCompose.inspectProject({ id: meta.id, docker: DOCKER_BIN, run: runOut });
+        if (all.length) await runOut(DOCKER_BIN, ['stop', ...all.map(c => c.Id)]);
+      } else await sh(`${COMPOSE_BIN} stop`, appDir(APPS_DIR, req.params.id));
+    }, { allowDeploy: cancelledDeploy });
     res.json({ ok: true, cancelledDeploy });
   }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
@@ -3253,9 +3446,19 @@ app.post('/api/apps/:id/start', async (req, res) => {
     const dir = appDir(APPS_DIR, req.params.id);
     if (!meta) throw lifecycleError('unknown app', 404);
     const existing = await appContainers(meta.id);
-    if (!existing.length && !meta.lastGoodDeploy) throw lifecycleError('site has not been deployed yet - use Deploy first', 409);
+    if (!meta.lastGoodDeploy) throw lifecycleError('site has no verified release yet - use Deploy first', 409);
     if (meta && meta.storageQuota) await quotas.verifyDatabases(meta.id, dir);
-    await sh(`${COMPOSE_BIN}${meta && meta.storageQuota ? ` -p ${meta.id}` : ''} up -d`, dir);
+    if (meta.executor === 'repository-compose') {
+      const config = require('yaml').parse(fs.readFileSync(path.join(dir,'docker-compose.yml'),'utf8'));
+      const roles = repositoryCompose.roles(config);
+      const names = Object.keys(config.services).filter(n=>roles[n]!=='task');
+      const ca = composeArgv();
+      await runOut(ca[0],[...ca.slice(1),'-p',meta.id,'up','-d','--no-deps','--no-build','--pull','never',...names],{cwd:dir});
+    } else await sh(`${COMPOSE_BIN}${meta && meta.storageQuota ? ` -p ${meta.id}` : ''} up -d`, dir);
+    const image = await ensureBrowserVerifier(meta.id, dir);
+    const model = meta.executor === 'repository-compose' ? { config: require('yaml').parse(fs.readFileSync(path.join(dir, 'docker-compose.yml'), 'utf8')), services: meta.repositoryServices || meta.services } : null;
+    const verification = await verifyPublishedApplication(meta, dir, meta.composeSource || path.join(dir, 'code'), image, model, req.hostname);
+    if (!verification.ok) { await sh(`${COMPOSE_BIN} stop`, dir); throw new Error('Start verification failed: ' + verification.errors.join('; ')); }
   }); res.json({ ok: true }); }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
@@ -3395,6 +3598,17 @@ app.put('/api/apps/:id/env', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 function applyEnvDefaults(meta, dir, hostname, protocol, requestedKeys) {
+  const ownedPlan = refreshDeploymentPlan(meta, dir);
+  if (ownedPlan.selected && ownedPlan.selected.kind === 'compose') {
+    const folder = path.posix.dirname(ownedPlan.selected.file);
+    const snapshot = envDefaults.snapshotDefaults(dir, path.join(dir,'code'), [{ name:'compose-inputs', subdir:folder==='.'?'':folder, type:meta.type, enabled:true }]);
+    const envPath = path.join(dir,'.env');
+    const present = new Set(readEnvVars(envPath).map(v=>v.key));
+    const managed = managedKeys(dir);
+    const allowed = Object.keys(snapshot.values).filter(k=>!present.has(k)&&!managed.has(k)&&(!Array.isArray(requestedKeys)||!requestedKeys.length||requestedKeys.includes(k)));
+    if (allowed.length) fs.appendFileSync(envPath, '\n# Repository-declared Compose input defaults (review values)\n'+allowed.map(k=>`${k}=${snapshot.values[k]}`).join('\n')+'\n');
+    return { added:allowed, updated:[], origins:{frontend:null,backend:null}, defaultSources:snapshot.sources, pending:true, repositoryOwned:true };
+  }
   const services = svc.fullServices(meta, dir);
   const origins = envDefaults.publishedOrigins(services, hostname, protocol);
   if (meta && meta.apiBackend && origins.frontend) {
@@ -3591,7 +3805,7 @@ app.post('/api/trash/:id/restore', async (req, res) => {
     }
     for (const s of (meta.services || [])) {
       if (!s.hostPort) continue;
-      if (s.name === 'app' && meta.hostPort) { s.hostPort = meta.hostPort; continue; }
+      if ((s.name === 'app' || s.primary) && meta.hostPort) { s.hostPort = meta.hostPort; continue; }
       const p = claim(s.hostPort);
       if (p !== parseInt(s.hostPort, 10)) moved.push({ service: s.name, from: s.hostPort, to: p });
       s.hostPort = p;
@@ -3608,7 +3822,16 @@ app.post('/api/trash/:id/restore', async (req, res) => {
     let restarted = false, restartError = null;
     try {
       if (meta.storageQuota) await quotas.verifyDatabases(meta.id, dir);
-      await sh(`${COMPOSE_BIN} -p ${meta.id} up -d`, dir); restarted = true;
+      if (meta.executor === 'repository-compose') {
+        const ca = composeArgv(); const config = require('yaml').parse(fs.readFileSync(path.join(dir,'docker-compose.yml'),'utf8'));
+        const roles = repositoryCompose.roles(config);
+        await runOut(ca[0],[...ca.slice(1),'-p',meta.id,'up','-d','--no-deps','--no-build','--pull','never',...Object.keys(config.services).filter(n=>roles[n]!=='task')],{cwd:dir});
+      } else await sh(`${COMPOSE_BIN} -p ${meta.id} up -d`, dir);
+      const image = await ensureBrowserVerifier(meta.id, dir);
+      const model = meta.executor === 'repository-compose' ? { config: require('yaml').parse(fs.readFileSync(path.join(dir,'docker-compose.yml'),'utf8')), services: meta.repositoryServices || meta.services } : null;
+      const report = await verifyPublishedApplication(meta, dir, meta.composeSource || path.join(dir,'code'), image, model, req.hostname);
+      if (!report.ok) { await sh(`${COMPOSE_BIN} -p ${meta.id} stop`,dir); throw new Error('Restore verification failed: '+report.errors.join('; ')); }
+      restarted = true;
     }
     catch (e) { restartError = e.message; }
     try { await markDirty(meta.id, 'restored from trash'); } catch {}
@@ -4007,8 +4230,10 @@ wss.on('connection', (ws, req) => {
   const id = q.get('app');
   const meta = id && load().apps.find(a => a.id === id);
   if (!meta) { ws.send('unknown website\r\n'); return ws.close(1008, 'unknown website'); }
-  const service = /^[A-Za-z0-9_-]{1,32}$/.test(q.get('service') || '') ? q.get('service') : 'app';
   const dir = appDir(APPS_DIR, id);
+  const services = svc.fullServices(meta, dir);
+  const requested = q.get('service');
+  const service = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(requested || '') && (requested !== 'app' || services.some(s => s.name === 'app')) ? requested : (services[0] || {}).name || 'app';
   let cid = '';
   try { cid = execSync(`${COMPOSE_BIN} ps -q ${service}`, { cwd: dir }).toString().trim().split('\n')[0]; }
   catch {}

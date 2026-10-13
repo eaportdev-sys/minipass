@@ -123,6 +123,7 @@ function fullServices(meta, dir) {
 // Rewrite compose: fresh ENABLED app services, verbatim db blocks + volumes.
 // Throws when nothing would run (refuses to strand an empty project).
 function renderProject({ dir, templatesDir, meta }) {
+  if (meta.executor === 'repository-compose') return require('./repository-compose').syncPublishedPorts(dir, meta);
   const all = fullServices(meta, dir);
   const enabled = all.filter(s => s.enabled !== false);
   if (!enabled.length) throw new Error('cannot disable the last running service - delete the app instead');

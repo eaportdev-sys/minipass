@@ -48,6 +48,14 @@ async function ensure(meta) {
 
 function databaseBindings(dir) {
   const text = fs.readFileSync(path.join(dir, 'docker-compose.yml'), 'utf8');
+  if (text.includes('repository-compose')) {
+    const model = require('yaml').parse(text);
+    if (model['x-minipass'] && model['x-minipass'].executor === 'repository-compose') return Object.entries(model.volumes || {}).filter(([, v]) => v.driver_opts).map(([name, v]) => {
+      const device = path.join(dir, '.volumes', name).replace(/\\/g, '/');
+      if (v.driver !== 'local' || v.driver_opts.type !== 'none' || v.driver_opts.o !== 'bind' || v.driver_opts.device !== device) throw new Error('repository volume is outside the site storage allowance');
+      return { name, device };
+    });
+  }
   const offset = text.search(/^volumes:[ \t]*\r?$/m);
   if (offset < 0) return [];
   const volumes = text.slice(offset);

@@ -78,7 +78,7 @@ function appLinksMarkup(a, services) {
   if (!services.length) return '<span class="website-facts">Not published</span>';
   return services.map(s => {
     const path = s.homePath != null ? s.homePath : (s.name === 'app' ? (a.homePath || '') : '');
-    const url = `http://${location.hostname}:${s.hostPort}${path}`;
+    const url = publishedServiceUrl(a, { ...s, homePath: path });
     return `<a class="website-url" href="${safeHtml(url)}" title="${safeHtml((s.name || 'app') + ': ' + url)}" target="_blank" rel="noopener noreferrer">${services.length > 1 ? '<span>' + safeHtml(s.name) + '</span>' : ''}<span>${safeHtml(url.replace(/^http:\/\//, ''))}</span><span aria-hidden="true">↗</span></a>`;
   }).join('');
 }
@@ -100,6 +100,14 @@ function setAppCardState(id, state, running, canStart = true) {
     : running ? `<button onclick="stopApp('${id}')" aria-label="Stop ${safeHtml(id)}">Stop</button>`
       : canStart ? `<button onclick="startApp('${id}')" aria-label="Start ${safeHtml(id)}">Start</button>`
         : `<button onclick="deploy('${id}')" aria-label="Deploy ${safeHtml(id)}">Deploy</button>`;
+}
+function publishedServiceUrl(a, s) {
+  const publicUrl = a.publicUrl || (a.executor === 'repository-compose' && a.domain ? `https://${a.domain}` : null);
+  if (publicUrl && (s.primary || s.hostPort === a.hostPort)) {
+    const origin = (publicUrl.match(/^https?:\/\/[^/]+/) || [publicUrl])[0];
+    return s.homePath ? origin + (s.homePath.startsWith('/') ? s.homePath : '/' + s.homePath) : publicUrl;
+  }
+  return `${s.scheme || 'http'}://${location.hostname}:${s.hostPort}${s.homePath || ''}`;
 }
 async function websiteStatusRequest(id, current) {
   if (websiteStatusActive < 4) websiteStatusActive++;
@@ -133,4 +141,4 @@ async function hydrateAppCards(apps, seq, renderSeq = websiteRenderSeq) {
       }
     }
   }));
-}
+}

@@ -10,6 +10,7 @@ const bound = parsePublishedPorts(
 assert.deepEqual([...bound.keys()].sort((a, b) => a - b), [8003, 8004]);
 assert(bound.get(8003).has('aaa111'));
 assert(!bound.has(80), 'exposed-only ports are not bindings');
+assert(parsePublishedPorts('abc 0.0.0.0:8443->443/udp').has(8443), 'UDP publication claims are protected too');
 
 assert.equal(nextFreePort(8003, new Set([8003, 8004])), 8005);
 assert.equal(nextFreePort(8002, new Set([8003])), 8002);

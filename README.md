@@ -170,13 +170,39 @@ over 2 MiB, total text over 64 MiB, unreadable files, symlinks and unsupported t
 encodings are explicitly reported and block deployment rather than producing a
 pretend-complete report. UTF-8 is the supported source encoding.
 
-**Repository Compose execution is not yet supported.** Its declared services,
-completion-dependent one-shot tasks, build recipes, input/derived environment and
-dependency conditions are displayed, but the panel blocks deployment instead of
-replacing that topology with generated services. Multi-file Compose overlays and
-dynamic/out-of-tree deployment references require review and are not executed.
-Native host deployment is also not implemented. Source-plan checks passing do
-not certify the working website, assets, API or migrations.
+**Repository Compose is executed as declared.** Compose resolves interpolation,
+ordered overlays, includes/extends inside the checkout and selected profiles.
+The panel builds the declared recipes, starts database dependencies, runs each
+completion-dependent task once per release, then starts API/web services in
+dependency order. A failed migration stops before the application swap. Builds
+never rewrite repository Dockerfiles or substitute guessed npm/migration commands.
+
+Project names, image tags, networks and named volumes are site-isolated. Published
+ports allocate in 8000–8999 and remain stable across redeploys. A small publication
+proxy preserves response headers/CSP and adds a release identity; browser checks
+cannot accept another/old website at the public URL. Enter the real HTTPS URL in
+Deploy for HTTPS-only repositories (DNS/TLS/reverse-proxy setup is still external).
+Host privileges/devices, out-of-checkout mounts, external networks/volumes and
+custom storage drivers require explicit configuration/import rather than being
+silently applied. Existing database version/storage changes require a deliberate
+data migration; built database images require an explicit versioned-image upgrade
+path. Enforced site allowances also cover anonymous/image-declared data volumes;
+existing uncharged volumes require migration and are never erased. Database-admin
+images must be installed explicitly.
+
+Success requires healthy/steady services, exit-zero tasks and an isolated Chromium
+visit checking rendered content, stylesheet/script/image requests, uncaught browser
+errors and API requests. Unpublished HTTP APIs get direct source-route probes.
+Verification reports and browser screenshots persist in Deploy. Chromium is built
+into a cached helper image on first deployment (about 1 GB); the test container has
+no panel credentials, host mounts or Docker socket. Browser/application failure
+restores prior application/routing images and environment; database containers and
+data stay untouched. Schema migrations are **not** automatically reversed.
+
+No generic panel can infer arbitrary deployment prose as executable instructions.
+Ambiguous/dynamic references still require selection/review. Native host processes,
+Kubernetes deployment and authenticated business-flow tests are not implemented;
+these must not be represented as supported or as automatically verified.
 
 Jekyll repositories (`Gemfile` + `_config.yml` and Jekyll markers) are detected as
 **Static**, including those with a Webpack `package.json`. Their standard build

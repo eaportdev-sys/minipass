@@ -32,8 +32,8 @@ try {
   assert(plan.candidates.some(c => c.kind === 'dockerfile' && c.file === 'Dockerfile.compose'));
   assert(plan.scan.skipped.some(s => s.reason === 'binary file'));
   assert(plan.scan.skipped.some(s => s.file === 'node_modules/'));
-  assert(plan.blockers.some(b => b.code === 'COMPOSE_EXECUTOR_UNSUPPORTED'));
-  assert.equal(plan.ready, false);
+  assert(!plan.blockers.some(b => b.code === 'COMPOSE_EXECUTOR_UNSUPPORTED'));
+  assert.equal(plan.ready, true, 'valid Compose is now executable, not permanently blocked');
 
   const names = put('names', 'compose.dockerfile', recipe);
   put('names', 'Dockerfile.compose', 'services:\n  web:\n    build:\n      context: .\n      dockerfile: compose.dockerfile\n      target: runtime\n    environment:\n      APP_ORIGIN: https://${PUBLIC_DOMAIN:?set domain}\n      SECRET: literal-private-credential\n      OPTIONAL: ${OTHER:-literal-private-default}\n');
@@ -77,7 +77,8 @@ try {
   const overlay = put('overlays', 'base', 'services:\n  web:\n    image: nginx\n');
   put('overlays', 'prod', 'services:\n  web:\n    image: nginx\n');
   put('overlays', 'release.sh', 'docker compose -f base -f prod up\n');
-  assert(analyze(overlay).blockers.some(b => b.code === 'COMPOSE_OVERLAY'));
+  assert.deepEqual(analyze(overlay).selected.files, ['base', 'prod'], 'an ordered multi-file invocation is selected as one deployment path');
+  assert(!analyze(overlay).blockers.some(b => b.code === 'COMPOSE_OVERLAY'));
   const broken = put('broken', 'odd.entry', 'services:\n  web:\n    image: a\n    image: b\n');
   assert(analyze(broken).blockers.some(b => b.code === 'INVALID_COMPOSE'));
 

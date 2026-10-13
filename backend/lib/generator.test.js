@@ -55,6 +55,8 @@ try {
   const phpDockerfile = fs.readFileSync(path.resolve(__dirname, '../../templates/php/Dockerfile'), 'utf8');
   assert(phpDockerfile.startsWith('# minipass template'), 'PHP Dockerfile is marked as panel-owned');
   assert(phpDockerfile.includes('RUN a2enmod rewrite'), 'PHP image supports repository .htaccess rewrites');
+  assert(!/composer install[^\n]*\|\| true/.test(phpDockerfile), 'Composer failures must abort the build, not ship a missing dependency tree');
+  assert(phpDockerfile.indexOf('COPY . .') < phpDockerfile.indexOf('then composer install'), 'repository source is available to Composer lifecycle scripts');
 
   const appsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-create-docker-'));
   try {

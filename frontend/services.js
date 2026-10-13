@@ -7,10 +7,13 @@ async function loadServices() {
     if (currentApp !== appId) return;
     const list = r.services || [];
     const dirty = !!r.dirty;
+    document.getElementById('svcAddBtn').dataset.repositoryOwned = r.repositoryOwned ? '1' : '0';
+    document.getElementById('svcAddBtn').disabled = !!r.repositoryOwned;
+    document.getElementById('svcAddCheck').textContent = r.repositoryOwned ? 'Repository-owned topology: edit Compose instructions and redeploy the whole project.' : document.getElementById('svcAddCheck').textContent;
     document.getElementById('svcList').innerHTML = list.map(s => {
       const openPath = s.homePath || '';
-      const url = s.hostPort ? `http://${location.hostname}:${s.hostPort}${openPath}` : null;
-      const label = s.hostPort ? `${location.hostname}:${s.hostPort}${openPath}` : '';
+      const url = s.hostPort ? publishedServiceUrl(siteById(appId) || {}, { ...s, homePath: openPath }) : null;
+      const label = url ? url.replace(/^https?:\/\//, '') : '';
       const enabled = s.enabled !== false;
       const profile = (r.buildProfiles || {})[s.name];
       const dfs = Array.isArray(s.dockerfiles) ? s.dockerfiles : [];
@@ -25,14 +28,15 @@ async function loadServices() {
         `<div class="service-facts"><div><span>Published port</span><b>${s.hostPort ? `:${s.hostPort} → ${s.port}` : 'not published'}</b></div>` +
         `<div><span>Local URL</span>${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${safeHtml(label)}</a>` : '<b>unavailable</b>'}</div>${dfCell}</div>` +
         buildCard +
-        `<div class="service-card-actions"><button onclick="deploySvc('${s.name}')" ${dirty ? '' : 'disabled'}>redeploy</button>` +
+        `<div class="service-card-actions">` + (r.repositoryOwned ? '<span class="meta">Repository-owned service — deploy from the project plan.</span></div></div>' : `<button onclick="deploySvc('${s.name}')" ${dirty ? '' : 'disabled'}>redeploy</button>` +
         `<button onclick="toggleService('${s.name}', ${!enabled})">${enabled ? 'stop' : 'start'}</button>` +
-        (s.name === 'app' ? '' : `<button class="btn danger" onclick="removeService('${s.name}')">remove</button>`) + `</div></div>`;
+        (s.name === 'app' ? '' : `<button class="btn danger" onclick="removeService('${s.name}')">remove</button>`) + `</div></div>`);
     }).join('') || '<div class="meta">no services</div>';
     for (const selId of ['logSvc', 'termSvc']) {
       const sel = document.getElementById(selId);
       const prev = sel.value;
-      sel.innerHTML = list.filter(s => s.enabled !== false).map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+      const selectable = [...list, ...(r.repositoryServices || []).filter(s => !list.some(x => x.name === s.name))];
+      sel.innerHTML = selectable.filter(s => s.enabled !== false && (selId === 'logSvc' || s.role !== 'task')).map(s => `<option value="${s.name}">${s.name}${s.role ? ' (' + s.role + ')' : ''}</option>`).join('');
       if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
     }
     try {
@@ -46,7 +50,7 @@ async function loadServices() {
         ? `<div class="service-suggestion-label">Detected runnable folders</div><div class="service-suggestion-list">${fronts}${statics}${backs}</div>`
         : '<div class="service-suggestion-empty">No additional runnable folders detected.</div>';
     } catch {}
-    scheduleServiceCheck();
+    if (!r.repositoryOwned) scheduleServiceCheck();
   } catch {}
 }
 async function configureStaticBuild(name, needsModernization) {
@@ -83,6 +87,7 @@ function scheduleServiceCheck() {
   const btn = document.getElementById('svcAddBtn');
   const out = document.getElementById('svcAddCheck');
   if (!btn || !out) return;
+  if (btn.dataset.repositoryOwned === '1') { btn.disabled = true; out.textContent = 'Repository-owned topology: edit source instructions and redeploy the project.'; return; }
   if (serviceCheckTimer) clearTimeout(serviceCheckTimer);
   const seq = ++serviceCheckSeq;
   btn.disabled = true;

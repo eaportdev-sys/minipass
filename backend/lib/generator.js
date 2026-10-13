@@ -312,7 +312,7 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
 
   // 2. .env auto-generated
   const host = hostPort || 8000;
-  const dbs = normDbs(db);
+  const dbs = normDbs(hasDeclaredCompose ? 'none' : db);
   const safeName = name.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'app';
   let dbBlock = '', volBlock = '', extraLines = [];
   if (dbs.length <= 1) {
@@ -333,7 +333,7 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
     dbBlock = blocks.map(b => b.compose).join('\n') + '\n';
     volBlock = '\nvolumes:\n' + blocks.map(b => `  ${b.vol}:`).join('\n');
   }
-  const envLines = [
+  const envLines = hasDeclaredCompose ? [`DOMAIN=${domain || ''}`] : [
     `APP_NAME=${name}`, `APP_TYPE=${type}`, `PORT=${appPort}`, `HOST_PORT=${host}`,
     `DOMAIN=${domain || ''}`, ...extraLines
   ];

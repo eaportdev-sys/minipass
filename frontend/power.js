@@ -50,7 +50,7 @@ function appIsRunning(st) {
 }
 function appCrashed(st) {
   const containers = (st && st.containers) || [];
-  return containers.some(c => /restarting|exited|dead|failed/i.test((c && c.state) || ''));
+  return containers.some(c => c.role !== 'task' && /restarting|exited|dead|failed/i.test((c && c.state) || ''));
 }
 function appCanStart(st) {
   const containers = (st && st.containers) || [];
@@ -82,4 +82,4 @@ let manualDeployActive = null;
 let manualOpShown = null;
 // The Websites list has no open site, so the 3s detail poller below stays
 // idle there. Poll visible cards on a slower cadence instead, or a background
-// create-build looks stuck at "checking…/busy…" for its whole run.
+// create-build looks stuck at "checking…/busy…" for its whole run.

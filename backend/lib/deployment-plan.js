@@ -26,7 +26,8 @@ function references(text, source) {
       files.push(file);
     }
     const linePrefix = text.slice(text.lastIndexOf('\n', match.index) + 1, match.index);
-    if (files.length) refs.push({ source, kind, files, documentation: /\.(?:md|rst|txt)$/i.test(source) || /^\s*#/.test(linePrefix) });
+    const profiles = [...match[1].matchAll(/(?:^|\s)--profile(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s"'<>|&]+))/g)].map(m => m[1] || m[2] || m[3]);
+    if (files.length) refs.push({ source, kind, files, profiles, documentation: /\.(?:md|rst|txt)$/i.test(source) || /^\s*#/.test(linePrefix) });
   }
   return refs;
 }
@@ -71,8 +72,7 @@ function analyze(root, { selection = null, services = [], templatesDir, env = {}
   const evidence = [];
   for (const reference of refs) {
     const targets = reference.files.map(f => relativeReference(root, reference.source, f));
-    evidence.push({ source: reference.source, kind: reference.kind, files: targets.filter(Boolean), documentation: reference.documentation });
-    if (reference.kind === 'compose' && reference.files.length > 1 && !reference.documentation) issue('COMPOSE_OVERLAY', 'This deployment command combines multiple files. Overlay execution is not supported; do not deploy only one of them.', reference.source);
+    evidence.push({ source: reference.source, kind: reference.kind, files: targets.filter(Boolean), profiles: reference.profiles, documentation: reference.documentation });
     for (let i = 0; i < targets.length; i++) {
       if (!targets[i]) {
         const message = 'A deployment file reference is missing, dynamic, or outside the source tree. Select and review the entrypoint.';
@@ -83,6 +83,15 @@ function analyze(root, { selection = null, services = [], templatesDir, env = {}
       }
     }
   }
+  // Preserve a declared ordered invocation as one selectable entrypoint. Do not
+  // hand-merge YAML: Compose will apply overlay/include/extends semantics.
+  const invocationKey = c => JSON.stringify([c.files || [c.file], c.profiles || []]);
+  for (const e of evidence.filter(e => e.kind === 'compose' && (e.files.length > 1 || e.profiles.length))) {
+    if (!e.files.length || e.files.some(f => !candidates.some(c => c.kind === 'compose' && c.file === f))) continue;
+    const first = candidates.find(c => c.kind === 'compose' && c.file === e.files[0]);
+    const group = { kind: 'compose', file: e.files[0], files: e.files, profiles: e.profiles, topology: first.topology };
+    if (!candidates.some(c => c.files && invocationKey(c) === invocationKey(group))) candidates.push(group);
+  }
   if (!scan.complete) issue('INCOMPLETE_SCAN', 'Some source files were not analyzed. Review the listed exclusions/errors before deploying.');
   const compose = candidates.filter(c => c.kind === 'compose');
   const docker = candidates.filter(c => c.kind === 'dockerfile');
@@ -91,13 +100,20 @@ function analyze(root, { selection = null, services = [], templatesDir, env = {}
   const eligible = compose.length ? compose : authored.length ? authored : docker.filter(c => !services.length || folders.has(path.posix.dirname(c.file)));
   let selected = null, reason = null;
   if (selection) {
-    selected = candidates.find(c => c.kind === selection.kind && c.file === selection.file);
+    selected = candidates.find(c => c.kind === selection.kind && c.file === selection.file && invocationKey(c) === invocationKey(selection));
     if (!selected) issue('STALE_SELECTION', 'The saved deployment entrypoint is missing or no longer recognizable.', selection.file);
     else if (compose.length && selected.kind !== 'compose') issue('TOPOLOGY_NOT_FOLLOWED', 'Repository Compose declares a topology. Selecting a single Dockerfile does not implement those services or tasks.', selected.file);
     reason = 'Saved selection';
   } else {
+    const invocations = evidence.filter(e => e.kind === 'compose' && !e.documentation && e.files.length);
+    const groups = [...new Map(invocations.map(e => [invocationKey(e), e])).values()];
+    if (groups.length === 1 && (groups[0].files.length > 1 || groups[0].profiles.length)) {
+      selected = candidates.find(c => c.kind === 'compose' && c.files && invocationKey(c) === invocationKey(groups[0]));
+      reason = 'Ordered Compose files/profiles declared by repository command';
+    }
     const explicit = [...new Set(evidence.filter(e => !e.documentation).flatMap(e => e.files).filter(f => eligible.some(c => c.file === f)))];
-    if (explicit.length === 1 && !blockers.some(b => b.code === 'COMPOSE_OVERLAY')) {
+    if (selected) { /* a complete declared invocation already wins */ }
+    else if (explicit.length === 1) {
       selected = eligible.find(c => c.file === explicit[0]); reason = 'Referenced by repository deployment command';
     } else if (eligible.length === 1) { selected = eligible[0]; reason = 'Only discovered entrypoint of this kind'; }
     else if (eligible.length > 1) {
@@ -117,7 +133,11 @@ function analyze(root, { selection = null, services = [], templatesDir, env = {}
     topology = { file: t.file, services: t.services.map(s => ({ ...s, image: s.image == null ? null : preview(s.image), command: s.command == null ? null : preview(s.command), entrypoint: s.entrypoint == null ? null : preview(s.entrypoint) })),
       envNeeds: t.envNeeds.map(e => ({ key: e.key, required: e.required, services: e.services })) };
     for (const e of t.envNeeds) if (e.required && (!(e.key in env) || (!e.allowEmpty && !String(env[e.key]).trim()))) issue('REQUIRED_ENV', `Compose requires ${e.key}. Set it in Environment; derived service variables are not separate inputs.`, t.file);
-    for (const s of t.services) {
+    for (const ref of t.references || []) {
+      const relative = typeof ref.file === 'string' ? path.posix.normalize(path.posix.join(path.posix.dirname(t.file), ref.file)) : '';
+      if (!relative || !sourceFile(root, relative)) issue('MISSING_COMPOSE_REFERENCE', `Repository ${ref.kind} must refer to a readable file inside this checkout.`, t.file);
+    }
+    for (const s of selected.files && selected.files.length > 1 ? [] : t.services) {
       for (const dep of s.dependsOn) if (!t.services.some(d => d.name === dep)) issue('MISSING_DEPENDENCY', `Service ${s.name} depends on undeclared service ${dep}.`, t.file);
       for (const entry of s.envFiles) {
         const envPath = path.posix.normalize(path.posix.join(path.posix.dirname(t.file), entry.path || ''));
@@ -129,7 +149,7 @@ function analyze(root, { selection = null, services = [], templatesDir, env = {}
         if (!candidates.some(c => c.kind === 'dockerfile' && c.file === recipe)) issue('MISSING_RECIPE', `Service ${s.name} references an unreadable or unrecognized build recipe.`, recipe);
       }
     }
-    issue('COMPOSE_EXECUTOR_UNSUPPORTED', 'Repository Compose execution is not implemented by the panel service executor. Deployment is blocked rather than replacing its topology with generated services.', t.file);
+    warnings.push({ file: t.file, message: 'Compose will resolve the selected model before building. Its commands, derived environment and dependency conditions are executed as declared; browser/API verification must pass before success.' });
   } else if (!compose.length) {
     for (const s of services.filter(s => s.enabled !== false)) {
       const context = path.join(root, s.subdir || '');
@@ -149,8 +169,8 @@ function analyze(root, { selection = null, services = [], templatesDir, env = {}
   });
   return { version: 1, analyzedAt: new Date().toISOString(), fingerprint: scan.fingerprint, ready: blockers.length === 0,
     scan: { complete: scan.complete, files: scan.files.length, textFiles: scan.texts.size, bytes: scan.bytes, skipped: scan.skipped, issues: scan.issues },
-    selected: selected ? { kind: selected.kind, file: selected.file } : null, reason, selection: selection || null,
-    candidates: candidates.map(c => ({ kind: c.kind, file: c.file, generated: !!c.generated, complete: c.topology ? c.topology.complete : true })),
+    selected: selected ? { kind: selected.kind, file: selected.file, ...(selected.files ? { files: selected.files, profiles: selected.profiles || [] } : {}) } : null, reason, selection: selection || null,
+    candidates: candidates.map(c => ({ kind: c.kind, file: c.file, ...(c.files ? { files: c.files, profiles: c.profiles || [] } : {}), generated: !!c.generated, complete: c.topology ? c.topology.complete : true })),
     evidence, manifests, topology, services: servicePlans, blockers, warnings };
 }
 function persist(dir, plan) {
@@ -160,4 +180,7 @@ function persist(dir, plan) {
   fs.renameSync(tmp, file);
   return plan;
 }
-module.exports = { analyze, persist, references };
+function analyzeResolvedTopology(topology) {
+  return { file:topology.file, services:topology.services.map(s=>({...s, image:s.image==null?null:preview(s.image), command:s.command==null?null:preview(s.command),entrypoint:s.entrypoint==null?null:preview(s.entrypoint)})),envNeeds:topology.envNeeds.map(e=>({key:e.key,required:e.required,services:e.services})) };
+}
+module.exports = { analyze, persist, references, analyzeResolvedTopology };

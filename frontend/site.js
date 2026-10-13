@@ -65,7 +65,7 @@ function openSite(id, tab = 'overview', remember = true) {
 }
 function appUrl(a) {
   if (!a.hostPort) return null;
-  return `http://${location.hostname}:${a.hostPort}${a.homePath || ''}`;
+  return publishedServiceUrl(a, { hostPort: a.hostPort, primary: true, homePath: a.homePath || '' });
 }
 async function deployCurrent() {
   if (!currentApp) return;
@@ -145,4 +145,4 @@ async function refreshSiteData(expectedApp = currentApp) {
   if (currentApp !== expectedApp) return;
   await loadDeployStatus();
   await Promise.allSettled([loadServices(), loadDatabases(), loadMigrateSuggest()]);
-}
+}

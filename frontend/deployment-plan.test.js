@@ -50,6 +50,12 @@ async function main() {
   assert(html.includes('APP_ORIGIN ← PUBLIC_DOMAIN'));
   assert(html.includes('&lt;img') && !html.includes('<img'));
   assert(html.includes('save selection'));
+  context.currentApp='first';
+  context.reportPlan={...fixture,verification:{ok:false,at:'2026-10-13',errors:['Stylesheet failed <unsafe>'],pages:[{service:'web',url:'http://example.test',status:200,ok:false,assets:[],screenshotIndex:0}],probes:[{service:'api',ok:true}]}};
+  const reportHtml=run('deploymentPlanMarkup(reportPlan)');
+  assert(reportHtml.includes('Last browser/API verification — failed'));
+  assert(reportHtml.includes('Stylesheet failed &lt;unsafe&gt;'));
+  assert(reportHtml.includes('/api/apps/first/verification/screenshot/0'));
   element('deploymentEntrypoint').value = '0';
   let sent;
   context.fetch = async (url, opts) => { sent = { url, body: JSON.parse(opts.body) }; return { json: async () => ({ ok: true }) }; };

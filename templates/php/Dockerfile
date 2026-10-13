@@ -17,14 +17,10 @@ COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www/html
 
-# Copy composer manifests first for layer caching
-COPY composer.json composer.lock* ./
-
-# Install PHP dependencies. Composer install is cached when lockfile unchanged.
-RUN if [ -f composer.lock ]; then composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader; else composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader || true; fi
-
-# Copy application source
+# Source must be present for declared Composer lifecycle scripts. Plain PHP
+# sites do not need a composer.json; real dependency failures must abort builds.
 COPY . .
+RUN if [ -f composer.json ]; then composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader; fi
 
 # Laravel/Symfony: ensure storage and cache directories are writable
 RUN mkdir -p storage/framework/{cache,sessions,views} bootstrap/cache 2>/dev/null || true \

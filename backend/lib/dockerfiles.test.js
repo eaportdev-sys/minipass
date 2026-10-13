@@ -392,6 +392,14 @@ try {
   assert.equal(refreshStandardDockerfile(healDir, 'node', templates), 'updated');
   fs.writeFileSync(path.join(healDir, 'Dockerfile'), webRecipe + 'RUN echo owner-edit\n');
   assert.equal(refreshStandardDockerfile(healDir, 'node', templates), 'custom', 'owner edits stay sacred');
+  const phpLegacy = path.join(tmp,'php-legacy');
+  fs.mkdirSync(phpLegacy);
+  const currentPhp = fs.readFileSync(path.join(templates,'php','Dockerfile'),'utf8').replace(/\r\n/g,'\n');
+  const oldPhp = currentPhp.replace('# Source must be present for declared Composer lifecycle scripts. Plain PHP\n# sites do not need a composer.json; real dependency failures must abort builds.\nCOPY . .\nRUN if [ -f composer.json ]; then composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader; fi', '# Copy composer manifests first for layer caching\nCOPY composer.json composer.lock* ./\n\n# Install PHP dependencies. Composer install is cached when lockfile unchanged.\nRUN if [ -f composer.lock ]; then composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader; else composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader || true; fi\n\n# Copy application source\nCOPY . .');
+  fs.writeFileSync(path.join(phpLegacy,'Dockerfile'),oldPhp);
+  assert.equal(refreshStandardDockerfile(phpLegacy,'php',templates),'updated','exact historical PHP recipe upgrades without relying on a retained marker');
+  fs.writeFileSync(path.join(phpLegacy,'Dockerfile'),oldPhp+'\nRUN echo custom\n');
+  assert.equal(refreshStandardDockerfile(phpLegacy,'php',templates),'custom','customized PHP recipes with a marker are never overwritten');
 
   console.log('native npm toolchain and exact-match standard Dockerfile upgrades: OK');
 } finally {
