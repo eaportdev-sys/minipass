@@ -231,7 +231,8 @@ try {
       assert(template.includes('pnpm install --dangerously-allow-all-builds --frozen-lockfile'), 'node: installs pnpm repos non-interactively with corepack');
       assert(template.includes('yarn install --frozen-lockfile'), 'node: installs yarn repos with corepack');
       assert(template.includes('start:built'), 'node: avoids dev start scripts when a production script exists');
-      assert(template.includes('[ ! -d .next ]'), 'node: fails the build when a next app produces no .next output');
+      assert(template.includes('.next/BUILD_ID'), 'node: a bare .next dir is not proof - only BUILD_ID means next build ran');
+      assert(template.includes('dist/standalone/server.js'), 'node: framework standalone output boots directly when there is no .next production build');
       assert(template.includes('BUILD PRODUCED NO .next/'), 'node: names the missing next build output loudly');
       assert(template.includes('rebinding to 0.0.0.0'), 'node: rebinds localhost-bound start scripts so published ports can reach them');
     } else {
