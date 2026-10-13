@@ -54,6 +54,7 @@ async function createApp(options = {}) {
   refresh();
   if (!r.error) {
     if (r.storageWarning) toast('Site created, but the storage allowance is NOT enforced on this host: ' + r.storageWarning, false);
+    if (Array.isArray(r.envNeeds) && r.envNeeds.length) toast(`Site created - code references unset variables (${r.envNeeds.join(', ')}) - add values in Environment before deploying`, false);
     closeCreate(true);
   }
 }

@@ -667,7 +667,12 @@ app.post('/api/apps', async (req, res) => {
     // create/link flow cannot surprise-run a half-reviewed repository.
     if (AUTO_DEPLOY) deploy(id).catch(e => console.error(id, e.message));
     if (storageWarning) panelLog.logEvent({ level: 'warn', area: 'create', site: id, message: 'storage allowance recorded but not enforced: ' + storageWarning });
-    res.json({ ...pubApp(meta), localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote, storageEnforced: storageQuota.enforced === true, ...(storageWarning ? { storageWarning } : {}) });
+    // Creation-time env report: code-referenced vars missing from the generated
+    // .env, so the operator knows before the first deploy instead of via a
+    // crash loop. Read-only, capped, never fails the create.
+    let envNeeds = [];
+    try { envNeeds = missingEnvVars(created.dir).unset.slice(0, 12); } catch {}
+    res.json({ ...pubApp(meta), localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote, storageEnforced: storageQuota.enforced === true, ...(storageWarning ? { storageWarning } : {}), ...(envNeeds.length ? { envNeeds } : {}) });
   } catch (e) {
     const error = redactUrl(e.message);
     try { panelLog.logEvent({ level: 'error', area: 'create', site: creatingId, message: error }); } catch {}
@@ -1303,6 +1308,12 @@ async function deployNow(id, opts = {}) {
     await recordDeploy(id, { sha, at: new Date().toISOString(), status: 'error', error: ('compose repair failed - running containers untouched: ' + e.message).slice(-500) });
     throw e;
   }
+  // Env-needs warning (never blocking: referenced vars may be optional).
+  // Required ones crash-loop later - this line names them before the build.
+  try {
+    const unset = missingEnvVars(dir).unset;
+    if (unset.length) fs.appendFileSync(buildLog, `--- env warning: code references unset vars (${unset.slice(0, 12).join(', ')}${unset.length > 12 ? ', …' : ''}) - add values in Environment if the app requires them ---\n`);
+  } catch {}
   await quotas.ensure(meta);
   if (meta.storageQuota) await quotas.verifyDatabases(meta.id, dir);
   let buildCodeDir = codeDir;
@@ -1837,11 +1848,7 @@ app.get('/api/apps/:id/doctor', async (req, res) => {
   // env-needs: vars the repo code reads but .env doesn't set (read-only scan).
   // Empty counts as unset: a referenced key with no value can't function.
   try {
-    const need = scanEnvNeeds(dir);
-    const valOf = new Map(readEnvVars(path.join(dir, '.env')).map(v => [v.key, v.value]));
-    const missing = need.filter(k => !valOf.has(k));
-    const empty = need.filter(k => valOf.has(k) && !String(valOf.get(k)).trim());
-    const unset = [...missing, ...empty];
+    const { need, missing, empty, unset } = missingEnvVars(dir);
     if (!need.length) checks.push({ name: 'env-needs', status: 'ok', detail: 'no env references found in code' });
     else if (!unset.length) checks.push({ name: 'env-needs', status: 'ok', detail: `all ${need.length} code-referenced var${need.length === 1 ? '' : 's'} set` });
     else checks.push({ name: 'env-needs', status: 'fail', detail: `code reads ${unset.length} unset var${unset.length === 1 ? '' : 's'}: ${unset.slice(0, 12).join(', ')}${unset.length > 12 ? '…' : ''}${empty.length ? ` (${empty.length} present but empty)` : ''} — add via environment card` });
@@ -3212,72 +3219,16 @@ app.post('/api/apps/:id/start', async (req, res) => {
   }); res.json({ ok: true }); }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
-// Static env-need scan: which vars the repo code actually reads, so missing
-// declarations in .env/.env.example surface before runtime. Read-only, key
-// names only - never values. Caps files/size/depth to stay fast.
-const ENV_SCAN_SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'vendor', '__pycache__', '.venv', 'venv']);
-const ENV_SCAN_NOISE = new Set(['PATH', 'HOME', 'USER', 'SHELL', 'PWD', 'OLDPWD', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP', 'TMP', 'NODE_PATH']);
-function scanEnvNeeds(dir) {
-  const codeDir = path.join(dir, 'code');
-  const files = [];
-  const walk = (d, depth) => {
-    if (depth > 4 || files.length > 300) return;
-    let entries = [];
-    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      if (files.length > 300) return;
-      const p = path.join(d, e.name);
-      if (e.isDirectory()) { if (!ENV_SCAN_SKIP_DIRS.has(e.name)) walk(p, depth + 1); }
-      else if (e.isFile()) {
-        if (e.name === '.env' || e.name === '.env.example') continue;
-        if (/\.(js|ts|jsx|tsx|mjs|cjs|php|py)$/.test(e.name)) {
-          try { if (fs.statSync(p).size > 200 * 1024) continue; } catch { continue; }
-          files.push(p);
-        }
-      }
-    }
-  };
-  walk(codeDir, 0);
-  const pats = [
-    /process\.env\.([A-Za-z_][A-Za-z0-9_]*)/g,
-    /process\.env\[\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\]/g,
-    /getenv\(\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\)/g,
-    /\$_(?:ENV|SERVER)\[\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\]/g,
-    /os\.environ(?:\.get)?\(\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\)/g,
-    /os\.getenv\(\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\)/g
-  ];
-  const found = new Set();
-  for (const f of files) {
-    let text = '';
-    try { text = fs.readFileSync(f, 'utf8'); } catch { continue; }
-    for (const re of pats) {
-      re.lastIndex = 0;
-      let m;
-      while ((m = re.exec(text)) && found.size < 50) {
-        const k = m[1];
-        if (k && !ENV_SCAN_NOISE.has(k)) found.add(k);
-      }
-    }
-    if (found.size >= 50) break;
-  }
-  return [...found].sort();
-}
+// Static env-need scan lives in lib/env-needs.js (shared by doctor,
+// create-time reporting and deploy warnings). Read-only, key names only.
+const { scanEnvNeeds, readEnvVars, missingEnvVars } = require('./lib/env-needs');
 // Sensible self-generated defaults: values the panel can compute without asking.
 function suggestedDefaults(meta) {
   return { ...envDefaults.BUILT_INS };
 }
 // Environment editor: custom keys editable, managed keys (ports, generated creds)
 // locked. POST saves pending changes; deploy explicitly to apply them.
-function readEnvVars(envPath) {
-  const vars = [];
-  try {
-    for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
-      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s?(.*)$/);
-      if (m) vars.push({ key: m[1], value: m[2] });
-    }
-  } catch {}
-  return vars;
-}
+// (readEnvVars itself lives in lib/env-needs.js.)
 function managedKeys(dir) {
   try {
     const keys = fs.readFileSync(path.join(dir, '.env.managed'), 'utf8').split('\n').map(s => s.trim()).filter(Boolean);
