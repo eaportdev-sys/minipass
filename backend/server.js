@@ -1745,11 +1745,14 @@ const LOG_RULES = [
   { re: /FATAL:\s+database "([^"]+)" does not exist/, level: 'fail', msg: m => `database "${m[1]}" missing on the db service — wrong DB name in env?` },
   { re: /FATAL:\s+role "([^"]+)" does not exist/, level: 'fail', msg: m => `db role "${m[1]}" missing — user/password out of sync with the volume?` },
   { re: /password authentication failed/i, level: 'fail', msg: () => 'db password rejected — .env out of sync with the kept volume (recreate resets both)' },
-  { re: /getaddrinfo ENOTFOUND ([^\s]+)/i, level: 'fail', msg: m => `DNS fail for "${m[1]}" — wrong service hostname in env? (use db-<type>)` },
+  { re: /getaddrinfo (ENOTFOUND|EAI_AGAIN) ([^\s]+)/i, level: 'fail', msg: m => `DNS fail for "${m[2]}" — wrong service hostname in env? (use db-<type>)` },
   { re: /connect ECONNREFUSED ([^\s:]+):(\d+)/i, level: 'fail', msg: m => `nothing at ${m[1]}:${m[2]} — wrong host/port in env, or that service is down` },
   { re: /127\.0\.0\.1:\d+/, level: 'warn', msg: () => '127.0.0.1 inside a container is the container itself — servers must bind 0.0.0.0 to be reachable, and clients must use the service host, not localhost' },
   { re: /EADDRINUSE[^:]*:?(\d+)?/i, level: 'fail', msg: m => `port ${m[1] || '?'} busy inside the container — app hardcodes a port?` },
   { re: /Cannot find module ([^\s'"]+)/, level: 'fail', msg: m => `missing node module ${m[1]} — incomplete install, rebuild the app` },
+  // Uppercase-only identifier so credential values and sentences never match -
+  // only the required variable NAME is echoed, never any value.
+  { re: /\b([A-Z][A-Z0-9_]{2,}) is required\b/, level: 'fail', msg: m => `container needs env ${m[1]} — add it in the Environment tab and redeploy` },
   { re: /JavaScript heap out of memory|OOMKilled/i, level: 'fail', msg: () => 'out of memory — raise box swap or container limits' },
   { re: /^(?!.*(password|token|secret|key)).*error:/gim, level: 'warn', msg: () => 'error lines present in recent logs', count: true }
 ];
@@ -1807,18 +1810,25 @@ app.get('/api/apps/:id/doctor', async (req, res) => {
       checks.push({ name: 'landing', status: 'fail', detail: 'no route answers; probed: ' + probed.join(' ') });
     }
   } catch (e) { checks.push({ name: 'landing', status: 'warn', detail: 'probe failed: ' + e.message }); }
-  // log signature scan (app service only, secretes filtered by rules avoiding creds)
+  // log signature scan (every enabled app service - the crash is often not in
+  // `app`; secrets filtered by rules avoiding credential values)
   try {
-    const logs = await sh(`${COMPOSE_BIN} logs --tail=200 app`, dir).catch(() => '');
+    const logSvcs = svc.fullServices(meta, dir).filter(s => s.enabled !== false).map(s => s.name);
+    const targets = logSvcs.length ? logSvcs.slice(0, 6) : ['app'];
     const hits = [];
-    for (const rule of LOG_RULES) {
-      if (rule.count) {
-        const n = (logs.match(rule.re) || []).length;
-        if (n > 3) hits.push({ level: rule.level, msg: `${n} error lines in recent logs - open Logs tab` });
-        continue;
+    for (const svcName of targets) {
+      let logs = '';
+      try { logs = await sh(`${COMPOSE_BIN} logs --tail=150 ${svcName}`, dir); } catch { continue; }
+      const tag = targets.length > 1 ? `${svcName}: ` : '';
+      for (const rule of LOG_RULES) {
+        if (rule.count) {
+          const n = (logs.match(rule.re) || []).length;
+          if (n > 3) hits.push({ level: rule.level, msg: `${tag}${n} error lines in recent logs - open Logs tab` });
+          continue;
+        }
+        const m = logs.match(rule.re);
+        if (m) hits.push({ level: rule.level, msg: tag + rule.msg(m) });
       }
-      const m = logs.match(rule.re);
-      if (m) hits.push({ level: rule.level, msg: rule.msg(m) });
     }
     checks.push(hits.length
       ? { name: 'logs', status: hits.some(h => h.level === 'fail') ? 'fail' : 'warn', detail: hits.map(h => h.msg).join(' | ') }
