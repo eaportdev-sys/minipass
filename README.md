@@ -177,6 +177,23 @@ completion-dependent task once per release, then starts API/web services in
 dependency order. A failed migration stops before the application swap. Builds
 never rewrite repository Dockerfiles or substitute guessed npm/migration commands.
 
+For unambiguous repository-declared PostgreSQL/MySQL/MariaDB/MongoDB services
+and Redis services with a declared `--requirepass` input,
+missing referenced passwords are generated once into the private site `.env` and
+matching consumer database URLs/host/user/port inputs are linked through declared
+dependencies and shared networks. Create prepares these inputs without launching
+anything; Deploy rechecks them. Existing sites can use **rescan / prepare inputs**.
+Existing values, external connection URLs, and repository-provided defaults win.
+Matching running-database credentials can be recovered, but unknown retained data
+or lost initialized passwords require review—never silent password rotation.
+Multiple possible databases require an explicit dependency/connection. Derived
+origin hostname inputs come only from a configured, scheme-matching public URL or
+domain; Minipass never invents an HTTPS hostname or writes the derived service
+origin separately. Provisioning reports expose input names, never secret values.
+Automatic input generation currently needs direct service declarations (including
+ordinary ordered overlays); includes/extends/custom merge tags still execute via
+Compose but require explicit inputs instead of unsafe partial inference.
+
 Project names, image tags, networks and named volumes are site-isolated. Published
 ports allocate in 8000–8999 and remain stable across redeploys. A small publication
 proxy preserves response headers/CSP and adds a release identity; browser checks

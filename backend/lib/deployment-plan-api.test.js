@@ -121,6 +121,10 @@ async function main() {
     assert(plan.blockers.some(b => b.code === 'STALE_SELECTION'));
     assert.equal(plan.selection.file, 'compose.dockerfile');
     assert.equal((await call('/api/apps/test-upload/deployment-plan', 'POST', { selection: { kind: 'compose', file: '../outside' } })).status, 400);
+    const publicRoute=await call('/api/apps/test-pull/verification','POST',{url:'https://public.example.test'});
+    assert.equal(publicRoute.status,200);
+    assert(publicRoute.data.saved&&publicRoute.data.provisioningError,'public URL remains saved when Docker-based input preparation is unavailable on Windows');
+    assert.equal((await call('/api/apps/test-pull/compose-inputs','POST',{})).status,500,'explicit preparation fails closed when existing Docker state cannot be checked');
     await call('/api/apps/test-upload/file?path=another.plan', 'DELETE');
     await call('/api/apps/test-upload/file?path=Dockerfile.compose', 'DELETE');
     await call('/api/apps/test-upload/file?path=release.sh', 'DELETE');

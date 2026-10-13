@@ -36,6 +36,7 @@ const { sourceFile, readSource, isDockerfile } = require('./lib/repository-files
 const repositoryCompose = require('./lib/repository-compose');
 const browserVerification = require('./lib/browser-verification');
 const publication = require('./lib/publication');
+const composeInputs = require('./lib/compose-inputs');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -682,6 +683,13 @@ app.post('/api/apps', async (req, res) => {
     // crash loop. Read-only, capped, never fails the create.
     let envNeeds = [];
     try { if (!created.hasDeclaredCompose) envNeeds = missingEnvVars(created.dir).unset.slice(0, 12); } catch {}
+    if(created.hasDeclaredCompose) try {
+      const selected=refreshDeploymentPlan(meta,created.dir).selected;
+      if(selected&&selected.kind==='compose') {
+        const inputs=composeInputs.provision({dir:created.dir,root:path.join(created.dir,'code'),selection:selected,meta,fresh:true});
+        if(inputs.changed.length)panelLog.logEvent({level:'info',area:'create',site:id,message:'Repository database inputs prepared: '+inputs.changed.join(', ')});
+      }
+    }catch(e){panelLog.logEvent({level:'warn',area:'create',site:id,message:'Repository input initialization needs review: '+e.message});}
     const plan = refreshDeploymentPlan(meta, created.dir);
     res.json({ ...pubApp(meta), plan, localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote, storageEnforced: storageQuota.enforced === true, ...(storageWarning ? { storageWarning } : {}), ...(envNeeds.length ? { envNeeds } : {}) });
   } catch (e) {
@@ -996,7 +1004,17 @@ function refreshDeploymentPlan(meta, dir, root = path.join(dir, 'code')) {
       plan.ready = plan.blockers.length===0;
     }
   } catch {}
+  try { plan.provisioning=JSON.parse(fs.readFileSync(path.join(dir,'.compose-inputs.json'),'utf8')).actions || []; } catch {}
   return deploymentPlan.persist(dir, plan);
+}
+function syncProvisionedDomain(meta,dir,result) {
+  if(!result.changed.includes('DOMAIN'))return;
+  const value=envDefaults.parseExample(fs.readFileSync(path.join(dir,'.env'),'utf8')).find(v=>v.key==='DOMAIN');
+  if(!value)return;
+  const domain=cleanDomain(value.value);
+  const db_=load(),stored=db_.apps.find(a=>a.id===meta.id);
+  if(stored){stored.domain=domain;save(db_);}
+  meta.domain=domain;
 }
 async function enforceDeploymentPlan(meta, dir, root, deferEnvironment = false) {
   const plan = refreshDeploymentPlan(meta, dir, root);
@@ -1790,6 +1808,13 @@ async function verifyPublishedApplication(meta, dir, root, image, model = null, 
 async function deployRepositoryCompose(meta, dir, root, plan, opts, sourceSha) {
   const io = deploymentRunners(meta.id, dir);
   const entrypoint = { ...plan.selected };
+  const containers=await repositoryCompose.inspectProject({id:meta.id,docker:DOCKER_BIN,run:io.run});
+  const volumes=String(await io.run(DOCKER_BIN,['volume','ls','-q','--filter','label=com.docker.compose.project='+meta.id])).trim().split(/\s+/).filter(Boolean);
+  const inputs=composeInputs.provision({dir,root,selection:entrypoint,meta,containers,volumes});
+  syncProvisionedDomain(meta,dir,inputs);
+  if(inputs.changed.length)fs.appendFileSync(path.join(dir,'deploy.log'),'--- repository database inputs prepared: '+inputs.changed.join(', ')+' ---\n');
+  if(inputs.issues.length)throw Object.assign(new Error(inputs.issues.map(i=>i.message).join(' ')),{status:409});
+  plan=refreshDeploymentPlan(meta,dir,root);
   const config = await repositoryCompose.resolve({ compose: composeArgv(), id: meta.id, dir, root, entrypoint, run: io.run });
   // Publish only keys and redacted command summaries from the authoritative
   // combined model. Literal env values never enter the report/API response.
@@ -2479,14 +2504,44 @@ app.post('/api/apps/:id/deployment-plan', async (req, res) => {
 });
 app.post('/api/apps/:id/verification', async (req, res) => {
   try {
+    await siteLifecycle(req.params.id,async()=>{
     if (deployQueues.has(req.params.id) || deployLocks.has(req.params.id)) return res.status(409).json({ error: 'wait for deployment to finish' });
     const db_ = load(); const meta = db_.apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
     meta.publicUrl = req.body.url ? browserVerification.validPublicUrl(String(req.body.url).trim()) : null;
     save(db_);
     await markDirty(meta.id, 'public verification URL saved');
-    res.json({ ok: true, saved: true, publicUrl: meta.publicUrl });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+    const dir=appDir(APPS_DIR,meta.id);
+    const plan=refreshDeploymentPlan(meta,dir);
+    let provisioningError=null;
+    if(plan.selected&&plan.selected.kind==='compose') try {
+      const containers=await repositoryCompose.inspectProject({id:meta.id,docker:DOCKER_BIN,run:runOut});
+      const volumes=String(await runOut(DOCKER_BIN,['volume','ls','-q','--filter','label=com.docker.compose.project='+meta.id])).trim().split(/\s+/).filter(Boolean);
+      const result=composeInputs.provision({dir,root:path.join(dir,'code'),selection:plan.selected,meta,containers,volumes});
+      syncProvisionedDomain(meta,dir,result);
+      if(result.issues.length)provisioningError=result.issues.map(i=>i.message).join(' ');
+      refreshDeploymentPlan(meta,dir);
+    }catch(e){provisioningError=panelLog.redact(e.message);}
+    res.json({ ok: true, saved: true, publicUrl: meta.publicUrl, ...(provisioningError?{provisioningError}:{}) });
+    });
+  } catch (e) { res.status(e.status||400).json({ error: e.message }); }
+});
+app.post('/api/apps/:id/compose-inputs', async (req,res)=>{
+  try {
+    await siteLifecycle(req.params.id,async()=>{
+    const meta=load().apps.find(a=>a.id===req.params.id);
+    if(!meta)return res.status(404).json({error:'unknown app'});
+    const dir=appDir(APPS_DIR,meta.id),root=path.join(dir,'code');
+    const plan=refreshDeploymentPlan(meta,dir,root);
+    if(!plan.selected||plan.selected.kind!=='compose')return res.json({ok:true,plan,changed:[]});
+    const containers=await repositoryCompose.inspectProject({id:meta.id,docker:DOCKER_BIN,run:runOut});
+    const volumes=String(await runOut(DOCKER_BIN,['volume','ls','-q','--filter','label=com.docker.compose.project='+meta.id])).trim().split(/\s+/).filter(Boolean);
+    const result=composeInputs.provision({dir,root,selection:plan.selected,meta,containers,volumes});
+    syncProvisionedDomain(meta,dir,result);
+    if(result.changed.length)await markDirty(meta.id,'repository database inputs initialized');
+    res.json({ok:true,...result,plan:refreshDeploymentPlan(meta,dir,root)});
+    });
+  }catch(e){res.status(e.status||500).json({error:panelLog.redact(e.message)});}
 });
 app.get('/api/apps/:id/verification/screenshot/:index', (req, res) => {
   if (!load().apps.some(a => a.id === req.params.id) || !/^\d{1,2}$/.test(req.params.index)) return res.status(404).end();

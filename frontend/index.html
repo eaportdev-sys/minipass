@@ -215,7 +215,7 @@
       </div>
       <div id="tab-deploy" class="sitetab" style="display:none">
           <div class="card deployment-plan-card">
-            <div class="sectionhead"><div><b>Repository deployment plan</b><div class="meta">Source instructions are analyzed without execution. Creating or uploading does not deploy. Runtime verification is separate.</div></div><button onclick="loadDeploymentPlan()">rescan instructions</button></div>
+            <div class="sectionhead"><div><b>Repository deployment plan</b><div class="meta">Source instructions are analyzed without execution. Missing declared database inputs are prepared before deployment; existing credentials and data are preserved. Creating or uploading does not deploy.</div></div><button onclick="prepareComposeInputs()">rescan / prepare inputs</button></div>
             <div id="deploymentPlan" aria-live="polite">Open a site to inspect its deployment instructions.</div>
             <label for="verificationUrl">Public website URL (optional)<input id="verificationUrl" type="url" placeholder="https://site.example.com"></label>
             <div class="actions"><button onclick="saveVerificationUrl()">save public URL</button><span class="meta">Leave blank to verify published LAN ports. For HTTPS-only sites, configure the HTTPS route and enter its real URL; security headers are never stripped.</span></div>

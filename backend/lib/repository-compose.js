@@ -216,7 +216,9 @@ async function resolve({ compose, id, dir, root, entrypoint, run }) {
   }
   args.push('config', '--format', 'json');
   // Compose, rather than a handwritten interpolator, is authoritative here.
-  const output = await run(compose[0], args, { cwd: directory, env: cliEnv() });
+  let output;
+  try { output=await run(compose[0],args,{cwd:directory,env:cliEnv()}); }
+  catch(e){if(/error while interpolating|missing a value|required variable/i.test(e.message))e.status=409;throw e;}
   const config = JSON.parse(String(output));
   for (const s of Object.values(config.services)) delete s['x-minipass']; // platform roles cannot be supplied by untrusted source
   const profiles = entrypoint.profiles || [];

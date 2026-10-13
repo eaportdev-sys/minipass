@@ -5,8 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "pretest": "node lib/cleanup.test.js && node lib/deployment-plan.test.js && node lib/repository-compose.test.js && node ../frontend/deployment-plan.test.js",
+    "pretest": "node lib/cleanup.test.js && node lib/deployment-plan.test.js && node lib/repository-compose.test.js && node lib/compose-inputs.test.js && node ../frontend/deployment-plan.test.js",
     "test:compose-live": "node lib/compose-live.test.js",
+    "test:compose-inputs-live": "node lib/compose-inputs-api.test.js",
     "test:workflow-api": "node lib/deployment-plan-api.test.js",
     "test:cleanup-api": "node lib/cleanup-api.test.js",
     "test": "node lib/generator.test.js && node lib/services.test.js && node lib/migrations.test.js && node lib/routes.test.js && node lib/env-defaults.test.js && node lib/env-needs.test.js && node lib/tokens.test.js && node lib/ports.test.js && node lib/detect.test.js && node lib/dockerfiles.test.js && node lib/build-profile.test.js && node lib/compose-read.test.js && node lib/repo-source.test.js && node lib/storage.test.js && node lib/trash.test.js && node lib/site-identity.test.js && node lib/quotas.test.js && node lib/host-storage.test.js && node lib/lifecycle.test.js && node lib/health.test.js && node lib/deploy-markers.test.js && node lib/doctor.test.js && node lib/panel-log.test.js && node lib/prebuild.test.js && node lib/build-log.test.js && node lib/import-repair.test.js && node lib/import-protection.test.js && node lib/dockerfile-fix.test.js && node lib/dockerfile-protection.test.js && node lib/remediate.test.js && node lib/repo-analysis.test.js && node ../frontend/websites.test.js && node ../frontend/create-branch.test.js && node ../frontend/create-connect.test.js && node ../frontend/create-identity.test.js && node ../frontend/logs.test.js && node ../frontend/storage.test.js && node ../frontend/trash.test.js && node ../frontend/setup-git.test.js && node ../frontend/setup-automation.test.js && node ../frontend/quotas.test.js && node ../frontend/services-dockerfile.test.js && node ../frontend/panel-errors.test.js && node ../frontend/remediate.test.js && node ../frontend/deploy-layout.test.js && node ../frontend/host-storage.test.js && node ../frontend/site-routing.test.js"
@@ -14,6 +15,7 @@
   "dependencies": {
     "@babel/parser": "^7.29.9",
     "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
     "express": "^4.19.2",
     "multer": "^2.0.0",
     "playwright-core": "^1.64.0",
