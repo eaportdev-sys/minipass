@@ -60,12 +60,18 @@ async function main() {
   const privateInputs=run('deploymentPlanMarkup(provisioningPlan)');
   assert(privateInputs.includes('Prepared repository inputs (values kept private)'));
   assert(privateInputs.includes('DB_CONNECTION')&&privateInputs.includes('database password generated'));
+  context.localPlan={...fixture,localUrl:'https://10.0.0.30:8021/',accessMode:'local',localCaReady:true};
+  const localMarkup=run('deploymentPlanMarkup(localPlan)');
+  assert(localMarkup.includes('Allocated local address:')&&localMarkup.includes('https://10.0.0.30:8021/'));
+  assert(localMarkup.includes('/api/apps/first/local-ca')&&localMarkup.includes('needs no public domain'));
   const originalLoad=context.loadDeploymentPlan;
   context.loadEnv=()=>{};context.loadDeploymentPlan=()=>{};
   context.fetch=async(url,opts)=>{sent={url,body:JSON.parse(opts.body)};return{json:async()=>({ok:true,changed:['DB_CONNECTION'],issues:[]})}};
   let sent;
   await run('prepareComposeInputs()');
   assert.equal(sent.url,'/api/apps/first/compose-inputs');
+  await run('saveVerificationUrl(true)');
+  assert.deepEqual(sent.body,{access:'local'},'local selection never reuses a stale/copied public URL');
   context.loadDeploymentPlan=originalLoad;
   element('deploymentEntrypoint').value = '0';
   sent=null;

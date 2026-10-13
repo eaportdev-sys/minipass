@@ -54,7 +54,7 @@ function targetsFor({ services, config, root, originHost, publicUrl, homePath = 
   }
   return { targets, probes };
 }
-async function execute({ id, dir, image, docker, network, targets, probes, run, check = () => {} }) {
+async function execute({ id, dir, image, docker, network, targets, probes, localCa = null, run, check = () => {} }) {
   const name = `minipass-verify-${id}-${crypto.randomBytes(6).toString('hex')}`;
   let report;
   try {
@@ -65,7 +65,7 @@ async function execute({ id, dir, image, docker, network, targets, probes, run, 
       '--tmpfs', '/tmp:rw,nosuid,size=256m', '--tmpfs', '/home/node:rw,nosuid,uid=1000,gid=1000,size=64m', image];
     await run(docker, args);
     for (const other of networks.slice(1)) await run(docker, ['network', 'connect', other, name]);
-    const output = await run(docker, ['start', '-a', '-i', name], { input: JSON.stringify({ targets, probes }) + '\n', timeout: 120000, acceptExitCodes: [0, 1] });
+    const output = await run(docker, ['start', '-a', '-i', name], { input: JSON.stringify({ targets, probes,localCa }) + '\n', timeout: 120000, acceptExitCodes: [0, 1] });
     report = JSON.parse(String(output));
     check();
   } catch (e) {

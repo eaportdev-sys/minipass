@@ -57,6 +57,12 @@ async function main() {
     const setup = await fetch(base + '/api/panel/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'isolated-workflow-test-only', acceptTerms: true }) });
     assert.equal(setup.status, 200);
     const cookie = setup.headers.get('set-cookie').split(';')[0];
+    const screenshot=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l2sAAAAASUVORK5CYII=','base64');
+    fs.writeFileSync(path.join(apps,'test-upload','.verification-0.png'),screenshot);
+    const screenshotResponse=await fetch(base+'/api/apps/test-upload/verification/screenshot/0',{headers:{Cookie:cookie}});
+    assert.equal(screenshotResponse.status,200,'panel-owned hidden screenshots are served explicitly, not rejected as dotfiles');
+    assert(Buffer.from(await screenshotResponse.arrayBuffer()).equals(screenshot));
+    assert.equal((await fetch(base+'/api/apps/test-upload/verification/screenshot/99',{headers:{Cookie:cookie}})).status,404);
     const headers = { Cookie: cookie, 'Content-Type': 'application/json' };
     const call = async (url, method = 'GET', body) => {
       const response = await fetch(base + url, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
@@ -124,6 +130,9 @@ async function main() {
     const publicRoute=await call('/api/apps/test-pull/verification','POST',{url:'https://public.example.test'});
     assert.equal(publicRoute.status,200);
     assert(publicRoute.data.saved&&publicRoute.data.provisioningError,'public URL remains saved when Docker-based input preparation is unavailable on Windows');
+    const copiedPort=await call('/api/apps/test-pull/verification','POST',{url:'http://localhost:8000/'});
+    assert.equal(copiedPort.status,409,'a URL copied from another local site is rejected before saving/building');
+    assert(copiedPort.data.error.includes('another site'));
     assert.equal((await call('/api/apps/test-pull/compose-inputs','POST',{})).status,500,'explicit preparation fails closed when existing Docker state cannot be checked');
     await call('/api/apps/test-upload/file?path=another.plan', 'DELETE');
     await call('/api/apps/test-upload/file?path=Dockerfile.compose', 'DELETE');

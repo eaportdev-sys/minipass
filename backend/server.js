@@ -37,6 +37,7 @@ const repositoryCompose = require('./lib/repository-compose');
 const browserVerification = require('./lib/browser-verification');
 const publication = require('./lib/publication');
 const composeInputs = require('./lib/compose-inputs');
+const localAccess = require('./lib/local-access');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -686,12 +687,14 @@ app.post('/api/apps', async (req, res) => {
     if(created.hasDeclaredCompose) try {
       const selected=refreshDeploymentPlan(meta,created.dir).selected;
       if(selected&&selected.kind==='compose') {
+        if(localAccess.isLocal(meta)){meta.accessMode='local';meta.localUrl=localAccess.address(meta,path.join(created.dir,'code'),selected);const state=load(),stored=state.apps.find(a=>a.id===id);if(stored){Object.assign(stored,{accessMode:meta.accessMode,localUrl:meta.localUrl});save(state);}}
         const inputs=composeInputs.provision({dir:created.dir,root:path.join(created.dir,'code'),selection:selected,meta,fresh:true});
+        syncProvisionedDomain(meta,created.dir,inputs);
         if(inputs.changed.length)panelLog.logEvent({level:'info',area:'create',site:id,message:'Repository database inputs prepared: '+inputs.changed.join(', ')});
       }
     }catch(e){panelLog.logEvent({level:'warn',area:'create',site:id,message:'Repository input initialization needs review: '+e.message});}
     const plan = refreshDeploymentPlan(meta, created.dir);
-    res.json({ ...pubApp(meta), plan, localUrl: `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote, storageEnforced: storageQuota.enforced === true, ...(storageWarning ? { storageWarning } : {}), ...(envNeeds.length ? { envNeeds } : {}) });
+    res.json({ ...pubApp(meta), plan, localUrl: meta.localUrl || `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote, storageEnforced: storageQuota.enforced === true, ...(storageWarning ? { storageWarning } : {}), ...(envNeeds.length ? { envNeeds } : {}) });
   } catch (e) {
     const error = redactUrl(e.message);
     try { panelLog.logEvent({ level: 'error', area: 'create', site: creatingId, message: error }); } catch {}
@@ -1005,6 +1008,8 @@ function refreshDeploymentPlan(meta, dir, root = path.join(dir, 'code')) {
     }
   } catch {}
   try { plan.provisioning=JSON.parse(fs.readFileSync(path.join(dir,'.compose-inputs.json'),'utf8')).actions || []; } catch {}
+  plan.localUrl=meta.localUrl || '';plan.accessMode=meta.accessMode || (localAccess.isLocal(meta)?'local':'public');
+  plan.localCaReady=fs.existsSync(path.join(dir,'.local-tls','ca.crt'));
   return deploymentPlan.persist(dir, plan);
 }
 function syncProvisionedDomain(meta,dir,result) {
@@ -1792,7 +1797,8 @@ async function verifyPublishedApplication(meta, dir, root, image, model = null, 
   const services = model ? model.services.filter(s => s.role === 'application') : svc.fullServices(meta, dir).filter(s => s.enabled !== false);
   const host = requestedHost || meta.accessHost || 'host.docker.internal';
   const originHost = /^(?:localhost|127\.0\.0\.1|::1)$/.test(host) ? 'host.docker.internal' : host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-  const publicUrl = meta.publicUrl || (meta.domain ? `https://${meta.domain}` : null);
+  const local=localAccess.isLocal(meta);
+  const publicUrl = local ? null : meta.publicUrl || (meta.domain ? `https://${meta.domain}` : null);
   const targets = browserVerification.targetsFor({ services, config: model && model.config, root, originHost, publicUrl, homePath: meta.homePath || '' });
   // The helper joins an actual project network, not an assumed *_default.
   const inspected = await repositoryCompose.inspectProject({ id: meta.id, docker: DOCKER_BIN, ...deploymentRunners(meta.id, dir) });
@@ -1802,13 +1808,31 @@ async function verifyPublishedApplication(meta, dir, root, image, model = null, 
   if (model && model.config['x-minipass']) for (const target of targets.targets) {
     const route = (model.config['x-minipass'].routes || []).find(r => r.service === target.service);
     if (route) target.release = route.release;
+    target.local=local;
   }
-  return browserVerification.execute({ id: meta.id, dir, image, docker: DOCKER_BIN, network, ...targets, ...deploymentRunners(meta.id, dir), check: () => checkCancelled(meta.id) });
+  const localCa=local&&meta.localUrl&&meta.localUrl.startsWith('https:')?fs.readFileSync(path.join(dir,'.local-tls','ca.crt'),'utf8'):null;
+  return browserVerification.execute({ id: meta.id, dir, image, docker: DOCKER_BIN, network, localCa, ...targets, ...deploymentRunners(meta.id, dir), check: () => checkCancelled(meta.id) });
 }
 async function deployRepositoryCompose(meta, dir, root, plan, opts, sourceSha) {
   const io = deploymentRunners(meta.id, dir);
   const entrypoint = { ...plan.selected };
   const containers=await repositoryCompose.inspectProject({id:meta.id,docker:DOCKER_BIN,run:io.run});
+  if(!localAccess.isLocal(meta))localAccess.validateTarget(meta.publicUrl,meta,load().apps);
+  const declared=composeInputs.declarations(root,entrypoint).services;
+  const bound = portsLib.parsePublishedPorts(String(await io.run(DOCKER_BIN, ['ps', '--format', '{{.ID}} {{.Ports}}'])));
+  const occupied = new Set(bound.keys());
+  for (const c of containers) {
+    let service=c.Config.Labels['com.docker.compose.service'];
+    if(!declared[service]&&String(c.Config.Image).startsWith('minipass/publisher:')){const upstream=(c.Config.Env || []).find(e=>e.startsWith('UPSTREAM='));try{service=new URL(upstream.slice(9)).hostname;}catch{}}
+    if(!declared[service])continue;
+    for(const values of Object.values(c.NetworkSettings.Ports || {}))for(const p of values || []){const port=Number(p.HostPort),holders=bound.get(port)||new Set();if([...holders].every(cid=>containers.some(c=>c.Id.startsWith(cid))))occupied.delete(port);}
+  }
+  for(const site of load().apps.filter(a=>a.id!==meta.id))for(const s of svc.fullServices(site,appDir(APPS_DIR,site.id)))if(s.hostPort)occupied.add(Number(s.hostPort));
+  if(localAccess.isLocal(meta)) {
+    meta.accessMode='local';
+    meta.hostPort=portsLib.nextFreePort(meta.hostPort||8000,occupied,8000,8999);
+    meta.localUrl=localAccess.address(meta,root,entrypoint);
+  }
   const volumes=String(await io.run(DOCKER_BIN,['volume','ls','-q','--filter','label=com.docker.compose.project='+meta.id])).trim().split(/\s+/).filter(Boolean);
   const inputs=composeInputs.provision({dir,root,selection:entrypoint,meta,containers,volumes});
   syncProvisionedDomain(meta,dir,inputs);
@@ -1816,6 +1840,7 @@ async function deployRepositoryCompose(meta, dir, root, plan, opts, sourceSha) {
   if(inputs.issues.length)throw Object.assign(new Error(inputs.issues.map(i=>i.message).join(' ')),{status:409});
   plan=refreshDeploymentPlan(meta,dir,root);
   const config = await repositoryCompose.resolve({ compose: composeArgv(), id: meta.id, dir, root, entrypoint, run: io.run });
+  localAccess.applyOrigins(config,dir,root,entrypoint,meta);
   // Publish only keys and redacted command summaries from the authoritative
   // combined model. Literal env values never enter the report/API response.
   const resolvedTopology = require('./lib/compose-read').parseCompose(require('yaml').stringify(config),entrypoint.file);
@@ -1828,30 +1853,20 @@ async function deployRepositoryCompose(meta, dir, root, plan, opts, sourceSha) {
   await quotas.ensure(meta);
   // Preserve claims held by the same declared service, but do not steal a port
   // from a differently named old service during executor/source migration.
-  const bound = portsLib.parsePublishedPorts(String(await io.run(DOCKER_BIN, ['ps', '--format', '{{.ID}} {{.Ports}}'])));
-  const own = await repositoryCompose.inspectProject({ id: meta.id, docker: DOCKER_BIN, run: io.run });
-  const occupied = new Set(bound.keys());
-  for (const c of own) {
-    let service = c.Config.Labels['com.docker.compose.service'];
-    if (!config.services[service] && String(c.Config.Image).startsWith('minipass/publisher:')) {
-      const upstream = (c.Config.Env || []).find(e => e.startsWith('UPSTREAM='));
-      try { service = new URL(upstream.slice('UPSTREAM='.length)).hostname; } catch {}
-    }
-    if (!config.services[service]) continue;
-    for (const values of Object.values(c.NetworkSettings.Ports || {})) for (const p of values || []) {
-      const port = Number(p.HostPort), holders = bound.get(port) || new Set();
-      if ([...holders].every(cid => own.some(own => own.Id.startsWith(cid)))) occupied.delete(port);
-    }
-  }
-  for (const site of load().apps.filter(a => a.id !== meta.id)) for (const s of svc.fullServices(site, appDir(APPS_DIR, site.id))) if (s.hostPort) occupied.add(Number(s.hostPort));
   const model = repositoryCompose.prepare(config, { id: meta.id, dir, root, meta: { ...meta, deploymentEntrypoint: entrypoint }, occupied: [...occupied] });
   const apps = model.services.filter(s => s.role === 'application').sort((a, b) => Number(b.frontend) - Number(a.frontend));
   const primary = apps.find(s => s.hostPort) || apps[0];
   if (primary) primary.primary = true;
+  if(localAccess.isLocal(meta)&&primary&&primary.hostPort) {
+    const actual=localAccess.address(meta,root,entrypoint,primary.hostPort);
+    if(actual!==meta.localUrl)throw Object.assign(new Error('The allocated local port changed. Save local/LAN access again before deploying; the application origin has not been guessed.'),{status:409});
+    const state=load(),stored=state.apps.find(a=>a.id===meta.id);if(stored){Object.assign(stored,{localUrl:actual,accessMode:'local'});save(state);}
+  }
   model.services = [...apps, ...model.services.filter(s => s.role !== 'application')];
   const browser = await ensureBrowserVerifier(meta.id, dir);
   const publisher = await publication.ensure({ docker: DOCKER_BIN, templates: TEMPLATES_DIR, ...io });
-  publication.add(model, publisher, meta.id);
+  const tls=localAccess.isLocal(meta)&&meta.localUrl&&meta.localUrl.startsWith('https:')?await localAccess.ensureTls({dir,host:meta.accessHost||'localhost',run:io.run}):null;
+  publication.add(model, publisher, meta.id,tls);
   model.services.push(...repositoryCompose.publicServices(model.config, root).filter(s => s.role === 'routing'));
   const result = await repositoryCompose.deploy({ model, compose: composeArgv(), docker: DOCKER_BIN, id: meta.id, dir, ...io,
     check: () => checkCancelled(meta.id), notify: phase => fs.appendFileSync(path.join(dir, 'deploy.log'), `--- repository ${phase} ---\n`),
@@ -1860,7 +1875,7 @@ async function deployRepositoryCompose(meta, dir, root, plan, opts, sourceSha) {
   const stored = db_.apps.find(a => a.id === meta.id);
   Object.assign(stored, { executor: 'repository-compose', deploymentEntrypoint: entrypoint, services: apps, repositoryServices: model.services,
     composePorts: model.ports, hostPort: primary && primary.hostPort || null, type: primary && primary.type || meta.type,
-    composeSource: root === path.join(dir, 'code') ? null : root, publicUrl: meta.publicUrl || null, db: [] });
+    composeSource: root === path.join(dir, 'code') ? null : root, publicUrl: meta.publicUrl || null, localUrl:meta.localUrl || null,accessMode:meta.accessMode || null,db: [] });
   for (const page of result.verification.pages || []) {
     const service = apps.find(s => s.name === page.service);
     if (service) service.homePath = new URL(page.url).pathname;
@@ -2508,7 +2523,15 @@ app.post('/api/apps/:id/verification', async (req, res) => {
     if (deployQueues.has(req.params.id) || deployLocks.has(req.params.id)) return res.status(409).json({ error: 'wait for deployment to finish' });
     const db_ = load(); const meta = db_.apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
-    meta.publicUrl = req.body.url ? browserVerification.validPublicUrl(String(req.body.url).trim()) : null;
+    const local=req.body.access==='local';
+    const selected=refreshDeploymentPlan(meta,appDir(APPS_DIR,meta.id)).selected;
+    const url=req.body.url ? browserVerification.validPublicUrl(String(req.body.url).trim()) : null;
+    if(!local)localAccess.validateTarget(url,meta,db_.apps);
+    meta.publicUrl=local?null:url;
+    meta.accessMode=local||!url?'local':'public';
+    if(req.body.scheme&& !['http','https'].includes(req.body.scheme))return res.status(400).json({error:'invalid local scheme'});
+    if(req.body.scheme)meta.localScheme=req.body.scheme;
+    if(selected&&selected.kind==='compose'&&meta.accessMode==='local')meta.localUrl=localAccess.address(meta,path.join(appDir(APPS_DIR,meta.id),'code'),selected);
     save(db_);
     await markDirty(meta.id, 'public verification URL saved');
     const dir=appDir(APPS_DIR,meta.id);
@@ -2517,12 +2540,12 @@ app.post('/api/apps/:id/verification', async (req, res) => {
     if(plan.selected&&plan.selected.kind==='compose') try {
       const containers=await repositoryCompose.inspectProject({id:meta.id,docker:DOCKER_BIN,run:runOut});
       const volumes=String(await runOut(DOCKER_BIN,['volume','ls','-q','--filter','label=com.docker.compose.project='+meta.id])).trim().split(/\s+/).filter(Boolean);
-      const result=composeInputs.provision({dir,root:path.join(dir,'code'),selection:plan.selected,meta,containers,volumes});
+      const result=composeInputs.provision({dir,root:path.join(dir,'code'),selection:plan.selected,meta,containers,volumes,replaceOrigins:local});
       syncProvisionedDomain(meta,dir,result);
       if(result.issues.length)provisioningError=result.issues.map(i=>i.message).join(' ');
       refreshDeploymentPlan(meta,dir);
     }catch(e){provisioningError=panelLog.redact(e.message);}
-    res.json({ ok: true, saved: true, publicUrl: meta.publicUrl, ...(provisioningError?{provisioningError}:{}) });
+    res.json({ ok: true, saved: true, publicUrl: meta.publicUrl, localUrl:meta.localUrl || null,accessMode:meta.accessMode,...(provisioningError?{provisioningError}:{}) });
     });
   } catch (e) { res.status(e.status||400).json({ error: e.message }); }
 });
@@ -2534,6 +2557,7 @@ app.post('/api/apps/:id/compose-inputs', async (req,res)=>{
     const dir=appDir(APPS_DIR,meta.id),root=path.join(dir,'code');
     const plan=refreshDeploymentPlan(meta,dir,root);
     if(!plan.selected||plan.selected.kind!=='compose')return res.json({ok:true,plan,changed:[]});
+    if(localAccess.isLocal(meta)){meta.accessMode='local';meta.localUrl=localAccess.address(meta,root,plan.selected);const state=load(),stored=state.apps.find(a=>a.id===meta.id);if(stored){Object.assign(stored,{accessMode:'local',localUrl:meta.localUrl});save(state);}}
     const containers=await repositoryCompose.inspectProject({id:meta.id,docker:DOCKER_BIN,run:runOut});
     const volumes=String(await runOut(DOCKER_BIN,['volume','ls','-q','--filter','label=com.docker.compose.project='+meta.id])).trim().split(/\s+/).filter(Boolean);
     const result=composeInputs.provision({dir,root,selection:plan.selected,meta,containers,volumes});
@@ -2547,7 +2571,13 @@ app.get('/api/apps/:id/verification/screenshot/:index', (req, res) => {
   if (!load().apps.some(a => a.id === req.params.id) || !/^\d{1,2}$/.test(req.params.index)) return res.status(404).end();
   const file = path.join(appDir(APPS_DIR, req.params.id), `.verification-${Number(req.params.index)}.png`);
   if (!fs.existsSync(file)) return res.status(404).end();
-  res.set('Cache-Control', 'no-store').sendFile(file);
+  res.set('Cache-Control', 'no-store').sendFile(file,{dotfiles:'allow'},e=>{if(e&&!res.headersSent)res.status(e.status||404).end();});
+});
+app.get('/api/apps/:id/local-ca',(req,res)=>{
+  if(!load().apps.some(a=>a.id===req.params.id))return res.status(404).end();
+  const file=path.join(appDir(APPS_DIR,req.params.id),'.local-tls','ca.crt');
+  if(!fs.existsSync(file))return res.status(404).end();
+  res.set('Cache-Control','no-store').download(file,'minipass-local-ca.crt',{dotfiles:'allow'},e=>{if(e&&!res.headersSent)res.status(e.status||404).end();});
 });
 // Repository-owned services are changed in their source instructions, not by
 // reconstructing topology through the generated-service/database controls.

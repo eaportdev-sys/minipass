@@ -389,9 +389,11 @@ async function deploy({ model, compose, docker, id, dir, run, logged, verify, ch
     try { await action(['logs', '--no-color', '--tail', '80']); } catch {}
     check(); // a user Stop must never be undone by rollback
     if (swapped) {
-      if (before.length && oldText) {
+      const oldModel=oldText?YAML.parse(oldText):null;
+      const oldRoles=oldModel?roles(oldModel):{};
+      const previousRuntimes=oldModel?Object.keys(oldModel.services).filter(n=>!['database','task'].includes(oldRoles[n])&&before.some(c=>c.Config.Labels['com.docker.compose.service']===n&&c.Image)):[];
+      if (previousRuntimes.length) {
         const rollback = YAML.parse(oldText);
-        const oldRoles = roles(rollback);
         for (const c of before) {
           const name = c.Config.Labels['com.docker.compose.service'];
           if (rollback.services[name] && !['database','task'].includes(oldRoles[name])) {
@@ -404,15 +406,16 @@ async function deploy({ model, compose, docker, id, dir, run, logged, verify, ch
         }
         const rollbackFile = path.join(dir, '.compose-releases', model.release + '-rollback.yaml');
         privateWrite(rollbackFile, rollback);
-        const runtimes = Object.keys(rollback.services).filter(n => !['database','task'].includes(oldRoles[n]));
-        await logged(compose[0], [...composeArgs(compose, id, rollbackFile, dir), 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', ...runtimes], { cwd: dir });
+        try { await logged(compose[0], [...composeArgs(compose, id, rollbackFile, dir), 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', ...previousRuntimes], { cwd: dir }); }
+        catch(recovery){error.message+=' (rollback also failed: '+recovery.message+')';throw error;}
         const extra = (await inspectProject({ id, docker, run })).filter(c => !rollback.services[c.Config.Labels['com.docker.compose.service']] && model.categories[c.Config.Labels['com.docker.compose.service']] !== 'database');
         if (extra.length) await run(docker, ['rm', '-f', ...extra.map(c => c.Id)]);
         fs.copyFileSync(rollbackFile, oldFile);
         fs.chmodSync(oldFile, 0o600);
         error.message += ' (previous release restored; database migrations are not reversible automatically)';
       } else {
-        await action(['stop']);
+        try { await action(['stop',...Object.keys(model.categories).filter(n=>!['database','task'].includes(model.categories[n]))]); }
+        catch(recovery){error.message+=' (stopping the failed release also failed: '+recovery.message+')';throw error;}
         error.message += ' (first release stopped; data volumes retained)';
       }
     } else error.message += ' (application containers were not swapped)';

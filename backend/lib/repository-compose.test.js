@@ -65,6 +65,11 @@ async function main() {
   assert(rollback.commands.some(a => a.includes('--pull') && a.includes('never')), 'rollback cannot download a different image');
   assert(rollback.commands.some(a=>a.includes('--pull')&&a.includes('--no-deps')), 'rollback cannot restart migration dependencies');
   assert.equal(YAML.parse(fs.readFileSync(path.join(tmp, 'docker-compose.yml'), 'utf8')).services.web.environment.SECRET, 'old-secret');
+  fs.writeFileSync(path.join(tmp,'docker-compose.yml'),YAML.stringify({services:{app:{image:'never-built-placeholder'}}}));
+  const firstRetry=await scenario({badBrowser:true,before:[container('web')]});
+  assert(firstRetry.error.message.includes('CSS request failed'),'first-deploy verification error is retained');
+  assert(!firstRetry.commands.some(a=>a.includes('up')&&a.includes('app')),'an unbuilt generated scaffold is not a previous runtime to restore');
+  assert(firstRetry.commands.some(a=>a.includes('stop')&&a.includes('web')&&!a.includes('db')),'only failed application/routing services stop; database data remains available');
   const pending = config();
   pending.services.db.container_name = 'global-database';
   const isolated = executor.prepare(pending, { id, dir: tmp, root, meta: { deploymentEntrypoint: { file: 'instructions' } } });

@@ -102,7 +102,7 @@ function setAppCardState(id, state, running, canStart = true) {
         : `<button onclick="deploy('${id}')" aria-label="Deploy ${safeHtml(id)}">Deploy</button>`;
 }
 function publishedServiceUrl(a, s) {
-  const publicUrl = a.publicUrl || (a.executor === 'repository-compose' && a.domain ? `https://${a.domain}` : null);
+  const publicUrl = a.accessMode==='local'?a.localUrl:a.publicUrl || (a.executor === 'repository-compose' && a.domain ? `https://${a.domain}` : null);
   if (publicUrl && (s.primary || s.hostPort === a.hostPort)) {
     const origin = (publicUrl.match(/^https?:\/\/[^/]+/) || [publicUrl])[0];
     return s.homePath ? origin + (s.homePath.startsWith('/') ? s.homePath : '/' + s.homePath) : publicUrl;

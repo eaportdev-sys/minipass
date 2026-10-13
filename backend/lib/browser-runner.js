@@ -1,11 +1,28 @@
 // Runs only in an ephemeral, unprivileged verification container in production.
 // No host mounts, panel credentials, Docker socket or customer login secrets.
-const VERSION = 1;
+const VERSION = 2;
 const safeUrl = value => {
   try { const u = new URL(value); u.username = ''; u.password = ''; u.search = ''; u.hash = ''; return u.toString(); }
   catch { return 'invalid URL'; }
 };
-async function verify({ targets = [], probes = [], executablePath = '/usr/bin/chromium' }) {
+async function verify({ targets = [], probes = [], localCa = null, executablePath = '/usr/bin/chromium' }) {
+  if(localCa) {
+    const fs=require('fs'),path=require('path'),os=require('os'),tls=require('tls'),crypto=require('crypto');
+    const ca=new crypto.X509Certificate(localCa);
+    if(!ca.ca)throw new Error('Local trust input is not a certificate authority');
+    // Trust just this site's CA in this disposable browser, never ignore all
+    // certificate errors or change the host/panel/browser's global trust store.
+    const file=path.join(os.tmpdir(),'minipass-local-ca.crt');fs.writeFileSync(file,localCa);
+    const exec=require('child_process').execFileSync;
+    // New Chromium uses the XDG store; older distro versions use ~/.pki.
+    for(const db of [path.join(os.homedir(),'.pki','nssdb'),path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(),'.local','share'),'pki','nssdb')]) {
+      fs.mkdirSync(db,{recursive:true});
+      exec('certutil',['-N','--empty-password','-d','sql:'+db]);
+      exec('certutil',['-A','-d','sql:'+db,'-n','Minipass local site','-t','C,,','-i',file]);
+    }
+    if(typeof tls.setDefaultCACertificates!=='function')throw new Error('Verifier runtime cannot trust the local CA safely; rebuild its current image');
+    tls.setDefaultCACertificates([...tls.getCACertificates('default'),localCa]);
+  }
   const { chromium } = require('playwright-core');
   const result = { version: VERSION, ok: true, pages: [], probes: [], errors: [] };
   const browser = await chromium.launch({ executablePath, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
@@ -48,7 +65,7 @@ async function verify({ targets = [], probes = [], executablePath = '/usr/bin/ch
         report.status = response ? response.status() : null;
         if (target.release) {
           const current = response ? response.headers()['x-minipass-release'] : (await context.request.get(target.url, { timeout: 5000 })).headers()['x-minipass-release'];
-          if (current !== target.release) failures.push('Public routing/cache did not reach this release. Check DNS, HTTPS proxy routing and cache; another/old website must not pass verification.');
+          if (current !== target.release) failures.push(target.local?'The local address did not reach this site/release. Use the allocated local URL shown in Deploy; do not copy another site\'s port.':'The configured public URL did not reach this release. Check its proxy/DNS/cache, or select local/LAN access instead.');
           report.releaseMatched = current === target.release;
         }
         if (report.status != null && report.status >= 400 && ![401, 403].includes(report.status)) failures.push('Landing response was ' + report.status);
@@ -71,7 +88,7 @@ async function verify({ targets = [], probes = [], executablePath = '/usr/bin/ch
           if (!dom.text && !dom.controls) failures.push('The browser rendered an empty page');
           for (const style of dom.styles) if (!style.loaded) failures.push('Stylesheet did not load: ' + safeUrl(style.href));
           if (new URL(target.url).protocol === 'http:' && (dom.requiresHttps || response && /upgrade-insecure-requests/.test(response.headers()['content-security-policy'] || '')) && failures.some(e => /https:|SSL|TLS|stylesheet/i.test(e))) {
-            failures.push('This repository requires HTTPS: configure TLS/public routing and save the actual HTTPS verification URL in Deploy. Security headers were preserved, not stripped.');
+            failures.push('This repository requires HTTPS for its assets. Select local HTTPS in Deploy (no public domain needed), or configure an external HTTPS route. Security headers were preserved, not stripped.');
           }
           failures.push(...pageErrors.map(e => 'Uncaught browser error: ' + e));
           report.screenshot = (await page.screenshot({ type: 'png' })).toString('base64');

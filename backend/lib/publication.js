@@ -13,7 +13,7 @@ async function ensure({ docker, templates, run, logged }) {
   if (!building) building = logged(docker, ['build', '-t', image, path.join(templates, 'publisher')]).then(() => image).finally(() => { building = null; });
   return building;
 }
-function add(model, image, id) {
+function add(model, image, id, tls = null) {
   const routes = [];
   const network = 'mp-public-' + crypto.createHash('sha256').update(id).digest('hex').slice(0, 8);
   model.config.networks = model.config.networks || {};
@@ -29,11 +29,12 @@ function add(model, image, id) {
       const declaredNetworks = s.networks || { default: null };
       model.config.services[route] = { image, pull_policy: 'never', restart: 'unless-stopped', read_only: true,
         cap_drop: ['ALL'], security_opt: ['no-new-privileges'], mem_limit: '128m', cpus: 0.25,
-        environment: { UPSTREAM: `http://${name}:${p.target}`, RELEASE_ID: model.release },
+        environment: { UPSTREAM: `http://${name}:${p.target}`, RELEASE_ID: model.release, ...(tls?{TLS_CERT:tls.cert,TLS_KEY:tls.key}:{}) },
         ports: [{ ...p, target: 8080 }], depends_on: { [name]: { condition: 'service_started' } },
         networks: { ...declaredNetworks, [network]: null }, 'x-minipass': { role: 'routing' } };
       model.categories[route] = 'routing';
       routes.push({ service: name, target: Number(p.target), published: Number(p.published), route, release: model.release });
+      if(tls){model.config.services[route].ports[0].app_protocol='https';const service=model.services.find(s=>s.name===name);if(service)service.scheme='https';}
     }
     s.ports = keep;
   }

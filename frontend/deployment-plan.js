@@ -17,6 +17,7 @@ function deploymentPlanMarkup(plan) {
   const exclusions = [...(scan.issues || []), ...(scan.skipped || [])].map(e => `<li>${h(e.file)} — ${h(e.reason)}</li>`).join('');
   const provisioning=(plan.provisioning||[]).map(a=>`<li><b>${h(a.key)}</b> · ${h(a.service)} — ${h(a.reason)}</li>`).join('');
   const report = plan.verification;
+  const local=plan.localUrl?`<div class="meta"><b>Allocated local address:</b> <a href="${h(plan.localUrl)}" target="_blank" rel="noopener">${h(plan.localUrl)}</a>${plan.localUrl.startsWith('https:')?`<br>Local HTTPS needs no public domain. ${plan.localCaReady?`<a href="/api/apps/${encodeURIComponent(currentApp)}/local-ca">Download this site's CA certificate</a> and trust it on your device to avoid certificate warnings.`:'Deploy first to generate the downloadable CA certificate, then trust it on your device.'} CSP and secure cookies stay enabled.`:''}</div>`:'';
   const checks = report ? `<details open><summary>Last browser/API verification — ${report.ok ? 'passed' : 'failed'}</summary><div class="meta">${h(report.at || '')}</div><ul>${(report.errors || []).map(e => `<li class="field-error">${h(e)}</li>`).join('')}${(report.pages || []).map(p => `<li><b>${h(p.service)}</b> · ${h(p.url)} · ${h(p.status || '')} · ${p.ok ? 'passed' : 'failed'} · ${(p.assets || []).length} asset requests${p.screenshotIndex !== undefined ? ` · <a href="/api/apps/${encodeURIComponent(currentApp)}/verification/screenshot/${p.screenshotIndex}" target="_blank" rel="noopener">browser screenshot</a>` : ''}</li>`).join('')}${(report.probes || []).map(p => `<li><b>${h(p.service)}</b> internal API: ${p.ok ? 'passed' : 'failed'}</li>`).join('')}</ul></details>` : '<div class="meta">No application verification has run yet. A release is successful only after runtime, task, browser/asset and API checks pass.</div>';
   return `<div class="plan-state ${plan.ready ? 'plan-ready' : 'field-error'}"><b>${plan.ready ? 'Source plan checks passed' : 'Deployment blocked'}</b></div><div class="meta">${scan.files || 0} source files inventoried · ${scan.textFiles || 0} text files inspected · ${scan.complete ? 'scan complete within disclosed exclusions' : 'scan incomplete'}</div>` +
     `<p>${entry}<br><span class="meta">${h(plan.reason || 'Review the choices below.')}${plan.resolved ? ' · Compose-resolved combined model' : ''}</span></p>` +
@@ -27,7 +28,7 @@ function deploymentPlanMarkup(plan) {
     (manifests ? `<details><summary>Manifest build/launch instructions</summary><ul>${manifests}</ul></details>` : '') +
     (evidence ? `<details><summary>Entrypoint references</summary><ul>${evidence}</ul></details>` : '') +
     (exclusions ? `<details><summary>Excluded or unreadable files</summary><ul>${exclusions}</ul></details>` : '') +
-    (provisioning?`<details open><summary>Prepared repository inputs (values kept private)</summary><ul>${provisioning}</ul></details>`:'')+checks;
+    (provisioning?`<details open><summary>Prepared repository inputs (values kept private)</summary><ul>${provisioning}</ul></details>`:'')+local+checks;
 }
 async function prepareComposeInputs() {
   const id=currentApp;
@@ -60,14 +61,14 @@ async function loadDeploymentPlan() {
     box.textContent = 'Deployment plan unavailable: ' + e.message + '. Deployment still revalidates source before building.';
   }
 }
-async function saveVerificationUrl() {
+async function saveVerificationUrl(local = false, scheme = null) {
   if (!currentApp) return;
   const id = currentApp;
   try {
-    const r = await (await fetch(`/api/apps/${id}/verification`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: document.getElementById('verificationUrl').value.trim() }) })).json();
+    const r = await (await fetch(`/api/apps/${id}/verification`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(local?{access:'local',...(scheme?{scheme}:{})}:{ url: document.getElementById('verificationUrl').value.trim() }) })).json();
     if (currentApp !== id) return;
-    toast(r.ok ? r.provisioningError ? 'Public URL saved; input preparation needs review: '+r.provisioningError : 'Public URL saved — deployment will verify this route in Chromium.' : (r.error || 'save failed'), !!r.ok&&!r.provisioningError);
-    loadDeploymentPlan();
+    toast(r.ok ? r.provisioningError ? 'Address saved; input preparation needs review: '+r.provisioningError : r.accessMode==='local'?'Local address configured — redeploy to apply. No public domain needed.':'Public URL saved — deployment will verify this route in Chromium.' : (r.error || 'save failed'), !!r.ok&&!r.provisioningError);
+    loadDeploymentPlan();loadEnv();
   } catch (e) { toast(e.message, false); }
 }
 async function saveDeploymentEntrypoint(automatic = false) {

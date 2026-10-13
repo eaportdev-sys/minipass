@@ -91,7 +91,7 @@ function networks(service) {
 function boundData(service) {
   return (service.volumes || []).some(v=>typeof v==='object'?v.type==='bind':/^(?:\.{1,2}\/|\/|~|[A-Za-z]:[\\/])/.test(String(v)));
 }
-function provision({ dir, root, selection, meta, containers = [], volumes = [], fresh = false, mint = () => crypto.randomBytes(32).toString('hex') }) {
+function provision({ dir, root, selection, meta, containers = [], volumes = [], fresh = false, replaceOrigins = false, mint = () => crypto.randomBytes(32).toString('hex') }) {
   const model = declarations(root, selection);
   const file = path.join(dir, '.env');
   const source = dotenv(sourceFile(root, path.posix.join(path.posix.dirname(selection.file), '.env')) || '');
@@ -103,12 +103,14 @@ function provision({ dir, root, selection, meta, containers = [], volumes = [], 
   catch { invalidHistory=fs.existsSync(historyFile); }
   invalidHistory=invalidHistory||history.invalid===true;
   const histories = { ...(history.databases || {}) };
+  const origins = { ...(history.origins || {}) };
   const identifiers = String(meta.id || 'app').replace(/[^a-z0-9_]/gi, '_').slice(0, 48);
   const existingData = hasData(dir) || volumes.length > 0;
   const usable = k => k in env && String(env[k]).trim().length > 0;
-  const set = (key, value, reason, service) => {
+  const set = (key, value, reason, service, replace = false) => {
     if (key in changes && changes[key] !== String(value)) throw new Error('Conflicting generated Compose inputs require explicit selection');
-    if (!key || usable(key) || value == null || String(value) === '' || /[\r\n\u0000]/.test(String(value))) return false;
+    if (!key || usable(key)&&!replace || value == null || String(value) === '' || /[\r\n\u0000]/.test(String(value))) return false;
+    if(env[key]===String(value))return false;
     env[key] = String(value); changes[key] = String(value); actions.push({ key, reason, service }); return true;
   };
   const issue = (service, message) => issues.push({ code: 'DATABASE_INPUT_REVIEW', service, message });
@@ -207,13 +209,22 @@ function provision({ dir, root, selection, meta, containers = [], volumes = [], 
     // Only an explicitly configured hostname can satisfy a derived HTTP origin.
     // Never turn an optional origin into a made-up localhost/public URL.
     let configured = null;
-    try { if(meta.publicUrl)configured=new URL(meta.publicUrl);else if(meta.domain)configured=new URL('https://'+meta.domain); } catch {}
+    try { if(meta.accessMode==='local'&&meta.localUrl)configured=new URL(meta.localUrl);else if(meta.publicUrl)configured=new URL(meta.publicUrl);else if(meta.domain)configured=new URL('https://'+meta.domain);else if(meta.localUrl)configured=new URL(meta.localUrl); } catch {}
     for(const [field,value] of Object.entries(entries(service.environment))) {
       if(!/^(?:APP|SITE|PUBLIC|FRONTEND|CLIENT|WEB|CORS)(?:_BASE)?_(?:URL|ORIGIN|ORIGINS)$/.test(field))continue;
+      const direct=typeof value==='string'&&/^\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?\?[^{}]*)?\}$/.exec(value);
+      if(direct&&configured) {
+        const key=direct[1],local=meta.accessMode==='local',replace=local&&replaceOrigins||origins[key]&&origins[key]===env[key];
+        if(set(key,configured.origin,local?'application origin linked to allocated local address':'application origin derived from configured public URL',name,replace))origins[key]=configured.origin;
+      }
       const match=typeof value==='string'&&/^(https?):\/\/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?\?[^{}]*)?\}\/?$/.exec(value);
-      if(match&&configured&&!usable(match[2])&&configured.protocol===match[1]+':'&&!configured.username&&!configured.password) {
-        if(match[2]==='DOMAIN'&&!/^[A-Za-z0-9.-]+$/.test(configured.host))continue;
-        set(match[2],configured.host,'hostname derived from configured public URL',name);
+      if(match&&configured&&(configured.protocol===match[1]+':'||meta.accessMode==='local'&&configured.protocol==='https:')&&!configured.username&&!configured.password) {
+        const key=match[2],local=meta.accessMode==='local';
+        const replace=local&&replaceOrigins||origins[key]&&origins[key]===env[key];
+        const target=key==='DOMAIN'?configured.hostname:configured.host;
+        if(key==='DOMAIN'&&!/^[A-Za-z0-9.-]+$/.test(target))continue;
+        if(set(key,target,local?'hostname linked to allocated local address':'hostname derived from configured public URL',name,replace))origins[key]=target;
+        if(usable(key)&&/[:/]/.test(env[key].replace(/:\d+$/,''))&&!(env[key].startsWith('[')&&env[key].includes(']')))issue(name,`Origin hostname input ${key} must contain a hostname/IP, not http:// or https://. Select local/LAN access to configure this site's allocated address automatically.`);
       }
     }
   }
@@ -225,13 +236,15 @@ function provision({ dir, root, selection, meta, containers = [], volumes = [], 
       const escaped=String(value).replace(/'/g,"\\'");
       const plain=/^[A-Za-z0-9_./:@%+?=&,\[\]-]+$/.test(String(value));
       const line=plain?`${key}=${value}`:`${key}='${escaped}'`;
-      const index=lines.findIndex(l=>new RegExp('^\\s*(?:export\\s+)?'+key+'\\s*=').test(l));
+      const pattern=new RegExp('^\\s*(?:export\\s+)?'+key+'\\s*=');
+      const index=lines.findIndex(l=>pattern.test(l));
       if(index<0)lines.push(line);else lines[index]=line;
+      lines=lines.filter((l,i)=>i===index||!pattern.test(l)||index<0&&l===line);
     }
     const temporary=file+'.compose-inputs.tmp';
     fs.writeFileSync(temporary,lines.join('\n').replace(/\s*$/,'')+'\n',{mode:0o600});
     fs.renameSync(temporary,file);fs.chmodSync(file,0o600);
-    fs.writeFileSync(path.join(dir,'.compose-inputs.json'),JSON.stringify({version:1,...(invalidHistory?{invalid:true}:{}),databases:histories,actions:[...(history.actions || []),...actions]}),{mode:0o600});
+    fs.writeFileSync(path.join(dir,'.compose-inputs.json'),JSON.stringify({version:1,...(invalidHistory?{invalid:true}:{}),databases:histories,origins,actions:[...(history.actions || []),...actions]}),{mode:0o600});
   }
   return { changed:Object.keys(changes), actions, issues, warnings };
 }

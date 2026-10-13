@@ -4,6 +4,7 @@ ENV GIT_SHA=${GIT_SHA}
 # docker CLI (to manage app containers via mounted sock) + git (for self-upgrade).
 # util-linux-misc provides `script`, used as the PTY relay for browser terminals.
 RUN apk add --no-cache git unzip openssh-client util-linux-misc docker-cli docker-compose 2>/dev/null || apk add --no-cache git unzip openssh-client util-linux-misc docker docker-compose 2>/dev/null || apk add --no-cache git unzip openssh-client util-linux-misc docker 2>/dev/null || true
+RUN apk add --no-cache openssl
 # The /repo bind-mount is owned by the host user (uid 1000), but the panel runs
 # as root: without this, every git command in /repo fails with "dubious
 # ownership" and self-upgrade reports "repository not mounted".

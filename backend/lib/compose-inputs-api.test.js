@@ -40,6 +40,7 @@ async function main(){
     environment:
       DATABASE_URL: \${SQL_CONNECTION:?Set connection}
       APP_ORIGIN: https://\${PUBLIC_HOST:?Set public hostname}
+      COOKIE_SECURE: "true"
     ports: ["8000:4000"]
     depends_on: {initialize: {condition: service_completed_successfully}}
 volumes: {records: {}}
@@ -47,10 +48,10 @@ volumes: {records: {}}
     put('api/production.recipe','FROM minipass/node:22-runtime\nWORKDIR /app\nCOPY package.json ./\nRUN npm install --omit=dev --ignore-scripts\nCOPY server.js ./\nEXPOSE 4000\nCMD ["node","server.js"]\n');
     put('api/package.json','{"name":"fixture-api","scripts":{"start":"node server.js"},"dependencies":{"pg":"8.16.3"}}');
     put('api/server.js',`const http=require('http'),{Pool}=require('pg');const pool=new Pool({connectionString:process.env.DATABASE_URL});const handlers=new Map();const app={get:(p,f)=>handlers.set(p,f)};
-app.get('/',(req,res)=>{res.setHeader('Content-Type','text/html');res.end('<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head><body><h1>Database fixture</h1><div id="state">Loading</div><script src="/client.js"></script></body></html>')});
+app.get('/',(req,res)=>{res.setHeader('Content-Type','text/html');res.setHeader('Content-Security-Policy',"default-src 'self'; upgrade-insecure-requests");res.setHeader('Set-Cookie','fixture_session=local; Path=/; HttpOnly; Secure; SameSite=Strict');res.end('<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head><body><h1>Database fixture</h1><div id="state">Loading</div><script src="/client.js"></script></body></html>')});
 app.get('/style.css',(req,res)=>{res.setHeader('Content-Type','text/css');res.end('body{color:#234;background:#eee}')});
 app.get('/client.js',(req,res)=>{res.setHeader('Content-Type','text/javascript');res.end("fetch('/api/health').then(r=>r.json()).then(x=>{document.getElementById('state').textContent=x.ok?'Database linked and migrated':'FAILED';if(!x.ok)throw Error('Database query failed')})")});
-app.get('/api/health',async(req,res)=>{const r=await pool.query('SELECT total FROM fixture_runs WHERE id=1');res.setHeader('Content-Type','application/json');res.end(JSON.stringify({ok:r.rows.length===1,total:r.rows[0].total,origin:process.env.APP_ORIGIN}))});
+app.get('/api/health',async(req,res)=>{const r=await pool.query('SELECT total FROM fixture_runs WHERE id=1');const browser=req.headers['sec-fetch-mode'];if(browser&&(!String(req.headers.cookie||'').includes('fixture_session=local')||req.headers['x-forwarded-proto']!=='https')){res.statusCode=500;res.end('secure cookie or TLS forwarding failed');return;}res.setHeader('Content-Type','application/json');res.end(JSON.stringify({ok:r.rows.length===1,total:r.rows[0].total,origin:process.env.APP_ORIGIN}))});
 http.createServer((req,res)=>{const f=handlers.get(req.url);if(!f){res.statusCode=404;res.end('not found');return}Promise.resolve(f(req,res)).catch(e=>{res.statusCode=500;res.end('database query failed')})}).listen(4000,'0.0.0.0');`);
     const git=args=>execFileSync('git',args,{cwd:repo,stdio:'pipe'});
     git(['init','-b','main']);git(['config','user.email','fixture@example.test']);git(['config','user.name','Fixture']);git(['add','.']);git(['commit','-m','fixture']);
@@ -65,23 +66,18 @@ http.createServer((req,res)=>{const f=handlers.get(req.url);if(!f){res.statusCod
     const created=await call('/api/apps','POST',{name:'Fresh database fixture',type:'node',repoUrl:repo,branch:'main',storageGB:'1'});
     assert.equal(created.status,200,JSON.stringify(created));id=created.body.id;
     const dir=path.join(apps,id),read=()=>dotenv.parse(fs.readFileSync(path.join(dir,'.env')));
-    const first=read();assert.equal(first.WAREHOUSE_SECRET.length,64);assert(first.SQL_CONNECTION);assert(!first.PUBLIC_HOST);
+    const first=read();assert.equal(first.WAREHOUSE_SECRET.length,64);assert(first.SQL_CONNECTION);assert(first.PUBLIC_HOST);
+    assert.equal(first.PUBLIC_HOST,new URL(created.body.localUrl).host,'required hostname input is configured automatically from local publication, not an invented public domain');
     const parsed=new URL(first.SQL_CONNECTION);assert.equal(parsed.hostname,'warehouse');assert.equal(parsed.password,first.WAREHOUSE_SECRET);assert.equal(parsed.pathname,'/fixture_records');
     assert(!JSON.stringify(created.body).includes(first.WAREHOUSE_SECRET));
-    assert.deepEqual(created.body.plan.blockers.filter(b=>b.code==='REQUIRED_ENV').map(b=>b.message.match(/requires (\w+)/)[1]),['PUBLIC_HOST']);
+    assert(!created.body.plan.blockers.some(b=>b.code==='REQUIRED_ENV'),'fresh local deployment needs no user-provided hostname');
     assert(!created.body.lastDeploy,'creation seeds inputs without launching a database/migration');
     const url='/api/apps/'+id;
     let prepared=await call(url+'/compose-inputs','POST',{});assert.equal(prepared.status,200,JSON.stringify(prepared));assert.equal(prepared.body.changed.length,0);
-    const before=fs.readFileSync(path.join(dir,'.env'),'utf8');
-    const blocked=await call(url+'/deploy','POST',{source:'local'});assert.equal(blocked.status,409,JSON.stringify(blocked));assert(blocked.body.error.includes('PUBLIC_HOST'));assert(!blocked.body.error.includes('WAREHOUSE_SECRET is missing'));
-    assert.equal(fs.readFileSync(path.join(dir,'.env'),'utf8'),before,'hostname failure does not regenerate the database password');
-    const configured=await call(url+'/verification','POST',{url:'https://fixture.example.test'});
+    assert.equal((await call(url+'/env','PUT',{set:{PUBLIC_HOST:'http://10.0.0.1:8005'}})).status,200);
+    const configured=await call(url+'/verification','POST',{access:'local'});
     assert.equal(configured.status,200,JSON.stringify(configured));assert(!configured.body.provisioningError);
-    assert.equal(read().PUBLIC_HOST,'fixture.example.test','configured HTTPS URL automatically satisfies the repository hostname input');
-    assert.equal(read().WAREHOUSE_SECRET,first.WAREHOUSE_SECRET);
-    // This isolated fixture has no public DNS/TLS endpoint. Remove only that
-    // browser target; retain its already prepared hostname for internal checks.
-    assert.equal((await call(url+'/verification','POST',{url:null})).status,200);
+    assert.equal(read().PUBLIC_HOST,new URL(configured.body.localUrl).host,'explicit local selection repairs malformed hostname inputs without database credential changes');
     let deployed=await call(url+'/deploy','POST',{source:'local'});
     if(deployed.status!==200)throw Error(JSON.stringify(deployed)+'\n'+fs.readFileSync(path.join(dir,'deploy.log'),'utf8').slice(-8000));
     const ids=docker(['ps','-a','-q','--filter','label=com.docker.compose.project='+id]).trim().split(/\s+/);let cs=JSON.parse(docker(['inspect',...ids]));
@@ -89,12 +85,23 @@ http.createServer((req,res)=>{const f=handlers.get(req.url);if(!f){res.statusCod
     assert(db.Config.Env.includes('POSTGRES_PASSWORD='+first.WAREHOUSE_SECRET));
     assert.equal(docker(['exec',db.Id,'psql','-U','fixture_user','-d','fixture_records','-Atc','SELECT total FROM fixture_runs']).trim(),'1');
     let status=(await call(url+'/status')).body;assert(status.lastDeploy.verification.ok);assert(status.lastDeploy.verification.pages[0].api.some(r=>r.status===200));
+    assert(status.lastDeploy.verification.pages[0].url.startsWith('https:'));
+    assert(status.lastDeploy.verification.pages[0].releaseMatched);
+    assert(status.lastDeploy.verification.pages[0].assets.some(r=>r.type==='stylesheet'&&r.status===200),'HTTPS-upgraded stylesheets render under the trusted local CA');
+    const screenshot=await fetch(base+url+'/verification/screenshot/0',{headers});assert.equal(screenshot.status,200);assert((await screenshot.arrayBuffer()).byteLength>100);
+    const ca=await fetch(base+url+'/local-ca',{headers});assert.equal(ca.status,200);const certificate=await ca.text();assert(certificate.includes('BEGIN CERTIFICATE')&&!certificate.includes('PRIVATE KEY'));
+    const responseHeaders=await new Promise((resolve,reject)=>{require('https').get(status.lastDeploy.verification.pages[0].url,{ca:certificate},res=>{res.resume();resolve(res.headers)}).on('error',reject)});
+    assert(responseHeaders['content-security-policy'].includes('upgrade-insecure-requests'),'publication does not strip or weaken the repository CSP');
+    assert(responseHeaders['set-cookie'].some(c=>c.includes('Secure')),'secure cookies are retained');
+    assert.equal(fs.statSync(path.join(dir,'.local-tls','ca.key')).mode&0o777,0o600);assert.equal(fs.statSync(path.join(dir,'.local-tls','server.key')).mode&0o777,0o600);
+    const stableCertificate=fs.readFileSync(path.join(dir,'.local-tls','server.crt'),'utf8');
     assert((await call(url+'/deployment-plan')).body.provisioning.some(a=>a.key==='SQL_CONNECTION'));
     const encodedReport=JSON.stringify((await call(url+'/deployment-plan')).body);
     assert(!encodedReport.includes(first.WAREHOUSE_SECRET)&&!encodedReport.includes(first.SQL_CONNECTION),'plan responses never echo generated credentials');
-    console.log('LIVE PASS: create seeded a private password/URL; PostgreSQL initialized, migration ran once, API authenticated and browser verification passed');
+    console.log('LIVE PASS: no public domain/input required; local HTTPS, preserved CSP, rendered CSS/JS, secure-cookie API query, PostgreSQL migration, screenshot and CA download all passed');
     deployed=await call(url+'/deploy','POST',{source:'local'});assert.equal(deployed.status,200,JSON.stringify(deployed));
     assert.equal(read().WAREHOUSE_SECRET,first.WAREHOUSE_SECRET);assert.equal(read().SQL_CONNECTION,first.SQL_CONNECTION);
+    assert.equal(fs.readFileSync(path.join(dir,'.local-tls','server.crt'),'utf8'),stableCertificate,'local device trust is stable across redeploys');
     assert.equal(docker(['exec',db.Id,'psql','-U','fixture_user','-d','fixture_records','-Atc','SELECT total FROM fixture_runs']).trim(),'2');
     console.log('LIVE PASS: redeploy preserved the same database, password and URI; no credential rotation or extra migration replay');
   }finally{

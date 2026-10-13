@@ -72,6 +72,8 @@ assert(!markup.includes('8202'));
 assert(markup.includes('&lt;unsafe&gt;') && !markup.includes('<unsafe>'));
 assert(markup.includes('Changes pending'));
 assert(markup.includes('Move to Trash'));
+context.localSite={...context.multi,hostPort:8200,accessMode:'local',localUrl:'https://10.0.0.30:8200/',publicUrl:'https://old.example.test/'};
+assert(run('appCardMarkup(localSite)').includes('https://10.0.0.30:8200/'),'local publication uses its actual origin instead of old public routing or hardcoded HTTP');
 assert.equal(json('websitePageData([multi], {search:"api"})').total, 1);
 assert.equal(json('websitePageData([multi], {search:"disabled"})').total, 0);
 run('websiteApps=fixtures; renderWebsites()');

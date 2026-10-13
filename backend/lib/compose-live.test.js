@@ -64,7 +64,9 @@ app.get('/api/health',async(req,res)=>{const r=await fetch('http://api:4000/api/
 http.createServer((req,res)=>{const f=routes.get(req.url);if(!f){res.statusCode=404;res.end('not found');return}Promise.resolve(f(req,res)).catch(e=>{res.statusCode=500;res.end('upstream failed')})}).listen(8080,'0.0.0.0');`);
   fs.writeFileSync(path.join(dir, '.env'), 'PUBLIC_DOMAIN=fixture.example.test\nCOMPOSE_PROJECT_NAME=' + id + '\n');
   fs.writeFileSync(path.join(dir, 'docker-compose.yml'), 'services:\n  app:\n    image: nginx:alpine\n');
-  fs.writeFileSync(path.join(tmp, 'apps.json'), JSON.stringify({ apps: [{ id, name: 'isolated fixture', type: 'node', hostPort: 8800, db: [], repoUrl: '' }] }));
+  // Deliberately keep plain HTTP in this regression to test CSP rejection;
+  // default/local HTTPS publication is covered by compose-inputs-api.test.js.
+  fs.writeFileSync(path.join(tmp, 'apps.json'), JSON.stringify({ apps: [{ id, name: 'isolated fixture', type: 'node', hostPort: 8800, accessMode:'public',db: [], repoUrl: '' }] }));
   const inspect = () => { const ids = docker(['ps', '-a', '-q', '--filter', 'label=com.docker.compose.project=' + id]).trim().split(/\s+/).filter(Boolean); return ids.length ? JSON.parse(docker(['inspect', ...ids])) : []; };
   try {
     const listener=net.createServer();listener.listen(0,'127.0.0.1');await once(listener,'listening');const port=listener.address().port;await new Promise(r=>listener.close(r));

@@ -187,12 +187,27 @@ Existing values, external connection URLs, and repository-provided defaults win.
 Matching running-database credentials can be recovered, but unknown retained data
 or lost initialized passwords require review—never silent password rotation.
 Multiple possible databases require an explicit dependency/connection. Derived
-origin hostname inputs come only from a configured, scheme-matching public URL or
-domain; Minipass never invents an HTTPS hostname or writes the derived service
-origin separately. Provisioning reports expose input names, never secret values.
+origin hostname inputs come from the allocated local address or an explicitly
+configured, scheme-matching public URL/domain. No public domain is required for
+local deployment. Provisioning reports expose input names, never secret values.
 Automatic input generation currently needs direct service declarations (including
 ordinary ordered overlays); includes/extends/custom merge tags still execute via
 Compose but require explicit inputs instead of unsafe partial inference.
+
+**Local/LAN access:** with no public URL/domain, repository Compose sites default
+to their allocated local port. Declared HTTPS origins automatically use a local
+HTTPS publication proxy and a persistent per-site certificate authority, preserving
+the repository's CSP and secure cookies. Deploy shows the exact address and a CA
+download; install that CA as trusted on devices you use to access the site (e.g.
+Windows Trusted Root Certification Authorities). It is not a public certificate
+and browsers will warn until it is trusted. The disposable verifier trusts only
+that site's CA; public certificates still undergo normal validation. Plain-HTTP
+repositories stay HTTP. **Use local / LAN address** clears external verification
+routing and explicitly relinks declared hostname inputs; database values/data are
+unchanged. A copied URL using another site's local port is rejected before build.
+If a site address changes, reselect local access/redeploy so its origin and
+certificate reflect the new address. Local certificate private keys stay in
+private files/container configuration; only the public CA is downloadable.
 
 Project names, image tags, networks and named volumes are site-isolated. Published
 ports allocate in 8000–8999 and remain stable across redeploys. A small publication
