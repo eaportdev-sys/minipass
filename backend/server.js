@@ -30,7 +30,7 @@ const dockerfileProtection = require('./lib/dockerfile-protection');
 const siteIdentity = require('./lib/site-identity');
 const { refreshStandardDockerfile, standardDockerfileType, findDockerfiles, validDockerfileName, resolveServiceDockerfile } = require('./lib/dockerfiles');
 const { buildProfile, readBuildProfile, localBuildProfile, isJekyll } = require('./lib/build-profile');
-const preflight = require('./lib/preflight');
+const repoAnalysis = require('./lib/repo-analysis');
 
 const PORT = process.env.PORT || 3001;
 const APPS_DIR = path.resolve(__dirname, process.env.APPS_DIR || '../apps');
@@ -1200,7 +1200,7 @@ function requiredDatabases(meta, codeRoot) {
   for (const service of svc.fullServices(meta, dir).filter(s => s.enabled !== false)) {
     const ctx = path.join(codeRoot, service.subdir || '');
     try {
-      const a = preflight.analyzeService(ctx, service.type, service.subdir || '');
+      const a = repoAnalysis.analyzeService(ctx, service.type, service.subdir || '');
       for (const db of a.databaseNeeds || []) if (RELATIONAL_DBS.includes(db) || ['mongo', 'redis'].includes(db)) needs.add(db);
     } catch {}
   }
@@ -1218,7 +1218,7 @@ function configureDetectedServices(meta, dir) {
   if (!meta.repoUrl || meta.subdir) return [];
   const codeDir = path.join(dir, 'code');
   let analysis;
-  try { analysis = preflight.analyzeRepository(codeDir, null, null); } catch { return []; }
+  try { analysis = repoAnalysis.analyzeRepository(codeDir); } catch { return []; }
   const detected = (analysis.services || []).filter(s => s && s.type && fs.existsSync(path.join(codeDir, s.subdir || '')));
   if (!detected.length) return [];
   const current = svc.fullServices(meta, dir);
@@ -1258,7 +1258,7 @@ function hasStaleRootService(meta, dir) {
   const services = svc.fullServices(meta, dir);
   if (!services.some(s => (s.subdir || '') === '')) return false;
   let analysis;
-  try { analysis = preflight.analyzeRepository(path.join(dir, 'code'), null, null); } catch { return false; }
+  try { analysis = repoAnalysis.analyzeRepository(path.join(dir, 'code')); } catch { return false; }
   const desired = (analysis.services || []).map(s => s.subdir || '');
   if (desired.includes('')) return false;
   if (!desired.length) return false;
@@ -2108,43 +2108,6 @@ app.post('/api/github/detect', async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Preflight: static repository analysis before creation/deploy
-app.post('/api/github/preflight', async (req, res) => {
-  try {
-    const { repo, branch, token, type, subdir } = req.body;
-    if (!repo) return res.status(400).json({ error: 'repo required' });
-    // Clone to a temporary directory for analysis
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-preflight-'));
-    const isSsh = /^(git@|ssh:\/\/)/i.test(repo);
-    const url = isSsh ? repo : gh.authUrlFor(null, repo);
-    try {
-      execSync(`git clone --depth 1 ${branch ? `-b ${branch} ` : ''}${url} "${tmp}"`, { stdio: 'pipe', env: isSsh ? appGitEnv(tmp) : process.env });
-    } catch (e) {
-      fs.rmSync(tmp, { recursive: true, force: true });
-      return res.status(400).json({ error: 'clone failed: ' + String(e.stderr || e.message).slice(-300) });
-    }
-    try {
-      const analysis = preflight.analyzeRepository(tmp, type, subdir);
-      const report = preflight.readinessReport(analysis);
-      res.json({ ...report, analysis });
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// Preflight for an existing site's code
-app.get('/api/apps/:id/preflight', (req, res) => {
-  try {
-    const meta = load().apps.find(a => a.id === req.params.id);
-    if (!meta) return res.status(404).json({ error: 'unknown app' });
-    const dir = appDir(APPS_DIR, meta.id);
-    const codeDir = path.join(dir, 'code');
-    const analysis = preflight.analyzeRepository(codeDir, meta.type, meta.subdir);
-    const report = preflight.readinessReport(analysis);
-    res.json({ ...report, analysis });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
 app.get('/api/github/repos', async (req, res) => {
   // aggregate every connected account so 10 sites can live on 10 different githubs
   try {
@@ -3239,7 +3202,7 @@ app.post('/api/apps/:id/start', async (req, res) => {
 });
 // Static env-need scan lives in lib/env-needs.js (shared by doctor,
 // create-time reporting and deploy warnings). Read-only, key names only.
-const { scanEnvNeeds, readEnvVars, missingEnvVars } = require('./lib/env-needs');
+const { readEnvVars, missingEnvVars } = require('./lib/env-needs');
 const { readComposeTopo } = require('./lib/compose-read');
 // Sensible self-generated defaults: values the panel can compute without asking.
 function suggestedDefaults(meta) {

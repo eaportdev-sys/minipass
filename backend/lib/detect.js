@@ -18,9 +18,6 @@ function decideType(paths, pkg) {
   if (deps.mariadb) dbs.push('mariadb');
   if (deps.mongoose || deps.mongodb) dbs.push('mongo');
   if (deps.redis || deps.ioredis || deps.bull || deps.bullmq) dbs.push('redis');
-  if (any(/prisma\/schema\.prisma$/)) {
-    // prisma provider needs schema content - flag postgres only on explicit mention is overreach; skip
-  }
 
   const pkgPath = shallowest(/(^|\/)package\.json$/);
   if (isJekyll(list, pkg)) return { type: 'static', detected: 'jekyll', dbs: [], reason: 'Jekyll static site - Ruby/Node build, nginx serves the generated output' };

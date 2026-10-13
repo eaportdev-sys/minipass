@@ -392,7 +392,7 @@ installer once on older installations to replace their legacy cron entry.
   Never expose `:3001` to the open internet in this build. DB admin UIs live
   inside the app range and some (mongo-express) have no login — keep that
   range private too.
-- Change `WEBHOOK_SECRET` in `backend/.env` (see `backend/.env.example`).
+- Webhook secrets are generated per site; rotate them from that site's Deploy tab.
 - Never commit `backend/.env`, `backend/data.json`, `panel-auth.json`,
   `apps/*/`, or `panel-key*` — all are gitignored for a reason.
 
@@ -428,7 +428,7 @@ for their own use case.
 - `minipaas` vs `minipass` naming is still mixed in a few paths/strings —
   rename decision still open (note: `minipass` collides with a popular npm
   package of the same name).
-- Cloudflare Tunnel wiring is a stub.
+- No built-in Cloudflare Tunnel integration; configure tunnels outside the panel.
 - Backups are download-only; restore is manual.
 
 ## License

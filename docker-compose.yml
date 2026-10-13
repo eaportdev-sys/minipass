@@ -26,11 +26,6 @@ services:
       - minipass-npm-cache:/root/.npm
     ports:
       - "3001:3001"
-  # Set TUNNEL_TOKEN, then uncomment. One tunnel serves all apps.
-  # cloudflared:
-  #   image: cloudflare/cloudflared:latest
-  #   restart: unless-stopped
-  #   command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
 
 volumes:
   minipass-npm-cache:

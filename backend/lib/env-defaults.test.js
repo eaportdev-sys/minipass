@@ -82,7 +82,7 @@ try {
   assert.equal(envDefaults.correctedValue('DEV_DB_NAME', 'development database name', result, origins), 'sample');
   assert.equal(envDefaults.correctedValue('JWT_SECRET', 'real-user-secret', result, origins), null);
   assert.equal(envDefaults.correctedValue('APP_URL', 'https://custom.example', result, origins), null);
-  assert.equal(envDefaults.frontendOrigin([{ type: 'node', hostPort: 8002 }], '10.0.0.250', 'http'), null);
+  assert.equal(envDefaults.publishedOrigins([{ type: 'node', hostPort: 8002 }], '10.0.0.250', 'http').frontend, null);
   const backendOnlyOrigins = envDefaults.publishedOrigins([services[0]], '10.0.0.250', 'http');
   const backendOnly = envDefaults.resolvedDefaults(tmp, [services[0]], backendOnlyOrigins, snapshot.values, snapshot.originals, runtime);
   assert.equal(backendOnly.values.WHITE_LIST_URLS, 'http://10.0.0.250:8002', 'API-only allowlists use their published backend origin');

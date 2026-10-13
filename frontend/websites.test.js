@@ -23,7 +23,7 @@ const context = vm.createContext({
 });
 const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
 vm.runInContext(source.slice(0, source.indexOf('const SITE_TABS')) +
-  section('function dbLabel(', 'function dirtyBadge(') +
+  section('function dbLabel(', 'function showView(') +
   section('function safeHtml(', 'async function loadDatabases(') +
   section('function setPowerState(', 'function sourceSlot(') +
   section('function containerUp(', 'function updatePowerStates('), context);

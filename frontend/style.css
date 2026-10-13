@@ -181,7 +181,6 @@ main { flex: 1; min-width: 0; width: 100%; padding: 24px; max-width: 1100px; }
 .appcard-main { display: flex; flex: 1 1 auto; min-width: 0; flex-direction: column; }
 .appcard h3 { margin: 0 0 6px; font-size: 18px; }
 .appcard-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
-.badge.pending { color: #ffc107; border-color: rgba(255, 193, 7, .55); }
 .app-links { display: grid; gap: 6px; margin: 7px 0 12px; }
 .app-link-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 7px; min-width: 0; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--input); }
 .app-link-row > span { color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; }

@@ -169,10 +169,6 @@ function safeHost(value) {
   return /^[A-Za-z0-9.-]+$/.test(host) ? host : 'localhost';
 }
 
-function frontendOrigin(services, hostname, protocol) {
-  return publishedOrigins(services, hostname, protocol).frontend;
-}
-
 function serviceOrigin(service, hostname, protocol) {
   if (!service || !service.hostPort) return null;
   const host = safeHost(hostname);
@@ -311,4 +307,4 @@ function correctedValue(key, current, resolved, origins) {
   return originals.includes(value) && resolved.values[key] !== value ? resolved.values[key] : null;
 }
 
-module.exports = { BUILT_INS, parseExample, exampleFiles, exampleDefaults, snapshotDefaults, frontendOrigin, publishedOrigins, pointsAtFrontend, secureDefault, databaseAlias, resolvedDefaults, correctedValue };
+module.exports = { BUILT_INS, parseExample, exampleFiles, exampleDefaults, snapshotDefaults, publishedOrigins, pointsAtFrontend, secureDefault, databaseAlias, resolvedDefaults, correctedValue };

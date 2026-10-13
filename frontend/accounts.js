@@ -110,17 +110,10 @@ async function ghDisconnect(login) {
   ghStatus();
 }
 function dbLabel(a) { return [].concat(a.db || []).join('+') || 'none'; }
-function dirtyBadge(a) {
-  if (!a.dirty) return '';
-  const reason = typeof a.dirty === 'object' ? (a.dirty.reason || '') : '';
-  const tip = reason ? `saved change not yet deployed: ${reason} — press the power button to redeploy` : 'saved change not yet deployed — press the power button to redeploy';
-  const short = reason ? ` ● ${reason}` : ' ● changes pending';
-  return `<span class="badge pending" title="${safeHtml(tip)}">${safeHtml(short.length > 42 ? short.slice(0, 42) + '…' : short)}</span>`;
-}
 function showView(view) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + view));
   document.querySelectorAll('.navitem').forEach(n => n.classList.toggle('active', n.dataset.view === view));
   if (view === 'trash') loadTrash();
   if (view === 'errors') loadPanelErrors();
   if (view === 'storage') loadHostStorage();
-}
+}
