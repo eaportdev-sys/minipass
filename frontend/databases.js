@@ -11,14 +11,17 @@ async function loadDatabases() {
     const r = await (await fetch(`/api/apps/${appId}/databases`)).json();
     if (currentApp !== appId) return;
     if (r.error) { box.innerHTML = `<div class="meta">${safeHtml(r.error)}</div>`; return; }
+    const add=document.getElementById('dbAddRow');if(add)add.style.display=r.repositoryOwned?'none':'';
+    const attached=document.getElementById('dbList');if(attached)attached.textContent=r.repositoryOwned?'Defined by the selected deployment file':'';
     box.innerHTML = (r.databases || []).map(d => {
       const running = /^running/i.test(d.state || '');
+      if(d.repositoryOwned&&!d.tool)return `<div class="db-runtime-card"><div class="db-runtime-title"><span class="opdot ${running?'ok':'warn'}"></span><b>${safeHtml(d.label)}</b><span class="badge">${safeHtml(d.service)}</span></div><div class="meta">${running?'Running':d.state==='prepared'?'Prepared — initializes on first deploy':safeHtml(d.state)} · repository-managed</div>${d.status?`<div class="meta">${safeHtml(d.status)}</div>`:''}</div>`;
       const toolPort = parseInt(d.toolPort, 10);
       const toolRunning = d.toolState === 'running' && toolPort >= 8900 && toolPort <= 8999;
       const toolUrl = toolRunning ? `http://${location.hostname}:${toolPort}` : null;
       const action = toolRunning
         ? `<button class="btn primary" onclick="openDbTool('${d.type}', ${toolPort})">open ${safeHtml(d.tool)}</button><a class="btn" href="${safeHtml(toolUrl)}" target="_blank" rel="noopener">open in tab</a><button onclick="stopDbTool('${d.type}')">stop UI</button>`
-        : `<button class="btn primary" onclick="launchDbTool('${d.type}')" ${running ? '' : 'disabled'}>launch ${safeHtml(d.tool)}</button>`;
+        : `<button class="btn primary" onclick="launchDbTool('${d.type}')" ${running&&!d.toolError ? '' : 'disabled'}>launch ${safeHtml(d.tool)}</button>`;
       const dumpBtn = `<button onclick="downloadDbDump('${d.type}')" ${running ? '' : 'disabled'} title="download a full dump of this database">dump</button>`;
       let toolStatus = `${safeHtml(d.tool)} is stopped`;
       if (toolRunning) {
@@ -112,4 +115,4 @@ async function stopDbTool(type, appId = currentApp, popupClosed = false) {
     toast(r.ok ? (popupClosed ? 'database UI stopped after its tab closed' : 'database UI stopped') : (r.error || 'failed'), !!r.ok);
     if (currentApp === appId) loadDatabases();
   } catch (e) { toast('database UI stop failed: ' + e.message, false); }
-}
+}

@@ -63,7 +63,7 @@ let createPendingId = null;
 let createBusyOps = 0;
 function setBuildBusy(on) {
   createBusyOps = Math.max(0, createBusyOps + (on ? 1 : -1));
-  try { document.getElementById('createBuildBtn').disabled = createBusyOps > 0; } catch {}
+  try { document.getElementById('createBuildBtn').disabled = createBusyOps > 0||(typeof createSourceNeedsChoice==='function'&&createSourceNeedsChoice()); } catch {}
 }
 async function modalListRepos() {
   const session = createModalSession;
@@ -110,7 +110,7 @@ async function ghDisconnect(login) {
   await fetch('/api/github/disconnect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: login || undefined }) });
   ghStatus();
 }
-function dbLabel(a) { return [].concat(a.db || []).join('+') || 'none'; }
+function dbLabel(a) { return [...new Set([].concat(a.db || [],(a.repositoryDatabases || []).map(d=>d.type)).filter(t=>t&&t!=='none'))].join('+') || 'none'; }
 function showView(view) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + view));
   document.querySelectorAll('.navitem').forEach(n => n.classList.toggle('active', n.dataset.view === view));

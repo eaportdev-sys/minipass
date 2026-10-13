@@ -78,6 +78,11 @@ async function loadMigrateSuggest() {
   try {
     const r = await (await fetch(`/api/apps/${appId}/migrate-suggest`)).json();
     if (currentApp !== appId) return;
+    const manual=document.getElementById('manualMigrationControls');if(manual)manual.style.display=r.repositoryOwned?'none':'';
+    if(r.repositoryOwned) {
+      box.innerHTML='<div class="meta">Repository migrations run automatically during deployment, before their dependent application starts.</div>'+((r.tasks||[]).map(t=>`<div class="db-runtime-card"><b>${safeHtml(t.name)}</b><span class="badge">${t.completed?'completed successfully':safeHtml(t.state)}</span><div><code>${safeHtml(t.command||'repository entrypoint')}</code></div>${t.exitCode!==undefined?`<div class="meta">Exit code: ${t.exitCode}</div>`:''}</div>`).join('')||'<div class="meta">No completion-dependent migration task declared.</div>');
+      return;
+    }
     const list = r.suggestions || [];
     box.innerHTML = list.length ? `<div class="migrate-suggest-label">Detected migration runners</div><div class="migrate-suggest-list">${list.map(s => {
       const location = s.runnable
@@ -88,4 +93,4 @@ async function loadMigrateSuggest() {
       return `<div class="migrate-detect-wrap"><button class="migrate-detect${s.warning ? ' has-warning' : ''}" data-command="${safeHtml(s.command || s.cmd)}" data-dir="${safeHtml(s.dir || '')}" data-service="${safeHtml(s.service || s.svc || '')}" data-check="${safeHtml(s.check || '')}" data-phase="${safeHtml(s.phase || 'deploy')}" data-warning="${safeHtml(s.warning || '')}" onclick="useMigrateDetection(this)" title="${safeHtml(s.why || '')}"><div><b>${safeHtml(s.framework || 'Migration')}</b><span>${safeHtml(phase)}</span></div><code>${safeHtml(s.command || s.cmd)}</code>${s.warning ? `<small>${safeHtml(s.warning)}</small>` : ''}<em>${safeHtml(location)}</em></button><button class="btn primary" onclick="runMigrateSuggestion(this)">run now</button></div>`;
     }).join('')}</div>` : '<div class="migrate-suggest-label">No migration runner detected — enter the service, folder, and project command manually.</div>';
   } catch { if (currentApp === appId) box.innerHTML = ''; }
-}
+}

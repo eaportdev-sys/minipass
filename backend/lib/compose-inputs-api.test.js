@@ -53,6 +53,7 @@ app.get('/style.css',(req,res)=>{res.setHeader('Content-Type','text/css');res.en
 app.get('/client.js',(req,res)=>{res.setHeader('Content-Type','text/javascript');res.end("fetch('/api/health').then(r=>r.json()).then(x=>{document.getElementById('state').textContent=x.ok?'Database linked and migrated':'FAILED';if(!x.ok)throw Error('Database query failed')})")});
 app.get('/api/health',async(req,res)=>{const r=await pool.query('SELECT total FROM fixture_runs WHERE id=1');const browser=req.headers['sec-fetch-mode'];if(browser&&(!String(req.headers.cookie||'').includes('fixture_session=local')||req.headers['x-forwarded-proto']!=='https')){res.statusCode=500;res.end('secure cookie or TLS forwarding failed');return;}res.setHeader('Content-Type','application/json');res.end(JSON.stringify({ok:r.rows.length===1,total:r.rows[0].total,origin:process.env.APP_ORIGIN}))});
 http.createServer((req,res)=>{const f=handlers.get(req.url);if(!f){res.statusCode=404;res.end('not found');return}Promise.resolve(f(req,res)).catch(e=>{res.statusCode=500;res.end('database query failed')})}).listen(4000,'0.0.0.0');`);
+    put('alternative.definition',fs.readFileSync(path.join(repo,'deploy.definition'),'utf8').replace('postgres:16-alpine','postgres:17-alpine'));
     const git=args=>execFileSync('git',args,{cwd:repo,stdio:'pipe'});
     git(['init','-b','main']);git(['config','user.email','fixture@example.test']);git(['config','user.name','Fixture']);git(['add','.']);git(['commit','-m','fixture']);
     const listener=net.createServer();listener.listen(0,'127.0.0.1');await once(listener,'listening');const port=listener.address().port;await new Promise(r=>listener.close(r));
@@ -63,7 +64,11 @@ http.createServer((req,res)=>{const f=handlers.get(req.url);if(!f){res.statusCod
     const setup=await fetch(base+'/api/panel/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:'fixture-password-only',acceptTerms:true})});assert.equal(setup.status,200);
     const headers={Cookie:setup.headers.get('set-cookie').split(';')[0],'Content-Type':'application/json'};
     const call=async(url,method='GET',body)=>new Promise((resolve,reject)=>{const payload=body===undefined?null:JSON.stringify(body);const request=require('http').request(base+url,{method,headers:{...headers,...(payload?{'Content-Length':Buffer.byteLength(payload)}:{})},timeout:600000},res=>{let text='';res.on('data',d=>{text+=d});res.on('end',()=>{try{resolve({status:res.statusCode,body:JSON.parse(text)})}catch(e){reject(e)}})});request.on('error',reject);request.on('timeout',()=>request.destroy(Error('fixture timeout')));request.end(payload);});
-    const created=await call('/api/apps','POST',{name:'Fresh database fixture',type:'node',repoUrl:repo,branch:'main',storageGB:'1'});
+    const createBody={name:'Fresh database fixture',type:'node',repoUrl:repo,branch:'main',storageGB:'1',access:'local'};
+    const inspected=await call('/api/apps','POST',{...createBody,prepareOnly:true});assert.equal(inspected.status,200);assert(inspected.body.needsEntrypoint);
+    const selected={kind:'compose',file:'deploy.definition'};
+    const chosen=await call('/api/apps','POST',{...createBody,prepareOnly:true,pendingId:inspected.body.pendingId,deploymentEntrypoint:selected});assert.equal(chosen.status,200);assert.equal(chosen.body.repositoryDatabases[0].type,'postgres');
+    const created=await call('/api/apps','POST',{...createBody,pendingId:inspected.body.pendingId,deploymentEntrypoint:selected});
     assert.equal(created.status,200,JSON.stringify(created));id=created.body.id;
     const dir=path.join(apps,id),read=()=>dotenv.parse(fs.readFileSync(path.join(dir,'.env')));
     const first=read();assert.equal(first.WAREHOUSE_SECRET.length,64);assert(first.SQL_CONNECTION);assert(first.PUBLIC_HOST);
@@ -72,12 +77,9 @@ http.createServer((req,res)=>{const f=handlers.get(req.url);if(!f){res.statusCod
     assert(!JSON.stringify(created.body).includes(first.WAREHOUSE_SECRET));
     assert(!created.body.plan.blockers.some(b=>b.code==='REQUIRED_ENV'),'fresh local deployment needs no user-provided hostname');
     assert(!created.body.lastDeploy,'creation seeds inputs without launching a database/migration');
+    assert.equal(created.body.accessMode,'local');assert.equal(created.body.deploymentEntrypoint.file,'deploy.definition');assert.equal(created.body.repositoryDatabases[0].type,'postgres');
     const url='/api/apps/'+id;
     let prepared=await call(url+'/compose-inputs','POST',{});assert.equal(prepared.status,200,JSON.stringify(prepared));assert.equal(prepared.body.changed.length,0);
-    assert.equal((await call(url+'/env','PUT',{set:{PUBLIC_HOST:'http://10.0.0.1:8005'}})).status,200);
-    const configured=await call(url+'/verification','POST',{access:'local'});
-    assert.equal(configured.status,200,JSON.stringify(configured));assert(!configured.body.provisioningError);
-    assert.equal(read().PUBLIC_HOST,new URL(configured.body.localUrl).host,'explicit local selection repairs malformed hostname inputs without database credential changes');
     let deployed=await call(url+'/deploy','POST',{source:'local'});
     if(deployed.status!==200)throw Error(JSON.stringify(deployed)+'\n'+fs.readFileSync(path.join(dir,'deploy.log'),'utf8').slice(-8000));
     const ids=docker(['ps','-a','-q','--filter','label=com.docker.compose.project='+id]).trim().split(/\s+/);let cs=JSON.parse(docker(['inspect',...ids]));
@@ -85,6 +87,9 @@ http.createServer((req,res)=>{const f=handlers.get(req.url);if(!f){res.statusCod
     assert(db.Config.Env.includes('POSTGRES_PASSWORD='+first.WAREHOUSE_SECRET));
     assert.equal(docker(['exec',db.Id,'psql','-U','fixture_user','-d','fixture_records','-Atc','SELECT total FROM fixture_runs']).trim(),'1');
     let status=(await call(url+'/status')).body;assert(status.lastDeploy.verification.ok);assert(status.lastDeploy.verification.pages[0].api.some(r=>r.status===200));
+    const listed=(await call(url+'/databases')).body;assert(listed.repositoryOwned);assert.equal(listed.databases[0].service,'warehouse');assert.equal(listed.databases[0].state,'running');assert.equal(listed.databases[0].tool,'pgAdmin');assert(!JSON.stringify(listed).includes(first.WAREHOUSE_SECRET));
+    const tasks=(await call(url+'/migrate-suggest')).body;assert(tasks.repositoryOwned&&tasks.tasks[0].completed);assert.equal(tasks.tasks[0].exitCode,0);assert.equal(tasks.tasks[0].name,'initialize');assert(!tasks.suggestions.length,'repository tasks replace unrelated detected migration runners');
+    assert.equal((await call(url+'/migrate-run','POST',{command:'npm run migrate',service:'api'})).status,409,'a generated migration command cannot bypass the declared repository task');
     assert(status.lastDeploy.verification.pages[0].url.startsWith('https:'));
     assert(status.lastDeploy.verification.pages[0].releaseMatched);
     assert(status.lastDeploy.verification.pages[0].assets.some(r=>r.type==='stylesheet'&&r.status===200),'HTTPS-upgraded stylesheets render under the trusted local CA');

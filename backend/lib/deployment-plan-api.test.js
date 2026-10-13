@@ -150,6 +150,23 @@ async function main() {
     const overwrite = new FormData(); overwrite.append('files', new Blob(['overwrite']), 'recipe.production'); overwrite.append('paths', 'recipe.production');
     assert.equal((await fetch(base + '/api/apps/test-upload/upload-files', { method: 'POST', headers: { Cookie: cookie }, body: overwrite })).status, 400);
     assert.equal(fs.readFileSync(path.join(code, 'recipe.production'), 'utf8'), recipe, 'arbitrary selected build files retain infrastructure overwrite protection');
+    const declaredRepo=path.join(tmp,'declared-source');fs.mkdirSync(declaredRepo);
+    const declared=`services:\n  warehouse:\n    image: postgres:17-alpine\n    environment:\n      POSTGRES_USER: service_user\n      POSTGRES_DB: records\n      POSTGRES_PASSWORD: \${SQL_PASSWORD:?}\n  api:\n    image: node:24\n    depends_on: [warehouse]\n    environment:\n      DATABASE_URL: \${API_CONNECTION:?}\n      APP_ORIGIN: https://\${LOCAL_HOST:?}\n`;
+    fs.writeFileSync(path.join(declaredRepo,'production.recipe'),declared);fs.writeFileSync(path.join(declaredRepo,'development.recipe'),declared.replace('postgres:17-alpine','postgres:16-alpine'));
+    git(declaredRepo,'init','-b','main');git(declaredRepo,'config','user.name','Fixture');git(declaredRepo,'config','user.email','fixture@example.test');git(declaredRepo,'add','.');git(declaredRepo,'commit','-m','declared deployment files');
+    const createBody={name:'Creation choice fixture',type:'node',repoUrl:declaredRepo,branch:'main',access:'local',domain:'ignored.example.test',storageGB:'1'};
+    const draft=await call('/api/apps','POST',{...createBody,prepareOnly:true});assert.equal(draft.status,200,JSON.stringify(draft));assert(draft.data.prepared&&draft.data.needsEntrypoint);
+    const draftId=draft.data.pendingId,draftDir=path.join(apps,draftId);
+    assert(!fs.existsSync(path.join(draftDir,'.env'))&&!fs.existsSync(path.join(draftDir,'docker-compose.yml')),'inspection does not create database/env/compose scaffolding');
+    assert(!(await call('/api/apps')).data.some(a=>a.id===draftId),'ambiguous draft is not a registered website');
+    const choice={kind:'compose',file:'production.recipe'};
+    const pickedDraft=await call('/api/apps','POST',{...createBody,pendingId:draftId,prepareOnly:true,deploymentEntrypoint:choice});assert.equal(pickedDraft.status,200);assert.equal(pickedDraft.data.repositoryDatabases[0].type,'postgres');
+    const registered=await call('/api/apps','POST',{...createBody,pendingId:draftId,deploymentEntrypoint:choice,dbs:['mysql']});assert.equal(registered.status,200,JSON.stringify(registered));
+    assert.equal(registered.data.accessMode,'local');assert.equal(registered.data.domain,'');assert.equal(registered.data.deploymentEntrypoint.file,'production.recipe');assert.equal(registered.data.repositoryDatabases[0].type,'postgres');
+    assert(!registered.data.plan.blockers.some(b=>b.code==='REQUIRED_ENV'),'chosen source prepares all declared database and local inputs during creation');
+    const variables=require('dotenv').parse(fs.readFileSync(path.join(draftDir,'.env')));assert(variables.SQL_PASSWORD&&variables.API_CONNECTION&&variables.LOCAL_HOST);assert(!JSON.stringify(registered.data).includes(variables.SQL_PASSWORD));
+    const pendingDbs=(await call('/api/apps/'+draftId+'/databases')).data;assert.equal(pendingDbs.databases[0].state,'prepared');assert(pendingDbs.repositoryOwned);
+    const cancelled=await call('/api/apps','POST',{...createBody,prepareOnly:true});assert.equal((await call('/api/apps/pending/'+cancelled.data.pendingId,'DELETE')).status,200);assert(!fs.existsSync(path.join(apps,cancelled.data.pendingId)),'Cancel cleans only the unregistered draft');
     console.log('Workflow API: name validation, manual create, uploads, saved/stale choices, real Git pull, shared persistent analysis and pre-Docker blocking: OK');
   } finally {
     if (child && child.exitCode === null) child.kill();

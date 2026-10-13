@@ -160,6 +160,7 @@ async function loadStorage() {
   }
 }
 function runtimeKind(container, service) {
+  if(container.role==='task')return 'Deployment task';
   if (service) return ({ node: 'Node.js service', react: 'React web app', static: 'Static website', php: 'PHP web app' })[service.type] || `${service.type || 'app'} service`;
   const hint = `${container.service || ''} ${container.image || ''}`.toLowerCase();
   if (hint.includes('postgres')) return 'PostgreSQL database';
@@ -205,9 +206,10 @@ async function loadDeployStatus() {
     list.innerHTML = containers.map(c => {
       const service = services.get(c.service);
       const up = /^running/i.test(c.state || '');
-      return `<div class="runtime-row"><div><span class="opdot ${up ? 'ok' : 'fail'}"></span> <b>${c.service}</b> <span class="badge type">${runtimeKind(c, service)}</span></div>` +
+      const completed=c.role==='task'&&c.state==='exited'&&c.exitCode===0;
+      return `<div class="runtime-row"><div><span class="opdot ${up||completed ? 'ok' : 'fail'}"></span> <b>${c.service}</b> <span class="badge type">${runtimeKind(c, service)}</span></div>` +
         `<div class="runtime-version">${runtimeVersion(c, service, live)}</div>` +
-        `<div class="runtime-state"><b>${c.state || '?'}</b>${c.status ? ` · ${c.status}` : ''}</div></div>`;
+        `<div class="runtime-state"><b>${completed?'completed successfully':c.state || '?'}</b>${completed?' · exit 0':c.status ? ` · ${c.status}` : ''}</div></div>`;
     }).join('') || '<div class="meta">No application or database containers are present.</div>';
     const hp = document.getElementById('homePath');
     if (hp && s.app) hp.value = s.app.homePath || '';
@@ -238,4 +240,4 @@ async function loadDeployStatus() {
     setPowerState('hookPower', 'failed', 'Unknown');
     setPowerState('localPower', 'failed', 'Unknown');
   }
-}
+}

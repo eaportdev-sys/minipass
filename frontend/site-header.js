@@ -12,9 +12,9 @@ function fillSiteHeader(a) {
   document.getElementById('siteName').textContent = siteName(a);
   document.getElementById('siteName').title = 'Site ID: ' + a.id;
   document.getElementById('siteBadges').innerHTML =
-    `<span class="badge type">${a.type}</span><span class="badge">db: ${dbLabel(a)}</span>${a.domain ? `<span class="badge">${a.domain}</span>` : ''}${a.hostPort ? `<span class="badge">:${a.hostPort}</span>` : ''}${a.subdir ? `<span class="badge">/${a.subdir}</span>` : ''}${a.github ? `<span class="badge">git: ${a.github.login ? a.github.login + '/' : ''}${a.github.repo}${a.github.branch ? '@' + a.github.branch : ''}</span>` : ''}`;
+    `<span class="badge type">${a.deploymentEntrypoint?.kind==='compose'?'Compose':safeHtml(a.type)}</span><span class="badge">db: ${safeHtml(dbLabel(a))}</span>${a.domain ? `<span class="badge">${safeHtml(a.domain)}</span>` : ''}${a.hostPort ? `<span class="badge">:${a.hostPort}</span>` : ''}${a.subdir ? `<span class="badge">/${safeHtml(a.subdir)}</span>` : ''}${a.github ? `<span class="badge">git: ${safeHtml(a.github.repo)}${a.github.branch ? '@' + safeHtml(a.github.branch) : ''}</span>` : ''}`;
   const url = appUrl(a);
-  document.getElementById('siteMeta').innerHTML = (url ? `live URL: <a href="${url}" target="_blank">${url.replace(/^http:\/\//, '')}</a>` : 'no published port') + ` · ID: ${safeHtml(a.id)}`;
+  document.getElementById('siteMeta').innerHTML = url ? `Address: <a href="${safeHtml(url)}" target="_blank" rel="noopener">${safeHtml(url.replace(/^https?:\/\//, ''))}</a>` : 'Address is assigned on deploy';
   document.getElementById('siteRedeploy').onclick = () => { showSiteTab('deploy'); deploy(a.id); };
   document.getElementById('siteStop').onclick = () => stopApp(a.id);
   document.getElementById('siteStart').onclick = () => startApp(a.id);
@@ -135,4 +135,4 @@ async function disableLocalGit() {
 async function copyHook() {
   const el = document.getElementById('hookUrl');
   if (el) await copyText(el.textContent);
-}
+}

@@ -40,6 +40,14 @@ function typeOf(image) {
   const match = /(?:^|\/)(postgres|mysql|mariadb|mongo|redis)(?=[:@]|$)/i.exec(image || '');
   return match ? match[1].toLowerCase() : null;
 }
+function declaredDatabases(root,selection,env={}) {
+  const model=declarations(root,selection);
+  const tasks=new Set(Object.values(model.services).flatMap(s=>Object.entries(s.depends_on || {}).filter(([,d])=>d&&d.condition==='service_completed_successfully').map(([name])=>name)));
+  return Object.entries(model.services).flatMap(([service,s])=>{
+    const type=typeOf(literal(s.image,env)||s.image);
+    return type&&!tasks.has(service)?[{service,type,image:s.image,repositoryOwned:true}]:[];
+  });
+}
 function dotenv(file) {
   if(!file||!fs.existsSync(file))return {};
   const source=readSource(file);
@@ -248,4 +256,4 @@ function provision({ dir, root, selection, meta, containers = [], volumes = [], 
   }
   return { changed:Object.keys(changes), actions, issues, warnings };
 }
-module.exports={provision,declarations,reference,literal};
+module.exports={provision,declarations,reference,literal,declaredDatabases,typeOf};

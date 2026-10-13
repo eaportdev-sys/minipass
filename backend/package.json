@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "pretest": "node lib/cleanup.test.js && node lib/deployment-plan.test.js && node lib/repository-compose.test.js && node lib/compose-inputs.test.js && node lib/local-access.test.js && node ../frontend/deployment-plan.test.js",
+    "pretest": "node lib/cleanup.test.js && node lib/deployment-plan.test.js && node lib/repository-compose.test.js && node lib/compose-inputs.test.js && node lib/local-access.test.js && node lib/db-tools.test.js && node ../frontend/create-source.test.js && node ../frontend/deployment-plan.test.js && node ../frontend/databases.test.js",
     "test:compose-live": "node lib/compose-live.test.js",
     "test:compose-inputs-live": "node lib/compose-inputs-api.test.js",
     "test:workflow-api": "node lib/deployment-plan-api.test.js",

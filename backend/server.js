@@ -323,7 +323,17 @@ function pubApp(a) {
   // detection therefore mistook /health/live for their homepage. Preserve an
   // operator-set path, otherwise frontend roots always open at /.
   const homePath = ['static', 'react'].includes(a.type) && !a.homePathManual ? '' : (a.homePath || '');
-  return { ...a, name: a.name || a.id, homePath, github: pub, autoDeploy: AUTO_DEPLOY };
+  return { ...a, repositoryDatabases:repositoryDatabases(a,appDir(APPS_DIR,a.id)),name: a.name || a.id, homePath, github: pub, autoDeploy: AUTO_DEPLOY };
+}
+function repositoryDatabases(meta,dir) {
+  try {
+    const plan=JSON.parse(fs.readFileSync(path.join(dir,'.deployment-plan.json'),'utf8'));
+    if(plan.selected?.kind==='compose'&&plan.topology)return plan.topology.services.flatMap(s=>{
+      const type=composeInputs.typeOf(s.image);
+      return type&&!s.oneShot?[{service:s.name,type,image:s.image,repositoryOwned:true}]:[];
+    });
+  }catch{}
+  return meta.repositoryDatabases || [];
 }
 function publicServices(meta, dir) {
   return svc.fullServices(meta, dir).map(s => {
@@ -569,6 +579,10 @@ app.post('/api/apps', async (req, res) => {
     let appDomain;
     try { appDomain = cleanDomain(domain); }
     catch (e) { return res.status(400).json({ error: e.message }); }
+    const accessMode=req.body.access===undefined?(appDomain?'public':'local'):req.body.access==='local'?'local':req.body.access==='domain'?'public':null;
+    if(!accessMode)return res.status(400).json({error:'invalid access choice',field:'access'});
+    if(accessMode==='public'&&!appDomain&&req.body.prepareOnly!==true)return res.status(400).json({error:'Enter a domain or select Local / LAN.',field:'domain'});
+    if(accessMode==='local')appDomain='';
     const token = crypto.randomBytes(16).toString('hex');
     // localhost: auto-assign host port 8000+ so app is reachable without a domain
     const existing = load().apps;
@@ -624,6 +638,18 @@ app.post('/api/apps', async (req, res) => {
     const packageManager = ['npm', 'pnpm', 'yarn', 'bun'].includes(req.body.packageManager) ? req.body.packageManager : 'npm';
     const subdir = String(req.body.subdir || '').replace(/^\/+|\/+$/g, '').replace(/\.\./g, '') || '';
     if (draft && (draft.repoUrl !== finalRepoUrl || draft.branch !== explicitBranch || draft.subdir !== subdir)) throw lifecycleError('pending checkout uses a different source - cancel and reopen before changing repositories, branches or folders');
+    let entrypoint=req.body.deploymentEntrypoint || null;
+    if(entrypoint&&(!['compose','dockerfile'].includes(entrypoint.kind)||typeof entrypoint.file!=='string'))return res.status(400).json({error:'invalid deployment file choice'});
+    if(finalRepoUrl||req.body.prepareOnly===true||entrypoint) {
+      const pendingDir=appDir(APPS_DIR,id);fs.mkdirSync(pendingDir,{recursive:true});
+      fs.writeFileSync(path.join(pendingDir,'.pending-create.json'),JSON.stringify({id,repoUrl:finalRepoUrl,branch:explicitBranch,subdir}),{mode:0o600});
+      const prepared=createApp({appsDir:APPS_DIR,templatesDir:TEMPLATES_DIR,name:id,type,repoUrl:finalRepoUrl,db:dbs,domain:appDomain,hostPort,gitToken:siteToken,subdir,gitBranch:explicitBranch,prepareOnly:true,selection:entrypoint});
+      const plan=prepared.plan;
+      const choiceErrors=plan.blockers.filter(b=>['ENTRYPOINT_CHOICE','STALE_SELECTION','TOPOLOGY_NOT_FOLLOWED','INVALID_COMPOSE','INCOMPLETE_SCAN','MISSING_COMPOSE_REFERENCE'].includes(b.code));
+      let repositoryDatabases=[];try{if(plan.selected?.kind==='compose')repositoryDatabases=composeInputs.declaredDatabases(path.join(prepared.dir,'code'),plan.selected);}catch{}
+      if(req.body.prepareOnly===true||choiceErrors.length) return res.status(choiceErrors.length&&req.body.prepareOnly!==true?409:200).json({ok:!choiceErrors.length,prepared:true,pendingId:id,plan,repositoryDatabases,...(choiceErrors.length?{needsEntrypoint:true,error:'Choose the deployment file here before creating the site.'}:{})});
+      entrypoint=plan.selected;
+    }
     // Requested allowance is always validated and recorded. When the host
     // quota bridge is unavailable, creation proceeds unenforced rather than
     // bricking site creation - the UI labels it honestly as not enforced.
@@ -641,13 +667,14 @@ app.post('/api/apps', async (req, res) => {
     const pendingDir = appDir(APPS_DIR, id);
     fs.mkdirSync(pendingDir, { recursive: true });
     fs.writeFileSync(path.join(pendingDir, '.pending-create.json'), JSON.stringify({ id, repoUrl: finalRepoUrl, branch: explicitBranch, subdir }), { mode: 0o600 });
-    const created = createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain: appDomain, hostPort, gitToken: siteToken, subdir, gitBranch: explicitBranch, standardDockerfile: req.body.standardDockerfile === true, modernizeBuild: req.body.modernizeBuild === true });
+    const created = createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain: appDomain, hostPort, gitToken: siteToken, subdir, gitBranch: explicitBranch, standardDockerfile: req.body.standardDockerfile === true, modernizeBuild: req.body.modernizeBuild === true,selection:entrypoint });
     siteIdentity.writeName(created.dir, id, rawName);
     fs.writeFileSync(path.join(created.dir, '.storage-quota.json'), JSON.stringify({ projectId: storageQuota.projectId, limitBytes: storageBytes }), { mode: 0o600 });
     quotas.bindDatabases(created.dir);
     envSetManaged(created.dir, { COMPOSE_PROJECT_NAME: id });
     const db_ = load();
-    const meta = { id, name: rawName, type: created.type || type, repoUrl: finalRepoUrl, github: ghLink, db: created.hasDeclaredCompose ? [] : dbs, domain: appDomain, token, hostPort, accessHost: req.hostname, packageManager, subdir: created.subdir || '', storageQuota, buildOptions: { modernize: req.body.modernizeBuild === true }, createdAt: new Date().toISOString() };
+    const meta = { id, name: rawName, type: created.type || type, repoUrl: finalRepoUrl, github: ghLink, db: created.hasDeclaredCompose ? [] : dbs, domain: appDomain, accessMode, deploymentEntrypoint:entrypoint,token, hostPort, accessHost: req.hostname, packageManager, subdir: created.subdir || '', storageQuota, buildOptions: { modernize: req.body.modernizeBuild === true }, createdAt: new Date().toISOString() };
+    if(entrypoint&&entrypoint.kind==='compose')meta.repositoryDatabases=composeInputs.declaredDatabases(path.join(created.dir,'code'),entrypoint);
     let detectedServices = [];
     try { if (!created.hasDeclaredCompose) detectedServices = configureDetectedServices(meta, created.dir); }
     catch (e) { console.error(id, 'auto service detection:', e.message); }
@@ -1009,6 +1036,9 @@ function refreshDeploymentPlan(meta, dir, root = path.join(dir, 'code')) {
   } catch {}
   try { plan.provisioning=JSON.parse(fs.readFileSync(path.join(dir,'.compose-inputs.json'),'utf8')).actions || []; } catch {}
   plan.localUrl=meta.localUrl || '';plan.accessMode=meta.accessMode || (localAccess.isLocal(meta)?'local':'public');
+  if(!plan.localUrl&&plan.accessMode==='local'&&plan.selected?.kind==='compose')try{plan.localUrl=localAccess.address(meta,root,plan.selected);}catch{}
+  if(!plan.localUrl&&plan.accessMode==='local'&&meta.hostPort)try{const host=localAccess.hostname(meta.accessHost);plan.localUrl=`http://${host.includes(':')?'['+host+']':host}:${Number(meta.hostPort)}/`;}catch{}
+  plan.repositoryDatabases=[];try{if(plan.selected?.kind==='compose')plan.repositoryDatabases=composeInputs.declaredDatabases(root,plan.selected);}catch{}
   plan.localCaReady=fs.existsSync(path.join(dir,'.local-tls','ca.crt'));
   return deploymentPlan.persist(dir, plan);
 }
@@ -1874,6 +1904,7 @@ async function deployRepositoryCompose(meta, dir, root, plan, opts, sourceSha) {
   const db_ = load();
   const stored = db_.apps.find(a => a.id === meta.id);
   Object.assign(stored, { executor: 'repository-compose', deploymentEntrypoint: entrypoint, services: apps, repositoryServices: model.services,
+    repositoryDatabases:Object.entries(config.services).flatMap(([service,s])=>model.categories[service]==='database'?[{service,type:composeInputs.typeOf(s.image),image:s.image,repositoryOwned:true}]:[]),
     composePorts: model.ports, hostPort: primary && primary.hostPort || null, type: primary && primary.type || meta.type,
     composeSource: root === path.join(dir, 'code') ? null : root, publicUrl: meta.publicUrl || null, localUrl:meta.localUrl || null,accessMode:meta.accessMode || null,db: [] });
   for (const page of result.verification.pages || []) {
@@ -1937,6 +1968,12 @@ app.get('/api/apps/:id/storage', async (req, res) => {
 async function appContainers(id) {
   let containers = [];
   try {
+    const meta=load().apps.find(a=>a.id===id);
+    if(meta&&(meta.executor==='repository-compose'||meta.deploymentEntrypoint?.kind==='compose')) {
+      const inspected=await repositoryCompose.inspectProject({id,docker:DOCKER_BIN,run:runOut});
+      return inspected.map(c=>({id:c.Id,service:c.Config.Labels['com.docker.compose.service'],image:c.Config.Image,state:c.State.Status,status:c.State.Health?c.State.Health.Status:c.State.Status,exitCode:c.State.ExitCode,
+        role:(meta.repositoryServices||[]).find(s=>s.name===c.Config.Labels['com.docker.compose.service'])?.role||'application'}));
+    }
     const out = await sh(`${COMPOSE_BIN} ps --format json`, appDir(APPS_DIR, id));
     let arr = [];
     try {
@@ -2582,12 +2619,12 @@ app.get('/api/apps/:id/local-ca',(req,res)=>{
 // Repository-owned services are changed in their source instructions, not by
 // reconstructing topology through the generated-service/database controls.
 app.use('/api/apps/:id', (req, res, next) => {
-  if (req.method === 'GET' || !/^\/(?:services(?:\/|$)|db$|api-backend$)/.test(req.path)) return next();
+  if (req.method === 'GET' || !/^\/(?:services(?:\/|$)|db$|api-backend$|migrate(?:-run|-check)?$)/.test(req.path)) return next();
   const meta = load().apps.find(a => a.id === req.params.id);
   if (!meta) return next();
   let owned = meta.executor === 'repository-compose';
   try { const plan = JSON.parse(fs.readFileSync(path.join(appDir(APPS_DIR, meta.id), '.deployment-plan.json'), 'utf8')); owned = owned || plan.selected && plan.selected.kind === 'compose'; } catch {}
-  if (owned) return res.status(409).json({ error: 'This service/database/routing topology is repository-owned. Edit its Compose instructions or environment, then redeploy the whole project.' });
+  if (owned) return res.status(409).json({ error: 'The repository owns its services, databases and migration tasks. Edit its Compose instructions or environment, then redeploy; declared migrations run automatically.' });
   next();
 });
 app.get('/api/apps/:id/services', (req, res) => {
@@ -3043,6 +3080,12 @@ app.get('/api/apps/:id/databases', async (req, res) => {
     if (!meta) return res.status(404).json({ error: 'unknown app' });
     const dir = appDir(APPS_DIR, meta.id);
     const databases = dbTools.describe(meta, dir, containers);
+    const labels={postgres:'PostgreSQL',mysql:'MySQL',mariadb:'MariaDB',mongo:'MongoDB',redis:'Redis'};
+    for(const d of repositoryDatabases(meta,dir)) {
+      if(databases.some(existing=>existing.service===d.service))continue;
+      const ct=containers.find(c=>c.service===d.service);
+      databases.push({...d,label:labels[d.type] || d.type,state:ct?.state || 'prepared',status:ct?.status || 'Starts and initializes on the first deployment.',tool:null});
+    }
     let changed = false;
     const now = Date.now();
     for (const database of databases) {
@@ -3064,7 +3107,7 @@ app.get('/api/apps/:id/databases', async (req, res) => {
       }
     }
     if (changed) save(db_);
-    res.json({ databases, toolTtlMinutes: DB_TOOL_TTL_MS / 60000 });
+    res.json({ databases, repositoryOwned:meta.executor==='repository-compose'||meta.deploymentEntrypoint?.kind==='compose',toolTtlMinutes: DB_TOOL_TTL_MS / 60000 });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 const dbToolLocks = new Set();
@@ -3079,8 +3122,9 @@ app.post('/api/apps/:id/databases/:type/tool', async (req, res) => {
     const meta = db_.apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
     const type = req.params.type;
-    if (!dbTools.TOOLS[type] || !normDbs(meta.db).includes(type)) return res.status(400).json({ error: 'database is not attached to this site' });
     const dir = appDir(APPS_DIR, meta.id);
+    if(!dbTools.TOOLS[type])return res.status(400).json({error:'unsupported database type'});
+    try {dbTools.databaseConfig(meta,dir,type);}catch(e){return res.status(400).json({error:e.message});}
     const live = dbTools.describe(meta, dir, await appContainers(meta.id)).find(d => d.type === type);
     if (!live || !/^running/i.test(live.state || '')) return res.status(409).json({ error: `${live ? live.label : type} is not running - deploy the site first` });
     const saved = meta.dbTools && meta.dbTools[type];
@@ -3463,11 +3507,17 @@ app.post('/api/apps/:id/migrate-check', async (req, res) => {
 // Detect migration frameworks and map each project folder to the most-specific
 // enabled service build context. Returned dirs are container-relative, never
 // repository-relative (server service + code/server project => empty dir).
-app.get('/api/apps/:id/migrate-suggest', (req, res) => {
+app.get('/api/apps/:id/migrate-suggest', async (req, res) => {
   try {
     const meta = load().apps.find(a => a.id === req.params.id);
     if (!meta) return res.status(404).json({ error: 'unknown app' });
     const dir = appDir(APPS_DIR, meta.id);
+    const plan=refreshDeploymentPlan(meta,dir);
+    if(plan.selected?.kind==='compose') {
+      const states=await appContainers(meta.id);
+      return res.json({repositoryOwned:true,suggestions:[],tasks:(plan.topology?.services||[]).filter(s=>s.oneShot).map(s=>({name:s.name,command:s.command,dependsOn:s.dependencyConditions,state:states.find(c=>c.service===s.name)?.state||'pending',exitCode:states.find(c=>c.service===s.name)?.exitCode,
+        completed:states.some(c=>c.service===s.name&&c.state==='exited'&&c.exitCode===0)}))});
+    }
     const services = svc.fullServices(meta, dir);
     const detected = migrations.detectMigrations(path.join(dir, 'code'), services);
     // cmd/svc aliases keep older frontends useful during a rolling panel update.

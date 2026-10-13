@@ -164,6 +164,14 @@ traced. Multiple entrypoints need a saved selection. Supported Dockerless sites
 can still use panel-provided build environments. Manifests show declared scripts;
 analysis never executes repository scripts or documentation.
 
+Creation first inspects an unregistered checkout. Select the deployment file in
+the creation form; ambiguous files cannot register a site until one is chosen.
+The selected file and Local/LAN versus domain access are saved once, before
+database inputs are prepared. Cancel removes only that unregistered draft.
+Compose-defined services/databases replace the template runtime/database pills.
+Deploy keeps a compact access/source/database summary; diagnostic inventories,
+commands and reports are collapsed. Later source-file repairs live in Setup.
+
 There is no 200-file/depth cutoff in instruction discovery. Git internals,
 generated dependencies/caches and binary files are disclosed exclusions. Text
 over 2 MiB, total text over 64 MiB, unreadable files, symlinks and unsupported text
@@ -182,7 +190,7 @@ and Redis services with a declared `--requirepass` input,
 missing referenced passwords are generated once into the private site `.env` and
 matching consumer database URLs/host/user/port inputs are linked through declared
 dependencies and shared networks. Create prepares these inputs without launching
-anything; Deploy rechecks them. Existing sites can use **rescan / prepare inputs**.
+anything; Deploy rechecks them. Existing sites can use **check configuration**.
 Existing values, external connection URLs, and repository-provided defaults win.
 Matching running-database credentials can be recovered, but unknown retained data
 or lost initialized passwords require review—never silent password rotation.
@@ -202,9 +210,10 @@ download; install that CA as trusted on devices you use to access the site (e.g.
 Windows Trusted Root Certification Authorities). It is not a public certificate
 and browsers will warn until it is trusted. The disposable verifier trusts only
 that site's CA; public certificates still undergo normal validation. Plain-HTTP
-repositories stay HTTP. **Use local / LAN address** clears external verification
-routing and explicitly relinks declared hostname inputs; database values/data are
-unchanged. A copied URL using another site's local port is rejected before build.
+repositories stay HTTP. Local/LAN chosen at creation is not requested again in
+Deploy. Advanced **Change access / address** can change routing later; database
+values/data remain unchanged. A copied URL using another site's local port is
+rejected before build.
 If a site address changes, reselect local access/redeploy so its origin and
 certificate reflect the new address. Local certificate private keys stay in
 private files/container configuration; only the public CA is downloadable.
@@ -212,8 +221,8 @@ private files/container configuration; only the public CA is downloadable.
 Project names, image tags, networks and named volumes are site-isolated. Published
 ports allocate in 8000–8999 and remain stable across redeploys. A small publication
 proxy preserves response headers/CSP and adds a release identity; browser checks
-cannot accept another/old website at the public URL. Enter the real HTTPS URL in
-Deploy for HTTPS-only repositories (DNS/TLS/reverse-proxy setup is still external).
+cannot accept another/old website at the public URL. Public-domain deployments
+need their real HTTPS route; local deployments do not need public DNS.
 Host privileges/devices, out-of-checkout mounts, external networks/volumes and
 custom storage drivers require explicit configuration/import rather than being
 silently applied. Existing database version/storage changes require a deliberate
@@ -221,6 +230,14 @@ data migration; built database images require an explicit versioned-image upgrad
 path. Enforced site allowances also cover anonymous/image-declared data volumes;
 existing uncharged volumes require migration and are never erased. Database-admin
 images must be installed explicitly.
+
+The Database tab lists actual repository-managed databases (prepared until the
+first deploy, then their live state), not just panel-generated database services.
+Admin connections use the verified Compose database identity and its site-owned
+network. Same-type ambiguous database targets refuse an automatic admin link.
+Declared completion-dependent migrations show their last execution/exit code;
+unrelated guessed npm/ORM runners and generated migration overrides are disabled
+for repository Compose projects.
 
 Success requires healthy/steady services, exit-zero tasks and an isolated Chromium
 visit checking rendered content, stylesheet/script/image requests, uncaught browser

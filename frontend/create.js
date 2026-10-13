@@ -25,7 +25,7 @@ async function createApp(options = {}) {
   const access = accessEl ? accessEl.value : 'local';
   const body = {
     name: v('name'), type: typeEl ? typeEl.value : 'static', dbs, storageGB,
-    repoUrl: v('repo'), domain: access === 'domain' ? v('domain') : '',
+    repoUrl: v('repo'), access,domain: access === 'domain' ? v('domain') : '',
     subdir: v('subdir'), standardDockerfile: approvedStandardDockerfile,
     packageManager: createDetectedManager,
     modernizeBuild: document.getElementById('createModernBuild').checked
@@ -42,6 +42,11 @@ async function createApp(options = {}) {
   }
   const br = v('branch');
   if (br) body.branch = br;
+  if((body.repoUrl||body.ghRepo)&&typeof prepareCreateSource==='function') {
+    if(!createSourceReady(body)&&!await prepareCreateSource({...body,prepareOnly:true}))return;
+    const choice=createSourceSelection();if(choice)body.deploymentEntrypoint=choice;
+    if(createPendingId)body.pendingId=createPendingId;
+  }
   const buildBtn = document.getElementById('createBuildBtn');
   const cancelBtn = document.getElementById('createCancelBtn');
   buildBtn.disabled = true;
@@ -53,7 +58,8 @@ async function createApp(options = {}) {
   } catch (e) { r = { error: e.message }; }
   if (session !== createModalSession) return;
   if (r.pendingId) createPendingId = r.pendingId;
-  document.getElementById('out').textContent = JSON.stringify(r, null, 2);
+  if(r.needsEntrypoint&&r.plan&&typeof showCreateSource==='function')showCreateSource(r.plan);
+  document.getElementById('out').textContent = r.error||'';
   if (r.field === 'name') { nameError.textContent = r.error; nameField.setAttribute?.('aria-invalid', 'true'); nameField.focus?.(); }
   if (r.needsDockerfile) document.getElementById('createDockerAction').style.display = 'flex';
   if (r.needsModernization) {
@@ -61,7 +67,7 @@ async function createApp(options = {}) {
     document.getElementById('createModernBuildRow').style.display = 'flex';
     document.getElementById('createBuildNote').textContent = r.error;
   }
-  buildBtn.disabled = false;
+  buildBtn.disabled = typeof createSourceNeedsChoice==='function'&&createSourceNeedsChoice();
   cancelBtn.disabled = false;
   refresh();
   if (!r.error) {
@@ -100,6 +106,7 @@ async function detectType() {
       document.getElementById('branchDefault').textContent = '';
       createDetectRepo = '';
       createDetectedManager = 'npm';
+      if(typeof prepareCreateSource==='function')await prepareCreateSource();
       return;
     }
     repo = m[1] + '/' + m[2];
@@ -164,6 +171,7 @@ async function detectType() {
       hint.innerHTML = 'Choose a build folder: ' + fb + ' ' + sb + ' ' + bb;
     } else hint.style.display = 'none';
     sel.disabled = false;
+    if(typeof prepareCreateSource==='function')await prepareCreateSource();
   } catch {
     if (session !== createModalSession) return;
     if (request !== createDetectRequest) { setBuildBusy(false); return; }

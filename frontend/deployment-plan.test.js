@@ -49,7 +49,9 @@ async function main() {
   assert(html.includes('required one-shot task') && html.includes('service_healthy'));
   assert(html.includes('APP_ORIGIN ← PUBLIC_DOMAIN'));
   assert(html.includes('&lt;img') && !html.includes('<img'));
-  assert(html.includes('save selection'));
+  assert(!html.includes('save selection')&&!html.includes('id="deploymentEntrypoint"'),'deployment file is not selected again in Deploy');
+  assert(html.includes('<summary>Technical details</summary>')&&!html.includes('data-record="deployment-details" open'),'technical output starts collapsed');
+  assert(element('deploymentFileSetup').innerHTML.includes('save source change'),'post-creation source repairs stay in Setup');
   context.currentApp='first';
   context.reportPlan={...fixture,verification:{ok:false,at:'2026-10-13',errors:['Stylesheet failed <unsafe>'],pages:[{service:'web',url:'http://example.test',status:200,ok:false,assets:[],screenshotIndex:0}],probes:[{service:'api',ok:true}]}};
   const reportHtml=run('deploymentPlanMarkup(reportPlan)');
@@ -62,8 +64,9 @@ async function main() {
   assert(privateInputs.includes('DB_CONNECTION')&&privateInputs.includes('database password generated'));
   context.localPlan={...fixture,localUrl:'https://10.0.0.30:8021/',accessMode:'local',localCaReady:true};
   const localMarkup=run('deploymentPlanMarkup(localPlan)');
-  assert(localMarkup.includes('Allocated local address:')&&localMarkup.includes('https://10.0.0.30:8021/'));
-  assert(localMarkup.includes('/api/apps/first/local-ca')&&localMarkup.includes('needs no public domain'));
+  assert(localMarkup.includes('Local / LAN')&&localMarkup.includes('https://10.0.0.30:8021/'));
+  assert(localMarkup.includes('/api/apps/first/local-ca')&&localMarkup.includes('Trust certificate'));
+  assert(!localMarkup.includes('use local / LAN address'),'saved local access is displayed, not requested again');
   const originalLoad=context.loadDeploymentPlan;
   context.loadEnv=()=>{};context.loadDeploymentPlan=()=>{};
   context.fetch=async(url,opts)=>{sent={url,body:JSON.parse(opts.body)};return{json:async()=>({ok:true,changed:['DB_CONNECTION'],issues:[]})}};

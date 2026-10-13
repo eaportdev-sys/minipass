@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { execSync } = require('child_process');
+const { execSync,execFileSync } = require('child_process');
 const { appGitEnv } = require('./ssh');
 const { readBuildProfile, prepareStaticBuild } = require('./build-profile');
 const { resolveServiceDockerfile, findDockerfiles } = require('./dockerfiles');
@@ -204,7 +204,7 @@ function dbService(db, name, svc, vol) {
   return { lines: [], compose: '', vol, url: null, info: null };
 }
 
-function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', port, domain, hostPort, gitToken, subdir, gitBranch, standardDockerfile = false, modernizeBuild = false }) {
+function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', port, domain, hostPort, gitToken, subdir, gitBranch, standardDockerfile = false, modernizeBuild = false, prepareOnly = false, selection = null }) {
   const dir = appDir(appsDir, name);
   // resume allowed when a previous create died before writing compose (keys preserved)
   const resume = fs.existsSync(dir) && !fs.existsSync(path.join(dir, 'docker-compose.yml'));
@@ -228,11 +228,12 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
     if (!haveCheckout) {
       const isSsh = /^(git@|ssh:\/\/)/i.test(repoUrl);
       // token injected in-memory only (stored repo URLs stay clean)
-      const { authUrl, authUrlWith } = require('./github');
-      const cloneUrl = isSsh ? repoUrl : (gitToken ? authUrlWith(repoUrl, gitToken) : authUrl(repoUrl));
-      const redact = s => String(s).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
+      const { authUrlWith } = require('./github');
+      const cloneUrl = isSsh ? repoUrl : (gitToken ? authUrlWith(repoUrl, gitToken) : repoUrl);
+      const redact = s => (gitToken?String(s).split(gitToken).join('***'):String(s)).replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
       try {
-        execSync(`git clone --depth 1 ${branch ? `-b ${branch} ` : ''}${cloneUrl} "${dir}/code"`, { stdio: 'pipe', env: isSsh ? appGitEnv(dir) : process.env });
+        execFileSync('git',['clone','--depth','1',...(branch?['-b',branch]:[]),'--',cloneUrl,path.join(dir,'code')], { stdio: 'pipe', env: isSsh ? appGitEnv(dir) : process.env });
+        execFileSync('git',['remote','set-url','origin',repoUrl],{cwd:path.join(dir,'code'),stdio:'pipe'});
       } catch (e) {
         // don't leave a half-created app behind (retry would hit "app exists");
         // keep per-app deploy keys so the key can still be shown + registered
@@ -271,6 +272,11 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   // Only the selected context owns this profile; nested sites never retype APIs.
   const profile = readBuildProfile(buildDir);
   if (profile.kind === 'jekyll') type = 'static';
+  // Creation inspects the real checkout before registration. A draft contains
+  // source only: no compose/.env/database scaffolding, so Cancel stays safe.
+  const discoveredPlan = require('./deployment-plan').analyze(path.join(dir, 'code'), { templatesDir, selection });
+  const hasDeclaredCompose = discoveredPlan.candidates.some(c => c.kind === 'compose');
+  if(prepareOnly)return {dir,type,subdir:sub,hasDeclaredCompose,plan:discoveredPlan};
   // Explicit create-modal opt-in. Never replace a repository Dockerfile; this
   // only fills the missing file after the first validation explains why it is
   // needed. A failed first create remains resumable, so retry does not reclone.
@@ -287,8 +293,6 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   let createDockerfile = 'Dockerfile';
   // Creation registers a checkout, not a deployment. Repository topology and
   // ambiguous recipes must be reviewable on the site's plan, not force-seeded.
-  const discoveredPlan = require('./deployment-plan').analyze(path.join(dir, 'code'), { templatesDir });
-  const hasDeclaredCompose = discoveredPlan.candidates.some(c => c.kind === 'compose');
   {
     const selected = discoveredPlan.selected;
     if (!hasDeclaredCompose && selected && selected.kind === 'dockerfile' && path.posix.dirname(selected.file) === (sub || '.')) {

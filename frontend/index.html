@@ -122,6 +122,7 @@
           </div>
           <div class="meta keyrow">SSH remote deploy key (read-only): <button id="repoKeyToggle" onclick="showRepoKey()">show key</button></div>
           <div class="meta"><code id="repoKeyOut"></code></div>
+          <details class="deployment-advanced"><summary>Change deployment file</summary><div id="deploymentFileSetup"></div></details>
         </div>
         <div class="card stepcard">
           <div class="stephead"><span class="stepno">2</span><div><b>Confirm services</b><div class="meta">Each runnable folder becomes one service; type is detected from that folder.</div></div></div>
@@ -159,19 +160,18 @@
       <div id="tab-database" class="sitetab" style="display:none">
         <div class="card">
           <div class="sectionhead"><div><b>Managed databases</b><div class="meta" id="dbList"></div></div><button onclick="loadDatabases()">refresh</button></div>
-          <div class="db-add-row">
+          <div class="db-add-row" id="dbAddRow">
             <div><b>Add database</b><div class="meta">Existing data and passwords stay untouched.</div></div>
             <div class="controlrow"><select id="dbAdd"><option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option><option value="mariadb">MariaDB</option><option value="mongo">MongoDB</option><option value="redis">Redis</option></select><button onclick="addDb()">add database</button></div>
           </div>
           <pre id="dbOut"></pre>
           <div id="dbRuntimeList"></div>
-          <div class="meta">Database administration opens with the connection preconfigured. Closing its popup stops the UI; a 30-minute limit handles abandoned sessions.</div>
-          <div class="meta">Admin images are installed with Minipass and launch from this server without downloading. Use this only to repair a missing image or intentionally upgrade them.</div>
-          <div class="controlrow"><button onclick="pullDbToolImages()">install / upgrade admin images</button><span id="dbToolImgOut" class="meta"></span></div>
+          <details class="deployment-advanced"><summary>Database admin image maintenance</summary><div class="controlrow"><button onclick="pullDbToolImages()">install / upgrade admin images</button><span id="dbToolImgOut" class="meta"></span></div></details>
         </div>
         <div class="card">
-          <div class="sectionhead"><div><b>Database migrations</b><div class="meta">Run and verify schema changes independently, or save a command to run after every build and before the deployment swap.</div></div></div>
+          <div class="sectionhead"><div><b>Database migrations</b></div></div>
           <div class="migration-panel">
+            <div id="manualMigrationControls">
             <label for="migrateCmd">Pre-deploy migration <span>optional — failure aborts before running containers are replaced</span></label>
             <div class="migration-command-row"><input id="migrateCmd" placeholder="npm run migrate"><button onclick="saveMigrate()">save</button></div>
             <div class="migration-subgrid">
@@ -180,6 +180,7 @@
             </div>
             <div class="migration-command-row"><input id="migrateCheck" placeholder="verify command, e.g. ./node_modules/.bin/knex migrate:list"><button onclick="verifyMigrate()">verify</button></div>
             <div class="migration-actions"><button onclick="runMigrateNow()">run migration now</button><span class="meta">run / verify execute in a one-off container only — no deploy, no swap</span></div>
+            </div>
             <div id="migrateSuggest"></div>
             <pre id="migrateOut" class="compact-output"></pre>
           </div>
@@ -215,13 +216,15 @@
       </div>
       <div id="tab-deploy" class="sitetab" style="display:none">
           <div class="card deployment-plan-card">
-            <div class="sectionhead"><div><b>Repository deployment plan</b><div class="meta">Source instructions are analyzed without execution. Missing declared database inputs are prepared before deployment; existing credentials and data are preserved. Creating or uploading does not deploy.</div></div><button onclick="prepareComposeInputs()">rescan / prepare inputs</button></div>
+            <div class="sectionhead"><div><b>Deployment configuration</b></div><button onclick="prepareComposeInputs()">check configuration</button></div>
             <div id="deploymentPlan" aria-live="polite">Open a site to inspect its deployment instructions.</div>
+            <details class="deployment-advanced" data-record="deployment-address"><summary>Change access / address</summary>
             <label for="verificationUrl">Public website URL (optional)<input id="verificationUrl" type="url" placeholder="https://site.example.com"></label>
-            <div class="actions"><button onclick="saveVerificationUrl()">save public URL</button><button onclick="saveVerificationUrl(true)">use local / LAN address</button><button onclick="saveVerificationUrl(true, 'https')">use local HTTPS</button><span class="meta">Local/LAN access uses this site's allocated port, not a public domain. HTTPS-only repositories get local TLS and a downloadable CA certificate; security headers and cookies are preserved. A public URL is optional.</span></div>
+            <div class="actions"><button onclick="saveVerificationUrl()">save public URL</button><span id="deployLocalChoices"><button onclick="saveVerificationUrl(true)">switch to local / LAN</button></span><button onclick="saveVerificationUrl(true, 'https')">enable local HTTPS</button></div>
+            </details>
           </div>
           <div class="card deploy-manual-card">
-            <div class="sectionhead"><div><b>Deploy now</b><div class="meta">Rebuild and release safely. Redeploy pulls the repo first; local rebuild uses the box files as-is (keeps Files-tab edits).</div></div><div class="deploy-now-btns"><button class="btn primary deploy-now-btn" onclick="deployCurrent()">redeploy</button><button class="deploy-now-btn" onclick="deployLocal()">local rebuild</button></div></div>
+            <div class="sectionhead"><div><b>Deploy now</b><div class="meta">Build, initialize databases, run migrations and verify the site.</div></div><div class="deploy-now-btns"><button class="btn primary deploy-now-btn" onclick="deployCurrent()">deploy</button><button class="deploy-now-btn" onclick="deployLocal()">rebuild local files</button></div></div>
             <div class="deploy-safety-flow" aria-label="Deployment stages">
               <div><span>1</span><b>Build</b><small>Running containers stay online</small></div>
               <div><span>2</span><b>Swap</b><small>Only after a successful image build</small></div>
@@ -377,7 +380,7 @@
   </main>
 </div>
 <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="createTitle"><div class="modalbox create-dialog">
-  <header class="create-header"><h2 id="createTitle">New website</h2><div class="meta">Choose a source. Check the runtime and databases. Build.</div></header>
+  <header class="create-header"><h2 id="createTitle">New website</h2><div class="meta">Choose the source, deployment file and access once.</div></header>
   <div class="create-body">
     <section class="create-identity">
       <label for="name">Website name<input id="name" placeholder="my-site" autocomplete="off" maxlength="80" required aria-describedby="createNameError"><span id="createNameError" class="field-error" role="alert"></span><span class="meta">Display name only. A unique site ID is assigned automatically; names can be reused.</span></label>
@@ -412,14 +415,20 @@
         <div id="ghRepoRow" style="display:none"><label for="ghrepo">GitHub repository</label><select id="ghrepo" onchange="detectType()"><option value="">GitHub repo…</option></select></div>
         <div class="create-source-options">
           <label for="branch">Branch <span id="branchDefault" class="meta"></span><input id="branch" list="createBranches" placeholder="default branch" onchange="detectType()"><datalist id="createBranches"></datalist></label>
-          <label for="subdir">Build folder<input id="subdir" placeholder="repo root"></label>
+          <label for="subdir">Build folder<input id="subdir" placeholder="repo root" onchange="prepareCreateSource()"></label>
         </div>
         <div class="meta" id="subdirHint" style="display:none"></div>
+        <div id="createDeployment" class="create-build-profile" style="display:none">
+          <label for="createEntrypoint">Deployment file<select id="createEntrypoint" onchange="createEntrypointChanged()"></select></label>
+          <div id="createSourceState" class="meta" role="status"></div>
+          <div id="createDeclaredServices" class="meta"></div>
+          <button onclick="prepareCreateSource()">inspect source again</button>
+        </div>
       </section>
       <section class="create-section">
         <h3>Runtime &amp; data</h3>
         <div id="createDetectState" class="meta" role="status">Auto-detect from GitHub, or select manually.</div>
-        <div class="mlabel">Runtime</div>
+        <div id="createGeneratedData"><div class="mlabel">Runtime</div>
         <div class="typerow">
           <label class="typepill"><input type="radio" name="apptype" value="static" checked><b>Static</b></label>
           <label class="typepill"><input type="radio" name="apptype" value="react"><b>React</b></label>
@@ -436,6 +445,7 @@
         </div>
         <div class="meta">Check the suggestions. Add or remove databases as needed.</div>
         <div class="meta create-db-note" id="dbDetectNote" role="status" style="display:none"></div>
+        </div>
         <div id="createBuildProfile" class="create-build-profile" style="display:none">
           <div id="createBuildNote" class="meta"></div>
           <label id="createModernBuildRow" class="radiorow" style="display:none"><input id="createModernBuild" type="checkbox"> Modernize legacy build dependencies</label>
@@ -446,7 +456,7 @@
     <section class="create-section create-storage">
       <h3>Storage allowance</h3>
       <div class="create-storage-row"><label for="createStorageGB">Limit (GB)<input id="createStorageGB" type="number" min="0.1" max="1000000" step="0.001" value="5" oninput="updateCreateStorageHint()"></label><div class="create-storage-presets"><button onclick="setCreateStorage(5)">5 GB</button><button onclick="setCreateStorage(20)">20 GB</button><button onclick="setCreateStorage(200)">200 GB</button></div></div>
-      <div class="meta">Type any size or use a preset. One hard limit for site files and managed databases; shared images/build cache stay outside it. 1 GB = 1 billion bytes.</div>
+      <div class="meta">Site files and database data share this limit.</div>
       <div id="createStorageState" class="meta" role="status">Checking host quota setup…</div>
       <div id="createStorageHint" class="meta" aria-live="polite"></div>
     </section>
@@ -456,7 +466,7 @@
     </div>
     <pre id="out" class="compact-output"></pre>
   </div>
-  <footer class="create-footer"><span class="meta">Create, review the deployment plan, then deploy manually.</span><div class="modalbtns"><button id="createCancelBtn" onclick="closeCreate()">Cancel</button><button id="createBuildBtn" class="btn primary" onclick="createApp()">Create website</button></div></footer>
+  <footer class="create-footer"><span class="meta">Credentials are prepared automatically. Deployment starts only when you choose Deploy.</span><div class="modalbtns"><button id="createCancelBtn" onclick="closeCreate()">Cancel</button><button id="createBuildBtn" class="btn primary" onclick="createApp()">Create website</button></div></footer>
 </div></div>
 <div id="toasts"></div>
 <div id="confirmModal" class="modal"><div class="modalbox">
@@ -475,6 +485,7 @@
 <script src="env.js"></script>
 <script src="databases.js"></script>
 <script src="site-git.js"></script>
+<script src="create-source.js"></script>
 <script src="create.js"></script>
 <script src="accounts.js"></script>
 <script src="host.js"></script>

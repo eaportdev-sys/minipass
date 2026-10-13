@@ -3,6 +3,8 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFile, execFileSync } = require('child_process');
 const { normDbs } = require('./generator');
+const YAML=require('yaml');
+const {typeOf}=require('./compose-inputs');
 
 const TOOLS = {
   postgres: { label: 'pgAdmin', image: 'dpage/pgadmin4:9.18.0', port: 80 },
@@ -63,7 +65,32 @@ function parsedUrl(raw) {
   } catch { return {}; }
 }
 
+function repositoryModel(meta,dir) {
+  try {const model=YAML.parse(fs.readFileSync(path.join(dir,'docker-compose.yml'),'utf8'));return model?.['x-minipass']?.executor==='repository-compose'&&model.name===meta.id?model:null;}catch{return null;}
+}
+function repositoryConnections(meta,dir) {
+  const model=repositoryModel(meta,dir);if(!model)return [];
+  const tasks=new Set(Object.values(model.services).flatMap(s=>Object.entries(s.depends_on||{}).filter(([,d])=>d.condition==='service_completed_successfully').map(([name])=>name)));
+  return Object.entries(model.services).flatMap(([service,s])=>{const type=typeOf(s.image);return type&&!tasks.has(service)?[{service,type,definition:s,model}]:[];});
+}
 function databaseConfig(meta, dir, type) {
+  if(!TOOLS[type])throw new Error('unsupported database type');
+  const declared=repositoryConnections(meta,dir).filter(d=>d.type===type);
+  if(declared.length>1)throw new Error(`Several ${type} services are declared; select a specific database service before launching an admin tool.`);
+  if(declared.length===1) {
+    const {service,definition:s,model}=declared[0],env=s.environment||{};
+    const names=Object.keys(s.networks || {default:null});
+    const network=names.map(n=>model.networks?.[n]?.name||`${meta.id}_${n}`).find(n=>n.startsWith(meta.id+'_'));
+    if(!network)throw new Error('Repository database has no site-owned network for its admin UI');
+    const command=Array.isArray(s.command)?s.command.join(' '):String(s.command||'');
+    const changedPort=/(?:^|\s)(?:--port(?:=|\s+)|-p\s+)(\d+)(?:\s|$)/.exec(command);
+    const base={service,host:service,network,repositoryOwned:true};
+    if(type==='postgres'){const user=env.POSTGRES_USER||'postgres';return {...base,port:changedPort?Number(changedPort[1]):Number(env.PGPORT)||5432,user,pass:env.POSTGRES_PASSWORD,db:env.POSTGRES_DB||user};}
+    if(type==='mysql'||type==='mariadb'){const value=key=>env[(type==='mariadb'?'MARIADB_':'MYSQL_')+key]||env['MYSQL_'+key];const user=value('USER')||'root';return {...base,port:changedPort?Number(changedPort[1]):3306,user,pass:user==='root'?value('ROOT_PASSWORD'):value('PASSWORD'),db:value('DATABASE')};}
+    if(type==='mongo')return {...base,port:changedPort?Number(changedPort[1]):27017,user:env.MONGO_INITDB_ROOT_USERNAME,pass:env.MONGO_INITDB_ROOT_PASSWORD,db:env.MONGO_INITDB_DATABASE||'admin'};
+    const password=/(?:^|\s)--requirepass(?:=|\s+)(\S+)/.exec(command);
+    return {...base,port:changedPort?Number(changedPort[1]):6379,pass:password?password[1]:'',db:'0'};
+  }
   const types = normDbs(meta && meta.db);
   if (!types.includes(type) || !TOOLS[type]) throw new Error(`${type} is not attached to this site`);
   const env = readEnv(dir);
@@ -141,10 +168,12 @@ async function waitForReady(name, type, tool, secrets) {
 }
 
 function describe(meta, dir, containers) {
-  const types = normDbs(meta && meta.db);
+  const types = [...new Set([...normDbs(meta && meta.db),...repositoryConnections(meta,dir).map(d=>d.type)])];
   return types.map(type => {
     let service = types.length > 1 ? `db-${type}` : 'db';
-    try { service = databaseConfig(meta, dir, type).service; } catch {}
+    let config=null,error=null;try {config=databaseConfig(meta,dir,type);service=config.service;}catch(e){error=e.message;}
+    if(!config&&repositoryConnections(meta,dir).filter(d=>d.type===type).length>1)return null;
+    if(config&&(!config.host||!config.port||type!=='redis'&&(!config.user||!config.pass||!config.db)))error='Connection details are incomplete; review the repository database configuration.';
     const c = (containers || []).find(x => x.service === service);
     const saved = meta.dbTools && meta.dbTools[type];
     const name = safeName(meta.id, type);
@@ -152,9 +181,9 @@ function describe(meta, dir, containers) {
       type, service, label: ({ postgres: 'PostgreSQL', mysql: 'MySQL', mariadb: 'MariaDB', mongo: 'MongoDB', redis: 'Redis' })[type],
       state: c ? c.state : 'not running', status: c ? c.status : '', image: c ? c.image : null,
       tool: TOOLS[type].label, toolPort: saved && saved.port, toolState: containerState(name),
-      toolExpiresAt: saved && saved.expiresAt
+      toolExpiresAt: saved && saved.expiresAt,repositoryOwned:!!config?.repositoryOwned,toolError:error
     };
-  });
+  }).filter(Boolean);
 }
 
 function ensurePgAdminFiles(dir, config) {
@@ -194,7 +223,7 @@ async function launch(id, meta, dir, type, hostPort) {
     throw error;
   }
   const config = databaseConfig(meta, dir, type);
-  if (!config.host || !config.port || (type !== 'redis' && (!config.user || !config.db)) || !config.pass) {
+  if (!config.host || !config.port || (type !== 'redis' && (!config.user || !config.db || !config.pass))) {
     throw new Error(`${type} connection details are incomplete in the managed environment`);
   }
   const name = safeName(id, type);
@@ -202,7 +231,7 @@ async function launch(id, meta, dir, type, hostPort) {
   try { docker(['rm', '-f', name], { stdio: 'ignore' }); } catch {}
   // Local-only by contract: opening a database UI must never download an
   // image. Installation/upgrade is an explicit, separate panel operation.
-  const args = ['run', '--pull=never', '-d', '--name', name, '--restart', 'unless-stopped', '--network', `${id}_default`, '-p', `${hostPort}:${tool.port}`];
+  const args = ['run', '--pull=never', '-d', '--name', name, '--restart', 'unless-stopped', '--network', config.network||`${id}_default`, '-p', `${hostPort}:${tool.port}`];
   if (type === 'postgres') {
     const f = ensurePgAdminFiles(dir, config);
     secrets.push(f.secret);

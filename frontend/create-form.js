@@ -44,6 +44,7 @@ function resetCreateForm() {
   createBusyOps = 0;
   createStandardDockerfile = false;
   createPendingId = null;
+  if(typeof resetCreateSource==='function')resetCreateSource();
   createStorageAvailable = null;
   document.getElementById('createStorageGB').value = '5';
   document.getElementById('createStorageState').textContent = 'Checking host quota setup…';
@@ -103,13 +104,14 @@ function useCreateStandardDockerfile() {
 }
 function closeCreate(created = false) {
   const id = createPendingId;
+  const pending=typeof createSourceInFlight!=='undefined'?createSourceInFlight:null;
   document.getElementById('modal').classList.remove('open');
   resetCreateForm();
   if (!created && id) {
-    createCleanupPromise = fetch(`/api/apps/pending/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true })
+    createCleanupPromise = Promise.resolve(pending).catch(()=>{}).then(()=>fetch(`/api/apps/pending/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true }))
       .then(async response => { const result = await response.json(); if (!result.ok) toast('Unfinished site cleanup failed: ' + (result.error || 'retry cleanup for ' + id), false); })
       .catch(e => toast('Unfinished site cleanup failed: ' + e.message, false));
-  }
+  }else if(!created&&pending)createCleanupPromise=pending.catch(()=>{});
 }
 function toggleTheme() {
   const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';

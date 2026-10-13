@@ -1,4 +1,12 @@
 /* minipass global theme: dark default, light via [data-theme="light"] */
+.deployment-summary { display: grid; gap: 10px; }
+.deployment-summary-row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; min-width: 0; }
+.deployment-summary-row > span { color: var(--muted); min-width: 90px; }
+.deployment-summary-row a { overflow-wrap: anywhere; }
+.deployment-summary-row small { color: var(--muted); }
+.deployment-advanced { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
+.deployment-advanced > summary { color: var(--muted); cursor: pointer; font-size: 13px; }
+.deployment-advanced[open] > summary { margin-bottom: 12px; }
 :root, [data-theme="dark"] {
   --bg: #0f1115;
   --bg2: #171a21;
