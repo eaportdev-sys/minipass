@@ -8,6 +8,7 @@
 // build script. Anything else behaves exactly as before.
 const fs = require('fs');
 const path = require('path');
+const { sourceFile, readSource } = require('./repository-files');
 
 const BUILDER_IMAGE = 'node:24-bookworm-slim';
 const OUTPUT_DIRS = ['dist', 'build', 'out'];
@@ -81,8 +82,11 @@ function ignoreBlocks(ctxDir, outputDir) {
   } catch { return false; }
 }
 
-function plan(ctxDir, { force = false } = {}) {
-  const dockerfile = readFile(ctxDir, 'Dockerfile');
+function plan(ctxDir, { force = false, dockerfile: selected = null } = {}) {
+  let dockerfile = null;
+  if (selected) {
+    try { const file = sourceFile(ctxDir, selected); if (file) dockerfile = readSource(file).text; } catch {}
+  } else dockerfile = readFile(ctxDir, 'Dockerfile');
   if (!dockerfile || isPanelSeeded(dockerfile) || buildsItself(dockerfile)) return null;
   const missing = expectedOutputs(dockerfile).filter(out => {
     if (force) return true; // approved source edits must not reuse stale output

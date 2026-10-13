@@ -1,186 +1,92 @@
-const fs = require('fs');
-const path = require('path');
+const YAML = require('yaml');
+const { sourceFile, readSource } = require('./repository-files');
 
-// Repo-shipped compose topology, read WITHOUT running anything. Hand parser
-// for the common subset only - full YAML is deliberately out of scope.
-// Unrecognized shapes are skipped, never throw on odd files: an incomplete
-// read beats a crashed one, and callers treat absence as "no topology".
-// Purpose: complete the pre-deploy read (service names are DNS, build
-// recipes, published ports, env needs, one-shot tasks) instead of inferring
-// the topology from scratch and discovering it through failed builds.
 const COMPOSE_FILES = ['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml'];
-const MAX_BYTES = 64 * 1024;
-const MAX_SERVICES = 20;
-
-function stripComment(line) {
-  // '#' inside quotes or ${} is data, not a comment.
-  let out = '', quote = null, depth = 0;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (quote) {
-      out += c;
-      if (c === quote) quote = null;
-    } else if (c === '"' || c === "'") { quote = c; out += c; }
-    else if (c === '$' && line[i + 1] === '{') { depth++; out += c; }
-    else if (c === '}' && depth > 0) { depth--; out += c; }
-    else if (c === '#' && depth === 0) break;
-    else out += c;
-  }
-  return out;
-}
-
-function unquote(s) {
-  const t = String(s || '').trim();
-  if (t.length >= 2 && ((t[0] === '"' && t[t.length - 1] === '"') || (t[0] === "'" && t[t.length - 1] === "'"))) return t.slice(1, -1);
-  return t;
-}
-
-// ${VAR} ${VAR:-default} ${VAR:?message} (and $VAR). '$$' is an escaped
-// literal dollar and never a reference.
+const object = v => v && typeof v === 'object' && !Array.isArray(v);
 function envRefs(text) {
   const found = new Map();
-  const clean = String(text || '').replace(/\$\$/g, '');
-  const braced = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::([-?])([^}]*)?)?\}/g;
-  let m;
-  while ((m = braced.exec(clean)) && found.size < 40) {
-    const key = m[1];
-    if (key === 'COMPOSE_PROJECT_NAME' || found.has(key)) continue;
-    const op = m[2] || '';
-    found.set(key, { key, required: op === '?', message: (op === '?' ? String(m[3] || '').trim() : '') || null, def: (op === '-' ? String(m[3] || '') : '') || null });
-  }
-  const bare = /(?:^|[^\w$])\$([A-Za-z_][A-Za-z0-9_]*)(?![\w{])/g;
-  while ((m = bare.exec(clean)) && found.size < 40) {
-    if (!found.has(m[1]) && m[1] !== 'COMPOSE_PROJECT_NAME') found.set(m[1], { key: m[1], required: false, message: null, def: null });
-  }
+  // Mask $$ rather than deleting it (deletion incorrectly exposes a literal).
+  const clean = String(text || '').replace(/\$\$/g, '\u0000');
+  const add = (key, op = '', value = '') => {
+    if (key === 'COMPOSE_PROJECT_NAME') return;
+    const old = found.get(key);
+    const required = op === '?' || op === ':?';
+    found.set(key, { key, required: required || !!(old && old.required),
+      allowEmpty: required ? op === '?' && !(old && old.required && !old.allowEmpty) : !!(old && old.allowEmpty),
+      message: required ? value.trim() || (old && old.message) || null : (old && old.message) || null, def: op === '-' || op === ':-' ? value : (old && old.def) || null });
+  };
+  for (const m of clean.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-?+])([^}]*))?\}/g)) add(m[1], m[2] || '', m[3] || '');
+  for (const m of clean.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)/g)) add(m[1]);
   return [...found.values()];
 }
-
-function parsePort(item) {
-  const t = unquote(item).replace(/\/(tcp|udp)$/i, '');
-  const m = t.match(/^(?:(\[[^\]]+\]|[^:]+):)?(\d+)(?::(\d+))?$/);
-  if (!m) return null;
-  if (m[3]) return { host: m[1] || null, container: parseInt(m[2], 10) || parseInt(m[3], 10) };
-  if (m[1] && /^\d+$/.test(m[1])) return { host: parseInt(m[1], 10), container: parseInt(m[2], 10) };
-  return { host: null, container: parseInt(m[2], 10) };
+function parsePort(value) {
+  if (object(value)) return { host: value.published == null ? null : Number(value.published), container: Number(value.target), address: value.host_ip || null, protocol: value.protocol || 'tcp' };
+  const raw = String(value).replace(/^["']|["']$/g, '').replace(/\/(tcp|udp)$/i, '');
+  const m = /^(?:(.+):)?(\d+):(\d+)$/.exec(raw);
+  if (m) return { host: Number(m[2]), container: Number(m[3]) };
+  if (/^\d+$/.test(raw)) return { host: null, container: Number(raw) };
+  return null;
 }
-
-function readComposeTopo(codeDir) {
-  let file = null, text = '';
-  for (const name of COMPOSE_FILES) {
-    try {
-      const p = path.join(codeDir, name);
-      const stat = fs.lstatSync(p);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_BYTES) continue;
-      text = fs.readFileSync(p, 'utf8');
-      file = name;
-      break;
-    } catch {}
-  }
-  if (!file) return null;
-  const lines = String(text).split(/\r?\n/).slice(0, 800);
-  // Find the services: block (top-level key).
-  let svcStart = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (/^services:\s*(#.*)?$/.test(lines[i])) { svcStart = i; break; }
-    if (/^[A-Za-z][A-Za-z0-9_-]*:\s*(#.*)?$/.test(lines[i]) && !/^services:/.test(lines[i])) continue;
-  }
-  if (svcStart < 0) return { file, services: [], envNeeds: [] };
-  const services = [];
-  let cur = null, section = null;
-  const flush = () => { if (cur) { services.push(cur); cur = null; } section = null; };
-  for (let i = svcStart + 1; i < lines.length && services.length < MAX_SERVICES; i++) {
-    const raw = stripComment(lines[i]);
-    if (!raw.trim()) continue;
-    const indent = raw.match(/^ */)[0].length;
-    if (indent === 0) { flush(); break; } // next top-level key ends services
-    if (indent === 2) {
-      const m = raw.match(/^  ([A-Za-z0-9][A-Za-z0-9_-]*):\s*(.*)$/);
-      if (!m) { flush(); continue; }
-      flush();
-      cur = { name: m[1], _inline: m[2].trim(), build: null, image: null, ports: [], env: [], command: null, oneShot: false, dependsOn: [] };
-      section = null;
-      continue;
-    }
-    if (!cur || indent < 4) continue;
-    if (indent === 4) {
-      const m = raw.match(/^    ([A-Za-z0-9_-]+):\s*(.*)$/);
-      if (!m) { section = null; continue; }
-      const key = m[1], val = m[2].trim();
-      section = key;
-      if (key === 'build' && val) cur.build = { context: unquote(val), dockerfile: null };
-      else if (key === 'build') cur.build = cur.build || { context: null, dockerfile: null };
-      else if (key === 'image' && val) cur.image = unquote(val);
-      else if (key === 'command' && val) cur.command = unquote(val);
-      else if (key === 'entrypoint' && val) cur.command = cur.command || unquote(val);
-      else if (key === 'restart' && /^(no|false)$/i.test(unquote(val).replace(/["']/g, ''))) cur.oneShot = true;
-      continue;
-    }
-    // indent >= 6: list items or nested build map
-    const item = raw.trim().replace(/^-\s+/, '');
-    if (section === 'build' && cur) {
-      if (!cur.build) cur.build = { context: null, dockerfile: null };
-      const m = raw.match(/^\s+(context|dockerfile|target):\s*(.*)$/);
-      if (m) {
-        if (m[1] === 'context') cur.build.context = unquote(m[2]);
-        if (m[1] === 'dockerfile') cur.build.dockerfile = unquote(m[2]);
-      }
-      continue;
-    }
-    if (section === 'ports' && cur) {
-      const p = parsePort(item);
-      if (p) cur.ports.push(p);
-      continue;
-    }
-    if (section === 'environment' && cur) {
-      const pair = item.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s) ||
-        item.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$/s);
-      if (pair) {
-        const refs = envRefs(unquote(pair[2]));
-        cur.env.push({ key: pair[1], value: pair[2] });
-        for (const r of refs) (cur._envNeeds = cur._envNeeds || new Map()).set(r.key, r);
-      } else {
-        const bare = item.match(/^([A-Za-z_][A-Za-z0-9_]*)$/);
-        if (bare) {
-          cur.env.push({ key: bare[1], value: null, refs: [] });
-          (cur._envNeeds = cur._envNeeds || new Map()).set(bare[1], { key: bare[1], required: true, message: 'passed through from host environment in compose', def: null });
-        }
-      }
-      continue;
-    }
-    if (section === 'depends_on' && cur) {
-      const m = item.match(/^([A-Za-z0-9][A-Za-z0-9_-]*)/);
-      if (m && !cur.dependsOn.includes(m[1])) cur.dependsOn.push(m[1]);
-      continue;
-    }
-    if ((section === 'command' || section === 'entrypoint') && cur && item) {
-      cur.command = cur.command ? cur.command + ' ' + item : item;
-      continue;
+function parseCompose(text, file) {
+  const doc = YAML.parseDocument(text, { uniqueKeys: true, merge: true });
+  if (doc.errors.length || doc.warnings.length) return { file, complete: false, errors: [...doc.errors, ...doc.warnings].map(e => e.code || 'INVALID_YAML'), services: [], envNeeds: [] };
+  let data;
+  try { data = doc.toJS({ maxAliasCount: 100 }); }
+  catch { return { file, complete: false, errors: ['YAML_ALIAS_LIMIT'], services: [], envNeeds: [] }; }
+  if (!object(data) || !object(data.services)) return null;
+  const services = [], errors = [], agg = new Map();
+  const tasks = new Set();
+  for (const definition of Object.values(data.services)) {
+    if (object(definition) && object(definition.depends_on)) {
+      for (const [name, dep] of Object.entries(definition.depends_on)) if (object(dep) && dep.condition === 'service_completed_successfully') tasks.add(name);
     }
   }
-  flush();
-  // Inline `build: ./dir` shorthand.
-  for (const s of services) {
-    if (s._inline && !s.build) s.build = { context: unquote(s._inline), dockerfile: null };
-    delete s._inline;
-  }
-  // Aggregate env needs across services (and stray ${} anywhere in the file).
-  const agg = new Map();
-  for (const s of services) {
-    for (const [k, r] of (s._envNeeds || new Map())) {
-      if (!agg.has(k)) agg.set(k, { ...r, services: [s.name] });
-      else {
-        const e = agg.get(k);
-        if (!e.services.includes(s.name)) e.services.push(s.name);
-        if (r.required) { e.required = true; e.message = e.message || r.message; }
-        if (!e.def && r.def) e.def = r.def;
-      }
+  for (const [name, s] of Object.entries(data.services)) {
+    if (!object(s)) { errors.push('INVALID_SERVICE:' + name); continue; }
+    let build = null;
+    if (typeof s.build === 'string') build = { context: s.build, dockerfile: null };
+    else if (object(s.build)) build = { context: s.build.context || '.', dockerfile: s.build.dockerfile || null, target: s.build.target || null,
+      args: Object.keys(object(s.build.args) ? s.build.args : Object.fromEntries((Array.isArray(s.build.args) ? s.build.args : []).map(a => [String(a).split('=')[0], null]))),
+      inline: s.build.dockerfile_inline != null };
+    const env = [];
+    const entries = Array.isArray(s.environment) ? s.environment.map(e => { const i = String(e).indexOf('='); return i < 0 ? [String(e), null] : [String(e).slice(0, i), String(e).slice(i + 1)]; }) : Object.entries(object(s.environment) ? s.environment : {});
+    for (const [key, value] of entries) {
+      env.push({ key, refs: envRefs(value).map(r => r.key), derived: envRefs(value).length > 0 });
     }
-    delete s._envNeeds;
+    let refs;
+    try { refs = envRefs(JSON.stringify(s)); }
+    catch { return { file, complete: false, errors: ['CYCLIC_YAML_ALIAS'], services: [], envNeeds: [] }; }
+    for (const [key, value] of entries) if (value == null) refs.push({ key, required: true, allowEmpty: true, message: null, def: null });
+    for (const r of refs) {
+      const old = agg.get(r.key);
+      agg.set(r.key, { ...r, required: r.required || !!(old && old.required),
+        allowEmpty: old && old.required ? old.allowEmpty && (!r.required || r.allowEmpty) : r.allowEmpty,
+        services: [...new Set([...(old ? old.services : []), name])] });
+    }
+    const dependsOn = Array.isArray(s.depends_on) ? s.depends_on : Object.keys(object(s.depends_on) ? s.depends_on : {});
+    services.push({ name, build, image: typeof s.image === 'string' ? s.image : null,
+      ports: (Array.isArray(s.ports) ? s.ports : []).map(parsePort).filter(Boolean),
+      expose: Array.isArray(s.expose) ? s.expose : [], env,
+      command: s.command == null ? null : s.command, entrypoint: s.entrypoint == null ? null : s.entrypoint,
+      workingDir: s.working_dir || null, oneShot: tasks.has(name), dependsOn,
+      dependencyConditions: object(s.depends_on) ? Object.fromEntries(Object.entries(s.depends_on).map(([k, v]) => [k, object(v) ? v.condition || 'service_started' : 'service_started'])) : {},
+      healthcheck: s.healthcheck != null, profiles: Array.isArray(s.profiles) ? s.profiles : [],
+      envFiles: [].concat(s.env_file || []).map(v => typeof v === 'string' ? { path: v, required: true } : { path: v.path, required: v.required !== false }) });
   }
-  for (const r of envRefs(text)) {
-    if (!agg.has(r.key)) agg.set(r.key, { ...r, services: [] });
-  }
-  return { file, services, envNeeds: [...agg.values()] };
+  if (!services.length) errors.push('NO_SERVICES');
+  if (data.include || Object.values(data.services).some(s => object(s) && s.extends)) errors.push('EXTERNAL_COMPOSE_REFERENCES_REQUIRE_REVIEW');
+  return { file, complete: errors.length === 0, errors, services, envNeeds: [...agg.values()] };
 }
-
-module.exports = { COMPOSE_FILES, readComposeTopo, envRefs, parsePort };
+function readComposeTopo(codeDir, selected) {
+  const names = selected ? [selected] : COMPOSE_FILES;
+  for (const name of names) {
+    const file = sourceFile(codeDir, name);
+    if (!file) continue;
+    let result;
+    try { result = readSource(file); } catch { result = { reason: 'file could not be read' }; }
+    if (result.text === undefined) return { file: name, complete: false, errors: ['UNREADABLE_COMPOSE'], services: [], envNeeds: [] };
+    return parseCompose(result.text, name) || { file: name, complete: false, errors: ['NO_SERVICES'], services: [], envNeeds: [] };
+  }
+  return null;
+}
+module.exports = { COMPOSE_FILES, readComposeTopo, parseCompose, envRefs, parsePort };

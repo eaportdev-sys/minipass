@@ -91,9 +91,10 @@ async function modalListRepos() {
   try {
     r = await (await fetch('/api/github/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })).json();
   } catch (e) { r = { error: e.message }; }
+  if (session !== createModalSession) return;
+  if (request !== createConnectRequest) { setBuildBusy(false); return; }
   busy(false);
   try { conn.classList.remove('inline-dots'); } catch {}
-  if (session !== createModalSession || request !== createConnectRequest) return;
   if (r.error) { conn.textContent = 'Token check failed — paste a fresh token and retry.'; toast(r.error, false); return; }
   modalLogin = r.login;
   const sel = document.getElementById('ghrepo');

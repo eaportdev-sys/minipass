@@ -6,6 +6,17 @@ async function createApp(options = {}) {
   await createCleanupPromise.catch(() => {});
   if (session !== createModalSession) return;
   const v = id => document.getElementById(id).value.trim();
+  const nameField = document.getElementById('name');
+  const nameError = document.getElementById('createNameError');
+  nameError.textContent = '';
+  nameField.setAttribute?.('aria-invalid', 'false');
+  if (!v('name')) {
+    nameError.textContent = 'Site name is required.';
+    nameField.setAttribute?.('aria-invalid', 'true');
+    nameField.focus?.();
+    return;
+  }
+  if (typeof createBusyOps !== 'undefined' && createBusyOps > 0) { toast('Wait for repository listing and detection to finish.', false); return; }
   const storageGB = v('createStorageGB');
   if (!/^(?:[1-9]\d*|0)(?:\.\d{1,3})?$/.test(storageGB) || Number(storageGB) < 0.1 || Number(storageGB) > 1000000) { toast('Enter a storage allowance from 0.1 to 1,000,000 GB (up to 3 decimal places).', false); return; }
   const typeEl = document.querySelector('input[name=apptype]:checked');
@@ -43,6 +54,7 @@ async function createApp(options = {}) {
   if (session !== createModalSession) return;
   if (r.pendingId) createPendingId = r.pendingId;
   document.getElementById('out').textContent = JSON.stringify(r, null, 2);
+  if (r.field === 'name') { nameError.textContent = r.error; nameField.setAttribute?.('aria-invalid', 'true'); nameField.focus?.(); }
   if (r.needsDockerfile) document.getElementById('createDockerAction').style.display = 'flex';
   if (r.needsModernization) {
     document.getElementById('createBuildProfile').style.display = 'block';
@@ -56,6 +68,7 @@ async function createApp(options = {}) {
     if (r.storageWarning) toast('Site created, but the storage allowance is NOT enforced on this host: ' + r.storageWarning, false);
     if (Array.isArray(r.envNeeds) && r.envNeeds.length) toast(`Site created - code references unset variables (${r.envNeeds.join(', ')}) - add values in Environment before deploying`, false);
     closeCreate(true);
+    if (r.id && typeof openSite === 'function') openSite(r.id, 'deploy');
   }
 }
 async function detectType() {
@@ -106,6 +119,8 @@ async function detectType() {
   try { state.classList.add('inline-dots'); } catch {}
   try {
     const r = await (await fetch('/api/github/detect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo, branch, ...(token ? { token } : {}) }) })).json();
+    if (session !== createModalSession) return;
+    if (request !== createDetectRequest) { setBuildBusy(false); return; }
     sel.disabled = false;
     setBuildBusy(false);
     try { state.classList.remove('inline-dots'); } catch {}
@@ -150,6 +165,8 @@ async function detectType() {
     } else hint.style.display = 'none';
     sel.disabled = false;
   } catch {
+    if (session !== createModalSession) return;
+    if (request !== createDetectRequest) { setBuildBusy(false); return; }
     sel.disabled = false;
     setBuildBusy(false);
     try { state.classList.remove('inline-dots'); } catch {}
@@ -168,4 +185,4 @@ function setSubdir(f, type) {
     if (radio) radio.checked = true;
   }
   toast('building subfolder ' + f + (type ? ' as ' + type : ''));
-}
+}

@@ -64,6 +64,12 @@ assert(args.includes('corepack pnpm install --frozen-lockfile') === false, 'inst
 assert(args.at(-1).includes('corepack pnpm install --frozen-lockfile') && args.at(-1).includes('corepack pnpm run build'));
 assert(!args.at(-1).includes('/srv/apps'), 'no host paths inside the container command');
 
+dir = fixture({ Dockerfile: SELF_BUILDING, 'recipe.production': VITE_DOCKERFILE, 'package.json': pkg('vite build') });
+dirs.push(dir);
+assert.equal(prebuild.plan(dir), null);
+assert.equal(prebuild.plan(dir, { dockerfile: 'recipe.production' }).outputDir, 'dist', 'pre-build reads the selected arbitrarily named recipe, not an unrelated default');
+assert.equal(prebuild.plan(dir, { dockerfile: '../outside' }), null, 'selected pre-build files cannot escape the context');
+
 async function main() {
   const pulls = [];
   await prebuild.ensureBuilderImage(async args => { pulls.push(args); if (args[1] === 'inspect') throw new Error('missing'); return ''; });

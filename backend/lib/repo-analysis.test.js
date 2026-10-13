@@ -54,7 +54,7 @@ try {
   write('skip/node_modules/dep/package.json', { scripts: { start: 'node x.js' }, dependencies: { pg: '^8' } });
   assert.deepEqual(analyzeRepository(path.join(tmp, 'skip')).services, [], 'dependencies are not sites');
   write('symlink/package.json', { scripts: { start: 'node index.js' } });
-  write('symlink/drizzle.config.ts', 'x'.repeat(257 * 1024) + 'export default { dialect: "mysql" };');
+  write('symlink/drizzle.config.ts', 'x'.repeat(2 * 1024 * 1024 + 1) + 'export default { dialect: "mysql" };');
   assert.deepEqual(analyzeService(path.join(tmp, 'symlink'), 'node', 'symlink').databaseNeeds, [], 'oversized inputs skipped');
   console.log('Repository analysis: used service/database inference retained; no report engine or file mutations: OK');
 } finally { fs.rmSync(tmp, { recursive: true, force: true }); }

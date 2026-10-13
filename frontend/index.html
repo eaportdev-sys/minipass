@@ -214,6 +214,10 @@
         </div>
       </div>
       <div id="tab-deploy" class="sitetab" style="display:none">
+          <div class="card deployment-plan-card">
+            <div class="sectionhead"><div><b>Repository deployment plan</b><div class="meta">Source instructions are analyzed without execution. Creating or uploading does not deploy. Runtime verification is separate.</div></div><button onclick="loadDeploymentPlan()">rescan instructions</button></div>
+            <div id="deploymentPlan" aria-live="polite">Open a site to inspect its deployment instructions.</div>
+          </div>
           <div class="card deploy-manual-card">
             <div class="sectionhead"><div><b>Deploy now</b><div class="meta">Rebuild and release safely. Redeploy pulls the repo first; local rebuild uses the box files as-is (keeps Files-tab edits).</div></div><div class="deploy-now-btns"><button class="btn primary deploy-now-btn" onclick="deployCurrent()">redeploy</button><button class="deploy-now-btn" onclick="deployLocal()">local rebuild</button></div></div>
             <div class="deploy-safety-flow" aria-label="Deployment stages">
@@ -374,7 +378,7 @@
   <header class="create-header"><h2 id="createTitle">New website</h2><div class="meta">Choose a source. Check the runtime and databases. Build.</div></header>
   <div class="create-body">
     <section class="create-identity">
-      <label for="name">Website name<input id="name" placeholder="my-site" autocomplete="off" maxlength="80"><span class="meta">Display name only. A unique site ID is assigned automatically; names can be reused.</span></label>
+      <label for="name">Website name<input id="name" placeholder="my-site" autocomplete="off" maxlength="80" required aria-describedby="createNameError"><span id="createNameError" class="field-error" role="alert"></span><span class="meta">Display name only. A unique site ID is assigned automatically; names can be reused.</span></label>
       <div>
         <div class="mlabel">Access</div>
         <div class="create-access">
@@ -450,7 +454,7 @@
     </div>
     <pre id="out" class="compact-output"></pre>
   </div>
-  <footer class="create-footer"><span class="meta">Manual redeploys anytime in Deploy.</span><div class="modalbtns"><button id="createCancelBtn" onclick="closeCreate()">Cancel</button><button id="createBuildBtn" class="btn primary" onclick="createApp()">Build website</button></div></footer>
+  <footer class="create-footer"><span class="meta">Create, review the deployment plan, then deploy manually.</span><div class="modalbtns"><button id="createCancelBtn" onclick="closeCreate()">Cancel</button><button id="createBuildBtn" class="btn primary" onclick="createApp()">Create website</button></div></footer>
 </div></div>
 <div id="toasts"></div>
 <div id="confirmModal" class="modal"><div class="modalbox">
@@ -464,6 +468,7 @@
 <script src="site.js"></script>
 <script src="migrations.js"></script>
 <script src="deploy.js"></script>
+<script src="deployment-plan.js"></script>
 <script src="site-header.js"></script>
 <script src="env.js"></script>
 <script src="databases.js"></script>

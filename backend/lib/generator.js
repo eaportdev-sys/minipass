@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const { execSync } = require('child_process');
 const { appGitEnv } = require('./ssh');
 const { readBuildProfile, prepareStaticBuild } = require('./build-profile');
-const { resolveServiceDockerfile } = require('./dockerfiles');
+const { resolveServiceDockerfile, findDockerfiles } = require('./dockerfiles');
 
 const DB_IMAGES = {
   postgres: 'postgres:16-alpine',
@@ -28,6 +28,7 @@ function normDbs(db) {
 // Variant selection (Dockerfile.web etc.) lives in resolveServiceDockerfile:
 // this seeder only ever writes the exact Dockerfile name.
 function ensureDockerfile(ctxDir, type, templatesDir, options = {}) {
+  if (findDockerfiles(ctxDir).length) return 'present';
   if (type === 'static' && readBuildProfile(ctxDir).kind === 'jekyll') {
     const result = prepareStaticBuild(ctxDir, templatesDir, options);
     if (result.prepared) {
@@ -72,6 +73,7 @@ function ensureDockerfile(ctxDir, type, templatesDir, options = {}) {
 // Used by validation so an explicit-standard-template button can be shown
 // before Add is clicked, and can survive background UI refreshes.
 function needsDockerfileOptIn(ctxDir, type) {
+  if (findDockerfiles(ctxDir).length) return false;
   let files = [];
   try { files = fs.readdirSync(ctxDir); } catch { return false; }
   if (files.some(f => /^dockerfile$/i.test(f))) return false;
@@ -283,16 +285,25 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   // A lone Dockerfile variant (Dockerfile.web etc.) is used directly, never seeded over.
   // Never invent an entrypoint: node without index.js must bring its own Dockerfile.
   let createDockerfile = 'Dockerfile';
+  // Creation registers a checkout, not a deployment. Repository topology and
+  // ambiguous recipes must be reviewable on the site's plan, not force-seeded.
+  const discoveredPlan = require('./deployment-plan').analyze(path.join(dir, 'code'), { templatesDir });
+  const hasDeclaredCompose = discoveredPlan.candidates.some(c => c.kind === 'compose');
   {
-    const resolved = resolveServiceDockerfile(buildDir, null, type, templatesDir);
-    if (resolved) createDockerfile = resolved.file;
-    else ensureDockerfile(buildDir, type, templatesDir, { modernize: modernizeBuild });
+    const selected = discoveredPlan.selected;
+    if (!hasDeclaredCompose && selected && selected.kind === 'dockerfile' && path.posix.dirname(selected.file) === (sub || '.')) {
+      createDockerfile = resolveServiceDockerfile(buildDir, path.posix.basename(selected.file), type, templatesDir).file;
+    } else if (!hasDeclaredCompose && findDockerfiles(buildDir).length < 2) {
+      const resolved = resolveServiceDockerfile(buildDir, null, type, templatesDir);
+      if (resolved) createDockerfile = resolved.file;
+      else ensureDockerfile(buildDir, type, templatesDir, { modernize: modernizeBuild });
+    }
   }
   let appPort = port || TYPE_PORT[type] || 3000;
   if (!port) appPort = inferPort(sub ? path.join(dir, 'code', sub) : path.join(dir, 'code'), appPort, createDockerfile);
   // static/react always need our nginx.conf (SPA fallback; proxy added on link).
   // Never overwrite a repo's own conf - only fill the gap (react template has none).
-  if (type === 'static' || type === 'react') {
+  if (!hasDeclaredCompose && (type === 'static' || type === 'react')) {
     const ctxDir = sub ? path.join(dir, 'code', sub) : path.join(dir, 'code');
     try {
       if (!fs.existsSync(path.join(ctxDir, 'nginx.conf'))) fs.writeFileSync(path.join(ctxDir, 'nginx.conf'), nginxConf(null));
@@ -344,9 +355,10 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   // 3. docker-compose.yml per app (ports: reachable via localhost + tunnel; expose: inter-container)
   // monorepo: build a subfolder, seeding the type template Dockerfile when the folder lacks one.
   // Only applies to cloned repos - template starters have no subfolders, ignore it there.
-  if (sub) {
+  if (sub && !hasDeclaredCompose) {
     const tpl = path.join(templatesDir, type);
     for (const f of ['Dockerfile', 'nginx.conf']) {
+      if (f === 'Dockerfile' && createDockerfile !== 'Dockerfile') continue;
       const dst = path.join(dir, 'code', sub, f);
       try {
         if (!fs.existsSync(dst) && fs.existsSync(path.join(tpl, f))) {
@@ -359,7 +371,7 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   const ctx = sub ? `./code/${sub}` : './code';
   const compose = `services:\n${serviceBlock({ svcName: 'app', ctx, port: appPort, host, portEnv: null, dockerfile: createDockerfile })}${dbBlock}${volBlock}\n`;
   fs.writeFileSync(path.join(dir, 'docker-compose.yml'), compose);
-  return { dir, appPort, hostPort: host, subdir: sub, type };
+  return { dir, appPort, hostPort: host, subdir: sub, type, hasDeclaredCompose };
 }
 
 // One app-service block. Primary ('app') renders exactly the legacy shape;

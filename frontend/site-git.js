@@ -300,6 +300,7 @@ function showSiteTab(t, remember = true) {
   if (t === 'overview') loadStorage();
   if (t === 'database') { loadDatabases(); loadMigrateSuggest(); }
   if (t === 'environment') loadEnv();
+  if (t === 'deploy') loadDeploymentPlan();
   if (t === 'files') listFiles('');
   if (t === 'logs') showLogs();
-}
+}

@@ -81,15 +81,16 @@ async function main() {
   assert(element('ghConnState').textContent.includes('failed'));
   assert.equal(messages.at(-1).ok, false);
 
-  // stale preview (form reset mid-flight): controls still restore, late repos ignored
+  // Reset/new-modal work owns the controls; stale completions must not unlock it.
   context.fetch = () => new Promise(resolve => { release = () => resolve({ json: async () => ({ login: 'late', repos: [{ full_name: 'owner/late', private: false }] }) }); });
   const staleList = run('modalListRepos()');
   await tick();
-  run('createModalSession++');
+  run('createModalSession++; createBusyOps=1');
   release(); await staleList;
-  assert.equal(element('ghModalConnect').disabled, false, 'stale preview still restores controls');
+  assert.equal(element('ghModalConnect').disabled, true, 'stale preview cannot unlock new-modal work');
+  assert.equal(run('createBusyOps'), 1, 'stale preview cannot release a newer busy operation');
   assert(!element('ghrepo').innerHTML.includes('owner/late'), 'stale preview cannot fill a new form');
-  run('createModalSession=1');
+  run('createModalSession=1; createBusyOps=0');
 
   // repo select: picker locked + waiting state while detection reads the repo
   element('ghrepo').value = 'owner/repo';
@@ -107,17 +108,18 @@ async function main() {
   assert.equal(element('createDetectState').classList.has('inline-dots'), false);
   assert(element('createDetectState').textContent.includes('Detected'));
 
-  // stale detection: picker restores, late result ignored
+  // stale detection: new-modal picker stays locked, late result ignored
   context.fetch = () => new Promise(resolve => { release = () => resolve({ json: async () => ({ type: 'php', dbs: [] }) }); });
   const staleDetect = run('detectType()');
   await tick();
   assert.equal(element('ghrepo').disabled, true);
-  run('createModalSession++');
+  run('createModalSession++; createBusyOps=1');
   release(); await staleDetect;
-  assert.equal(element('ghrepo').disabled, false, 'stale detection still restores the picker');
+  assert.equal(element('ghrepo').disabled, true, 'stale detection cannot unlock the new picker');
+  assert.equal(run('createBusyOps'), 1);
   assert(!element('createDetectState').textContent.includes('Detected PHP'), 'stale detection cannot overwrite a new form');
   // overlapping runs: build stays down until the last one finishes
-  run('createModalSession=1');
+  run('createModalSession=1; createBusyOps=0');
   element('ghModalToken').value = 'tok123';
   let releaseList, releaseDetect;
   context.fetch = url => url.includes('/preview')
@@ -131,6 +133,20 @@ async function main() {
   assert.equal(element('createBuildBtn').disabled, true, 'build still waits while detection runs');
   releaseDetect(); await opDetect;
   assert.equal(element('createBuildBtn').disabled, false, 'build restores after the last run finishes');
+  let finishOld, finishNew;
+  let detectCall = 0;
+  context.fetch = () => new Promise(resolve => {
+    const finish = () => resolve({ json: async () => ({ type: 'node', dbs: [] }) });
+    if (detectCall++ === 0) finishOld = finish; else finishNew = finish;
+  });
+  const oldBranch = run('detectType()');
+  const newBranch = run('detectType()');
+  finishOld(); await oldBranch;
+  assert.equal(run('createBusyOps'), 1, 'superseded same-modal detection releases only its own busy slot');
+  assert.equal(element('createBuildBtn').disabled, true);
+  finishNew(); await newBranch;
+  assert.equal(run('createBusyOps'), 0, 'superseded detection cannot strand the create button disabled');
+  assert.equal(element('createBuildBtn').disabled, false);
   console.log('Create connect UI: token list and repo select wait with visible loading, stale-safe restore: OK');
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

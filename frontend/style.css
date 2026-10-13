@@ -654,3 +654,11 @@ a { color: var(--accent); }
   .runtime-state { text-align: left; }
   .site-tabs .tabbtn { padding: 9px 11px; }
 }
+.field-error { color: #ff6b6b; }
+input[aria-invalid="true"] { border-color: #ff6b6b; }
+.deployment-plan-card { min-width: 0; }
+#deploymentPlan { overflow-wrap: anywhere; }
+#deploymentPlan details { margin-top: 12px; }
+#deploymentPlan li { margin: 8px 0; }
+.plan-blockers { border-left: 3px solid #ff6b6b; padding-left: 24px; }
+.plan-ready { color: #42c98b; }

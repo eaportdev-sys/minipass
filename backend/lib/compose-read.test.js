@@ -54,10 +54,10 @@ try {
   assert.equal(topo.file, 'compose.yaml');
   assert.deepEqual(topo.services.map(s => s.name), ['db', 'migrate', 'api', 'web']);
   const byName = Object.fromEntries(topo.services.map(s => [s.name, s]));
-  assert.equal(byName.migrate.oneShot, true, 'restart-no task flagged one-shot');
+  assert.equal(byName.migrate.oneShot, true, 'completion dependency identifies a required one-shot task');
   assert.equal(byName.api.oneShot, false);
-  assert.deepEqual(byName.migrate.command, '["node", "src/migrate.mjs"]');
-  assert.deepEqual(byName.web.build, { context: '.', dockerfile: 'Dockerfile.web' });
+  assert.deepEqual(byName.migrate.command, ['node', 'src/migrate.mjs']);
+  assert.deepEqual(byName.web.build, { context: '.', dockerfile: 'Dockerfile.web', target: null, args: [], inline: false });
   assert.deepEqual(byName.migrate.build, { context: './services/api', dockerfile: null });
   assert.deepEqual(byName.web.ports, [{ host: 8000, container: 3000 }]);
   assert.deepEqual(byName.api.dependsOn, ['migrate']);
@@ -68,10 +68,20 @@ try {
   assert.equal(needs.CLINIC_DOMAIN.required, true, 'nested ref inside a value counts');
   assert.equal(needs.DATA_ENC_KEY.required, false, ':- default is optional');
   assert(!needs.POSTGRES_DB, 'plain values are not needs');
-  // garbage in, partial out - never throws
+  // Malformed input is explicitly incomplete, never a pretend-success subset.
   fs.writeFileSync(path.join(tmp, 'compose.yaml'), 'services:\n  a:\n   :::bad indent\n  b: [unclosed\n');
   const partial = readComposeTopo(tmp);
   assert(partial && Array.isArray(partial.services));
+  assert.equal(partial.complete, false);
+  assert(partial.errors.length);
+  fs.writeFileSync(path.join(tmp, 'compose.yaml'), 'services:\n  api:\n    image: node\n    image: nginx\n');
+  assert.equal(readComposeTopo(tmp).complete, false, 'duplicate keys are not silently accepted');
+  fs.writeFileSync(path.join(tmp, 'compose.yaml'), 'x-base: &base\n  image: node\nservices:\n  api:\n    <<: *base\n    restart: "no"\n    environment:\n      OPT: ${X:-default}\n      REQUIRED: ${X:?must set}\n');
+  const merged = readComposeTopo(tmp);
+  assert.equal(merged.complete, true);
+  assert.equal(merged.services[0].image, 'node');
+  assert.equal(merged.services[0].oneShot, false, 'restart=no alone is not evidence of a migration task');
+  assert.equal(merged.envNeeds.find(e => e.key === 'X').required, true, 'required occurrence wins over earlier optional occurrence');
   assert.equal(readComposeTopo(path.join(tmp, 'nope')), null);
 } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 
@@ -83,4 +93,7 @@ const refs = envRefs('a=${X:?need it} b=$${ESCAPED} c=$Y d=${Z:-dflt}');
 assert.deepEqual(refs.map(r => r.key).sort(), ['X', 'Y', 'Z']);
 assert(refs.find(r => r.key === 'X').required && refs.find(r => r.key === 'X').message === 'need it');
 assert(!refs.find(r => r.key === 'Z').required && refs.find(r => r.key === 'Z').def === 'dflt');
-console.log('Compose topology read: services, one-shots, ports, env needs, malformed tolerance: OK');
+assert.deepEqual(parsePort('127.0.0.1:8000:3000'), { host: 8000, container: 3000 });
+assert(envRefs('${INPUT?set it}').find(e => e.key === 'INPUT').allowEmpty);
+assert(!envRefs('${INPUT:?set it}').find(e => e.key === 'INPUT').allowEmpty);
+console.log('Compose topology: real YAML, aliases, duplicate-key failures, task dependencies, ports and required env: OK');

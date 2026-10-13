@@ -41,6 +41,7 @@ function resetCreateForm() {
   createModalSession++;
   createConnectRequest++;
   createDetectRequest++;
+  createBusyOps = 0;
   createStandardDockerfile = false;
   createPendingId = null;
   createStorageAvailable = null;
@@ -49,6 +50,8 @@ function resetCreateForm() {
   document.getElementById('createStorageHint').textContent = '';
   document.getElementById('createRepoSize').textContent = 'Repository size: choose a GitHub repository.';
   document.getElementById('name').value = '';
+  document.getElementById('createNameError').textContent = '';
+  document.getElementById('name').setAttribute?.('aria-invalid', 'false');
   document.getElementById('repo').value = '';
   document.getElementById('domain').value = '';
   document.getElementById('out').textContent = '';
@@ -78,8 +81,10 @@ function resetCreateForm() {
   document.getElementById('createGitDetails').open = false;
   createDetectedManager = 'npm';
   document.getElementById('createDetectState').textContent = 'Auto-detect from GitHub, or select manually.';
+  document.getElementById('createDetectState').classList?.remove?.('inline-dots');
   document.getElementById('createDetectState').title = '';
   document.getElementById('ghConnState').textContent = 'Paste a site-only token.';
+  document.getElementById('ghConnState').classList?.remove?.('inline-dots');
   document.getElementById('ghStoreNote').textContent = 'Saved to this site only.';
   document.getElementById('ghModalConnect').disabled = false;
   document.getElementById('ghModalConnect').textContent = 'List repos';
@@ -111,4 +116,4 @@ function toggleTheme() {
   document.documentElement.dataset.theme = t;
   try { localStorage.setItem('mp-theme', t); } catch {}
 }
-try { document.documentElement.dataset.theme = localStorage.getItem('mp-theme') || 'dark'; } catch {}
+try { document.documentElement.dataset.theme = localStorage.getItem('mp-theme') || 'dark'; } catch {}

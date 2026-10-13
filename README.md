@@ -153,7 +153,30 @@ size for the selected branch; truncated trees are labeled as a lower bound. This
 excludes Git history, LFS downloads, dependencies, build output and database growth,
 so it is not a recommended quota or a predicted final disk requirement.
 The panel scaffolds `/srv/apps/<id>/` (`code/`, `.env`,
-`docker-compose.yml`) and builds in the background.
+`docker-compose.yml`) and opens **Deploy → Repository deployment plan**.
+Creation does not build or launch containers. A missing name is shown inline.
+
+The plan inventories the whole source tree after creation, uploads, file edits,
+Git sync and deployment pulls. Deployment checks the actual pulled or detached
+source before Docker commands. File content, not a required filename, identifies
+Compose and Dockerfile candidates; literal deployment-command references are
+traced. Multiple entrypoints need a saved selection. Supported Dockerless sites
+can still use panel-provided build environments. Manifests show declared scripts;
+analysis never executes repository scripts or documentation.
+
+There is no 200-file/depth cutoff in instruction discovery. Git internals,
+generated dependencies/caches and binary files are disclosed exclusions. Text
+over 2 MiB, total text over 64 MiB, unreadable files, symlinks and unsupported text
+encodings are explicitly reported and block deployment rather than producing a
+pretend-complete report. UTF-8 is the supported source encoding.
+
+**Repository Compose execution is not yet supported.** Its declared services,
+completion-dependent one-shot tasks, build recipes, input/derived environment and
+dependency conditions are displayed, but the panel blocks deployment instead of
+replacing that topology with generated services. Multi-file Compose overlays and
+dynamic/out-of-tree deployment references require review and are not executed.
+Native host deployment is also not implemented. Source-plan checks passing do
+not certify the working website, assets, API or migrations.
 
 Jekyll repositories (`Gemfile` + `_config.yml` and Jekyll markers) are detected as
 **Static**, including those with a Webpack `package.json`. Their standard build

@@ -358,7 +358,10 @@ try {
   assert.deepEqual(findDockerfiles(varDir).sort(), ['Dockerfile.api', 'Dockerfile.web']);
   assert.deepEqual(findDockerfiles(path.join(tmp, 'node', 'no-such-dir')), []);
   assert(validDockerfileName('Dockerfile') && validDockerfileName('Dockerfile.web'));
-  assert(!validDockerfileName('Dockerfile..x') && !validDockerfileName('../Dockerfile') && !validDockerfileName('Dockerfile ') && !validDockerfileName('evil.sh'));
+  assert(!validDockerfileName('Dockerfile..x') && !validDockerfileName('../Dockerfile') && !validDockerfileName('Dockerfile ') && !validDockerfileName('bad;file'));
+  assert(validDockerfileName('compose.dockerfile') && validDockerfileName('recipe.production'), 'safe arbitrary names are allowed; file content is validated during resolution');
+  fs.writeFileSync(path.join(varDir, 'evil.sh'), 'echo not a Dockerfile');
+  assert.throws(() => resolveServiceDockerfile(varDir, 'evil.sh', 'node', templates), /does not contain Dockerfile instructions/);
   // lone variant resolves automatically; exact wins when present; several fail loud
   const loneDir = path.join(tmp, 'node', 'lone');
   fs.mkdirSync(loneDir, { recursive: true });

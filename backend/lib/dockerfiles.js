@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { readSource, sourceFile, isDockerfile } = require('./repository-files');
 
 // Historical standard files are frozen here. A marker alone is not ownership:
 // users may have customized a generated file while retaining its first comment.
@@ -232,19 +233,25 @@ function standardDockerfileType(ctxDir, templatesDir, filename) {
 // for container hosts (Coolify/Dokploy convention) often ship their blessed
 // recipe as Dockerfile.web instead of Dockerfile - detection must see those
 // instead of silently seeding the generic template over them.
-function findDockerfiles(ctxDir, limit = 10) {
+function findDockerfiles(ctxDir) {
   let files = [];
   try { files = fs.readdirSync(ctxDir); } catch { return []; }
-  const exact = files.find(f => /^dockerfile$/i.test(f));
-  const variants = files.filter(f => /^dockerfile\.[A-Za-z0-9][A-Za-z0-9._-]*$/i.test(f))
+  const recognized = f => {
+    if (!validDockerfileName(f)) return false;
+    try { const source = sourceFile(ctxDir, f); return !!(source && isDockerfile(readSource(source).text)); } catch { return false; }
+  };
+  const exact = files.find(f => /^dockerfile$/i.test(f) && recognized(f));
+  const variants = files.filter(f => {
+    if (/^dockerfile$/i.test(f) || !validDockerfileName(f)) return false;
+    return recognized(f);
+  })
     .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
   const out = [...(exact ? [exact] : []), ...variants];
-  return out.slice(0, Math.max(1, limit));
+  return out;
 }
 
 function validDockerfileName(n) {
-  return typeof n === 'string' && n.length <= 64 &&
-    /^dockerfile(\.[A-Za-z0-9][A-Za-z0-9._-]*)?$/i.test(n || '');
+  return typeof n === 'string' && /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(n) && !n.includes('..');
 }
 
 // Effective build file for a service context. selected is the stored service
@@ -259,10 +266,11 @@ function resolveServiceDockerfile(ctxDir, selected, type, templatesDir) {
   const list = cands.length ? cands.join(', ') : 'none found';
   if (selected != null && String(selected) !== '') {
     if (!validDockerfileName(selected)) throw new Error(`bad Dockerfile name '${selected}'`);
-    const target = path.join(path.resolve(ctxDir), path.basename(selected));
+    const target = sourceFile(ctxDir, selected);
     let st = null;
-    try { st = fs.statSync(target); } catch {}
+    try { if (target) st = fs.lstatSync(target); } catch {}
     if (!st || !st.isFile()) throw new Error(`selected Dockerfile '${selected}' not found in this service folder (found: ${list})`);
+    if (!isDockerfile(readSource(target).text)) throw new Error(`selected file '${selected}' does not contain Dockerfile instructions`);
     return { file: path.basename(selected), source: 'selected' };
   }
   const exact = cands.find(f => /^dockerfile$/i.test(f));
@@ -270,7 +278,7 @@ function resolveServiceDockerfile(ctxDir, selected, type, templatesDir) {
   if (exact) {
     if (type && templatesDir && variants.length) {
       try {
-        if (legacyMatch(type, fs.readFileSync(path.join(ctxDir, exact), 'utf8'))) {
+        if (standardDockerfileType(ctxDir, templatesDir, exact)) {
           if (variants.length === 1) return { file: variants[0], source: 'repo-variant' };
           throw new Error(`multiple Dockerfiles found (${[exact, ...variants].join(', ')}) - select the build file in Setup > services`);
         }

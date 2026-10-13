@@ -1,6 +1,7 @@
 async function loadServices() {
   if (!currentApp) return;
   const appId = currentApp;
+  loadDeploymentPlan();
   try {
     const r = await (await fetch(`/api/apps/${appId}/services`)).json();
     if (currentApp !== appId) return;
@@ -209,4 +210,4 @@ async function removeService(name) {
   const r = await (await fetch(`/api/apps/${currentApp}/services/${name}`, { method: 'DELETE' })).json();
   toast(r.ok ? (name + ' removed - redeploy to apply') : (r.error || 'failed'), !!r.ok);
   refreshSiteData();
-}
+}
