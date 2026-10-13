@@ -85,8 +85,6 @@ function resetCreateForm() {
   document.getElementById('ghModalConnect').textContent = 'List repos';
   document.getElementById('createBuildBtn').disabled = false;
   document.getElementById('createCancelBtn').disabled = false;
-  document.getElementById('createBuildBtn').textContent = 'Build website';
-  document.getElementById('createWait').style.display = 'none';
   document.getElementById('createDockerAction').style.display = 'none';
   modalLogin = null;
   accessChanged();

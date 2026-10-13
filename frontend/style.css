@@ -573,17 +573,6 @@ a { color: var(--accent); }
 .create-footer .modalbtns { margin: 0; flex-shrink: 0; }
 .create-dialog #out { max-height: 120px; }
 .create-dialog #out:empty { display: none; }
-.create-wait { display: flex; align-items: center; gap: 9px; margin-top: 10px; padding: 10px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--input); color: var(--muted); font-size: 12px; }
-.create-wait-dots { flex: 0 0 auto; width: 30px; text-align: left; color: var(--accent); font-weight: 800; }
-.create-wait-dots::after { content: '●○○'; animation: create-dots 1.2s linear infinite; }
-@keyframes create-dots {
-  0% { content: '●○○'; }
-  33% { content: '●●○'; }
-  66% { content: '●●●'; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .create-wait-dots::after { content: '●●●'; animation: none; }
-}
 @media (max-width: 600px) {
   .create-dialog { max-height: calc(100dvh - 16px); }
   .create-header, .create-body, .create-footer { padding: 14px; }

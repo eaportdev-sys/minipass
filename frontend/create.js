@@ -35,14 +35,7 @@ async function createApp(options = {}) {
   const cancelBtn = document.getElementById('createCancelBtn');
   buildBtn.disabled = true;
   cancelBtn.disabled = true;
-  const buildLabel = buildBtn.textContent;
-  buildBtn.textContent = 'Creating…';
-  // The clone + scaffold runs synchronously in POST /api/apps and can take
-  // minutes on large repos: show waiting state so nothing else is attempted
-  // mid-flight (the modal overlay already blocks background actions).
   document.getElementById('createDockerAction').style.display = 'none';
-  document.getElementById('createWait').style.display = 'flex';
-  document.getElementById('out').textContent = 'Creating site — cloning and scaffolding (large repos can take minutes). Please wait, leave this open…';
   let r;
   try {
     r = await (await fetch('/api/apps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
@@ -56,14 +49,11 @@ async function createApp(options = {}) {
     document.getElementById('createModernBuildRow').style.display = 'flex';
     document.getElementById('createBuildNote').textContent = r.error;
   }
-  buildBtn.textContent = buildLabel;
   buildBtn.disabled = false;
   cancelBtn.disabled = false;
-  document.getElementById('createWait').style.display = 'none';
   refresh();
   if (!r.error) {
     if (r.storageWarning) toast('Site created, but the storage allowance is NOT enforced on this host: ' + r.storageWarning, false);
-    else toast('Site created: ' + (r.name || r.id || 'ready') + ' — deploy it from Websites when ready.', true);
     closeCreate(true);
   }
 }
