@@ -1,10 +1,17 @@
 // Runs only in an ephemeral, unprivileged verification container in production.
 // No host mounts, panel credentials, Docker socket or customer login secrets.
-const VERSION = 2;
+const VERSION = 3;
 const safeUrl = value => {
   try { const u = new URL(value); u.username = ''; u.password = ''; u.search = ''; u.hash = ''; return u.toString(); }
   catch { return 'invalid URL'; }
 };
+function optionalExternalFont(kind, url, pageUrl) {
+  if (kind !== 'font') return false;
+  try {
+    const resource = new URL(url), page = new URL(pageUrl);
+    return ['http:', 'https:'].includes(resource.protocol) && resource.origin !== page.origin;
+  } catch { return false; }
+}
 async function verify({ targets = [], probes = [], localCa = null, executablePath = '/usr/bin/chromium' }) {
   if(localCa) {
     const fs=require('fs'),path=require('path'),os=require('os'),tls=require('tls'),crypto=require('crypto');
@@ -24,24 +31,29 @@ async function verify({ targets = [], probes = [], localCa = null, executablePat
     tls.setDefaultCACertificates([...tls.getCACertificates('default'),localCa]);
   }
   const { chromium } = require('playwright-core');
-  const result = { version: VERSION, ok: true, pages: [], probes: [], errors: [] };
+  const result = { version: VERSION, ok: true, pages: [], probes: [], errors: [], warnings: [] };
   const browser = await chromium.launch({ executablePath, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   try {
     const context = await browser.newContext({ viewport: { width: 1200, height: 800 }, ignoreHTTPSErrors: false });
     await context.setExtraHTTPHeaders({ 'Cache-Control': 'no-cache', Pragma: 'no-cache' });
     for (const target of targets) {
       const page = await context.newPage();
-      const failures = [], assets = [], api = [], pageErrors = [];
-      const report = { service: target.service, url: safeUrl(target.url), ok: false, status: null, kind: null, assets, api, errors: failures };
+      const failures = [], warnings = [], assets = [], api = [], pageErrors = [];
+      const report = { service: target.service, url: safeUrl(target.url), ok: false, status: null, kind: null, assets, api, errors: failures, warnings };
+      const requestIssue = (kind, url, message) => {
+        if (optionalExternalFont(kind, url, page.url() === 'about:blank' ? target.url : page.url())) {
+          warnings.push('Optional external font unavailable (browser fallback): ' + message);
+        } else failures.push(message);
+      };
       page.on('pageerror', e => pageErrors.push(String(e.message).replace(/https?:\/\/[^\s]+/g, u => safeUrl(u)).slice(0, 300)));
       page.on('requestfailed', r => {
         if (r.failure() && r.failure().errorText === 'net::ERR_ABORTED') return;
-        failures.push(`${r.resourceType()} ${safeUrl(r.url())}: ${r.failure() && r.failure().errorText || 'request failed'}`);
+        requestIssue(r.resourceType(), r.url(), `${r.resourceType()} ${safeUrl(r.url())}: ${r.failure() && r.failure().errorText || 'request failed'}`);
       });
       page.on('response', r => {
         const kind = r.request().resourceType();
         const item = { url: safeUrl(r.url()), status: r.status(), type: kind };
-        if (['stylesheet', 'script', 'font', 'image', 'media'].includes(kind)) { assets.push(item); if (r.status() >= 400) failures.push(`${kind} failed (${r.status()}): ${item.url}`); }
+        if (['stylesheet', 'script', 'font', 'image', 'media'].includes(kind)) { assets.push(item); if (r.status() >= 400) requestIssue(kind, r.url(), `${kind} failed (${r.status()}): ${item.url}`); }
         if (['fetch', 'xhr'].includes(kind)) { api.push(item); if (r.status() === 404 || r.status() >= 500) failures.push(`API request failed (${r.status()}): ${item.url}`); }
       });
       try {
@@ -97,6 +109,7 @@ async function verify({ targets = [], probes = [], localCa = null, executablePat
         report.ok = failures.length === 0;
       } catch (e) { failures.push(String(e.message).replace(/https?:\/\/[^\s]+/g, u => safeUrl(u)).slice(0, 400)); }
       result.pages.push(report);
+      result.warnings.push(...warnings.map(e => `${target.service}: ${e}`));
       if (!report.ok) result.errors.push(...failures.map(e => `${target.service}: ${e}`));
       await page.close();
     }
@@ -140,4 +153,4 @@ if (require.main === module) {
   process.stdin.on('data', d => { input += d; if (input.length > 512 * 1024) process.exit(2); if (input.includes('\n')) finish(); });
   process.stdin.on('end', finish);
 }
-module.exports = { VERSION, verify, safeUrl };
+module.exports = { VERSION, verify, safeUrl, optionalExternalFont };

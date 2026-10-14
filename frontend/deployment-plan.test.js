@@ -58,6 +58,10 @@ async function main() {
   assert(reportHtml.includes('Last browser/API verification — failed'));
   assert(reportHtml.includes('Stylesheet failed &lt;unsafe&gt;'));
   assert(reportHtml.includes('/api/apps/first/verification/screenshot/0'));
+  context.warningPlan={...fixture,verification:{ok:true,errors:[],warnings:['web: Optional external font unavailable <unsafe>'],pages:[{service:'web',url:'http://example.test',status:200,ok:true,assets:[],warnings:['Optional external font unavailable <unsafe>'],screenshotIndex:0}]}};
+  const warningHtml=run('deploymentPlanMarkup(warningPlan)');
+  assert(warningHtml.includes('Last check: passed with warnings')&&warningHtml.includes('Last browser/API verification — passed with warnings'));
+  assert(warningHtml.includes('Warning:</b> web: Optional external font unavailable &lt;unsafe&gt;')&&!warningHtml.includes('<unsafe>'));
   context.provisioningPlan={...fixture,provisioning:[{key:'SQL_PASSWORD',service:'database',reason:'database password generated'},{key:'DB_CONNECTION',service:'api',reason:'repository database connection linked'}]};
   const privateInputs=run('deploymentPlanMarkup(provisioningPlan)');
   assert(privateInputs.includes('Prepared repository inputs (values kept private)'));

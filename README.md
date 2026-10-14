@@ -248,6 +248,10 @@ for repository Compose projects.
 Success requires healthy/steady services, exit-zero tasks and an isolated Chromium
 visit checking rendered content, stylesheet/script/image requests, uncaught browser
 errors and API requests. Unpublished HTTP APIs get direct source-route probes.
+Unavailable cross-origin fonts are visible warnings, not deployment blockers:
+the browser can render using fallback fonts. Same-origin font failures, missing
+CSS/JavaScript, failed API requests and rendering errors still fail verification.
+This does not repair the external font provider or relax CSP/CORS/security headers.
 Verification reports and browser screenshots persist in Deploy. Chromium is built
 into a cached helper image on first deployment (about 1 GB); the test container has
 no panel credentials, host mounts or Docker socket. Browser/application failure
