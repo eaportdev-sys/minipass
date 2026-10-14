@@ -362,6 +362,28 @@ async function deployNow(id, opts = {}) {
           if (!fs.existsSync(path.join(ctxDir, 'nginx.conf'))) fs.writeFileSync(path.join(ctxDir, 'nginx.conf'), nginxConf(null));
         } catch {}
       }
+      // Large-context warning: name the weight so a .dockerignore (not
+      // .gitignore) can skip demo/vendor folders. Bounded du, skipped off-host.
+      try {
+        if (!/^db(-|$)/.test(s.name || '')) {
+          const total = Number(String(execSync(`du -sb ${JSON.stringify(ctxDir)}`, { stdio: 'pipe' })).split(/\s/)[0]);
+          if (Number.isFinite(total) && total > 50 * 1024 * 1024) {
+            let kids = [];
+            try {
+              for (const e of fs.readdirSync(ctxDir, { withFileTypes: true })) {
+                if (e.name === '.git' || kids.length > 40) continue;
+                try {
+                  const sz = Number(String(execSync(`du -sb ${JSON.stringify(path.join(ctxDir, e.name))}`, { stdio: 'pipe' })).split(/\s/)[0]);
+                  if (Number.isFinite(sz) && sz > 5 * 1024 * 1024) kids.push([e.name + (e.isDirectory() ? '/' : ''), sz]);
+                } catch {}
+              }
+            } catch {}
+            kids = kids.sort((a, b) => b[1] - a[1]).slice(0, 5);
+            const mb = n => (n / 1048576).toFixed(0) + 'MB';
+            fs.appendFileSync(buildLog, `--- large build context (~${mb(total)} in '${s.subdir || '.'}')${kids.length ? ': ' + kids.map(([n, sz]) => `${n} ${mb(sz)}`).join(', ') : ''} - add a .dockerignore (not .gitignore) to skip demo/vendor folders and speed up builds ---\n`);
+          }
+        }
+      } catch {}
     }
   } catch (e) {
     const shaSe = sourceSha || await currentSha(dir);

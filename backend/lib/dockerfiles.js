@@ -233,6 +233,17 @@ function finalFromImage(text) {
   }
   return image;
 }
+// Git history is never needed inside an image: it doubles build contexts,
+// bloats layers, and nginx templates serve it publicly. Seed an ignore when
+// the author has none; an existing .dockerignore always wins untouched.
+function ensureDockerignore(ctxDir) {
+  try {
+    const dst = path.join(ctxDir, '.dockerignore');
+    if (fs.existsSync(dst)) return 'present';
+    fs.writeFileSync(dst, '# minipass-managed (append project ignores below; .git is never shipped into images)\n.git\n');
+    return 'seeded';
+  } catch { return 'skipped'; }
+}
 // Content check (no filesystem): a Dockerfile whose final image is
 // infrastructure, or whose every exposed port is infrastructure, cannot serve
 // the site. Files with no EXPOSE and a generic base image are NOT infra.
@@ -354,4 +365,4 @@ function resolveServiceDockerfile(ctxDir, selected, type, templatesDir) {
   return null;
 }
 
-module.exports = { refreshStandardDockerfile, standardDockerfileType, findDockerfiles, validDockerfileName, resolveServiceDockerfile, isInfraDockerfile, isInfraDockerfileText, nonInfraDockerfiles, exposedPorts, INFRA_PORTS, BYPASS_DOCKERFILE };
+module.exports = { refreshStandardDockerfile, standardDockerfileType, findDockerfiles, validDockerfileName, resolveServiceDockerfile, isInfraDockerfile, isInfraDockerfileText, nonInfraDockerfiles, exposedPorts, ensureDockerignore, INFRA_PORTS, BYPASS_DOCKERFILE };

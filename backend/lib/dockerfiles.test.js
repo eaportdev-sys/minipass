@@ -401,7 +401,7 @@ try {
   assert.equal(refreshStandardDockerfile(phpLegacy,'php',templates),'custom','customized PHP recipes with a marker are never overwritten');
 
   // Test 9: infrastructure Dockerfiles are supporting services, never the site
-  const { isInfraDockerfile, isInfraDockerfileText, nonInfraDockerfiles } = require('./dockerfiles');
+  const { isInfraDockerfile, isInfraDockerfileText, nonInfraDockerfiles, ensureDockerignore } = require('./dockerfiles');
   assert(isInfraDockerfileText('FROM redis:latest\nLABEL x="y"\n\nEXPOSE 6379'), 'FROM redis is infra');
   assert(isInfraDockerfileText('FROM postgres:16-alpine\nEXPOSE 5432'), 'FROM postgres is infra');
   assert(isInfraDockerfileText('FROM node:22\nEXPOSE 6379'), 'node base exposing only an infra port is infra');
@@ -421,6 +421,14 @@ try {
   assert.equal(ensureDockerfile(infraDir, 'node', templates), 'seeded-bypass', 'template bypass seeded beside the repo file');
   assert.equal(fs.readFileSync(path.join(infraDir, 'Dockerfile'), 'utf8'), 'FROM redis:latest\nEXPOSE 6379\n', 'repository infra file untouched');
   assert.deepEqual(resolveServiceDockerfile(infraDir, null, 'node', templates), { file: 'Dockerfile.minipass', source: 'auto' }, 'lone bypass variant resolves automatically');
+  // Test 10: git history never ships into images; author ignores win untouched
+  const ignoreDir = path.join(tmp, 'node', 'ignore-seed');
+  fs.mkdirSync(ignoreDir, { recursive: true });
+  assert.equal(ensureDockerignore(ignoreDir), 'seeded', 'ignore seeded when absent');
+  assert(fs.readFileSync(path.join(ignoreDir, '.dockerignore'), 'utf8').split('\n').includes('.git'), '.git ignored');
+  fs.writeFileSync(path.join(ignoreDir, '.dockerignore'), 'RMEImages/\n');
+  assert.equal(ensureDockerignore(ignoreDir), 'present', 'author ignore untouched');
+  assert.equal(fs.readFileSync(path.join(ignoreDir, '.dockerignore'), 'utf8'), 'RMEImages/\n', 'no append to author file');
 
   console.log('native npm toolchain and exact-match standard Dockerfile upgrades: OK');
 } finally {

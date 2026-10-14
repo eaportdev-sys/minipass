@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { serviceBlock, ensureDockerfile, nginxConf, inferPort, TYPE_PORT } = require('./generator');
-const { findDockerfiles, resolveServiceDockerfile, validDockerfileName, isInfraDockerfile, nonInfraDockerfiles, INFRA_PORTS, BYPASS_DOCKERFILE } = require('./dockerfiles');
+const { findDockerfiles, resolveServiceDockerfile, validDockerfileName, isInfraDockerfile, nonInfraDockerfiles, ensureDockerignore, INFRA_PORTS, BYPASS_DOCKERFILE } = require('./dockerfiles');
 const { decideType } = require('./detect');
 const { readBuildProfile } = require('./build-profile');
 
@@ -149,6 +149,9 @@ function renderProject({ dir, templatesDir, meta }) {
   const chunks = [];
   for (const s of enabled) {
     const ctxDir = path.join(dir, 'code', s.subdir || '');
+    // Git history never ships into images: smaller contexts, faster
+    // transfers/exports, and templates can't serve /.git publicly.
+    try { ensureDockerignore(ctxDir); } catch {}
     // Effective build file: an explicit stored pin wins when present,
     // otherwise exact Dockerfile, lone variant, or legacy-seed heal (see
     // resolveServiceDockerfile). Ambiguous or stale selections fall back to
