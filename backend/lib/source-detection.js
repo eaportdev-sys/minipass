@@ -323,7 +323,10 @@ async function detectRepo(repo, { login, token, branch } = {}) {
       }
     } else if (!out.frontends.length && !out.backends.length && !out.staticFrontends.length) {
       const best = findRunnableRoot(tree, pkgs);
-      if (best && best.subdir) out.suggestedSubdir = best.subdir;
+      if (best && best.subdir) {
+        out.suggestedSubdir = best.subdir;
+        if (out.reason && !out.reason.includes(best.subdir)) out.reason = `${out.reason} (in /${best.subdir})`;
+      }
     }
   } catch {}
   return out;

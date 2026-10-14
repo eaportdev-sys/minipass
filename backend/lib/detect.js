@@ -289,7 +289,8 @@ function findRunnableRoot(tree, pkgs = {}) {
     const hasPhp = direct.has('composer.json') || direct.has('index.php');
     const hasStatic = direct.has('index.html') || direct.has('index.htm');
     if (!hasPkg && !hasPhp && !hasStatic) continue;
-    const pkg = pkgs[d] !== undefined ? pkgs[d] : (d === '.' ? pkgs[''] : undefined);
+    const raw = pkgs[d] !== undefined ? pkgs[d] : (d === '' && pkgs['.'] !== undefined ? pkgs['.'] : (d === '.' && pkgs[''] !== undefined ? pkgs[''] : undefined));
+    const pkg = raw;
     // Private workspace roots without a runtime are folders, not apps.
     if (pkg && pkg.private === true && !((pkg.scripts || {}).start) && !pkg.main) continue;
     const r = decideType(rel, pkg || null);

@@ -52,10 +52,12 @@ function analyzeRepository(codeDir) {
     paths.includes('composer.json') || paths.includes('index.php') || paths.includes('index.html') || rootDockerfileIsRuntime
   ));
   const hasSubApps = frontends.length || backends.length;
-  if (typeResult.type && (!hasSubApps || rootHasRuntimeMarker)) services.push(analyzeService(codeDir, typeResult.type, ''));
+  const rootDirect = new Set(paths.filter(p => !p.includes('/')).map(p => p.toLowerCase()));
+  const rootHasDirectMarker = rootDirect.has('package.json') || rootDirect.has('composer.json') || rootDirect.has('index.php') || rootDirect.has('index.html') || rootDirect.has('index.htm') || rootDockerfileIsRuntime;
+  if (typeResult.type && rootHasDirectMarker && (!hasSubApps || rootHasRuntimeMarker)) services.push(analyzeService(codeDir, typeResult.type, ''));
   for (const f of frontends) services.push(analyzeService(path.join(codeDir, f), 'react', f));
   for (const b of backends) services.push(analyzeService(path.join(codeDir, b), 'node', b));
-  if (!services.length && typeResult.type) services.push(analyzeService(codeDir, typeResult.type, ''));
+  if (!services.length && typeResult.type && rootHasDirectMarker) services.push(analyzeService(codeDir, typeResult.type, ''));
   if (!services.length) {
     try {
       const best = findRunnableRoot(paths, pkgs);
