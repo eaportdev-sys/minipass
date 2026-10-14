@@ -641,9 +641,9 @@ app.post('/api/apps', async (req, res) => {
     let entrypoint=req.body.deploymentEntrypoint || null;
     if(entrypoint&&(!['compose','dockerfile'].includes(entrypoint.kind)||typeof entrypoint.file!=='string'))return res.status(400).json({error:'invalid deployment file choice'});
     if(finalRepoUrl||req.body.prepareOnly===true||entrypoint) {
-      const pendingDir=appDir(APPS_DIR,id);fs.mkdirSync(pendingDir,{recursive:true});
+      const pendingDir=siteIdentity.stage(APPS_DIR,id);fs.mkdirSync(pendingDir,{recursive:true});
       fs.writeFileSync(path.join(pendingDir,'.pending-create.json'),JSON.stringify({id,repoUrl:finalRepoUrl,branch:explicitBranch,subdir}),{mode:0o600});
-      const prepared=createApp({appsDir:APPS_DIR,templatesDir:TEMPLATES_DIR,name:id,type,repoUrl:finalRepoUrl,db:dbs,domain:appDomain,hostPort,gitToken:siteToken,subdir,gitBranch:explicitBranch,prepareOnly:true,selection:entrypoint});
+      const prepared=createApp({appsDir:path.dirname(pendingDir),templatesDir:TEMPLATES_DIR,name:id,type,repoUrl:finalRepoUrl,db:dbs,domain:appDomain,hostPort,gitToken:siteToken,subdir,gitBranch:explicitBranch,prepareOnly:true,selection:entrypoint});
       const plan=prepared.plan;
       const choiceErrors=plan.blockers.filter(b=>['ENTRYPOINT_CHOICE','STALE_SELECTION','TOPOLOGY_NOT_FOLLOWED','INVALID_COMPOSE','INCOMPLETE_SCAN','MISSING_COMPOSE_REFERENCE'].includes(b.code));
       let repositoryDatabases=[];try{if(plan.selected?.kind==='compose')repositoryDatabases=composeInputs.declaredDatabases(path.join(prepared.dir,'code'),plan.selected);}catch{}
@@ -664,6 +664,7 @@ app.post('/api/apps', async (req, res) => {
       storageWarning = e.message;
       storageQuota = { projectId: null, limitBytes: storageBytes, enforced: false };
     }
+    siteIdentity.copyDraft(APPS_DIR,id);
     const pendingDir = appDir(APPS_DIR, id);
     fs.mkdirSync(pendingDir, { recursive: true });
     fs.writeFileSync(path.join(pendingDir, '.pending-create.json'), JSON.stringify({ id, repoUrl: finalRepoUrl, branch: explicitBranch, subdir }), { mode: 0o600 });
@@ -684,6 +685,7 @@ app.post('/api/apps', async (req, res) => {
     catch (e) { console.error(id, 'env defaults snapshot:', e.message); }
     db_.apps = db_.apps.filter(a => a.id !== id).concat([meta]);
     save(db_);
+    siteIdentity.removeDraft(APPS_DIR,id);
     try {
       const autoDbs = [];
       for (const need of created.hasDeclaredCompose ? [] : requiredDatabases(meta, path.join(created.dir, 'code'))) {
@@ -727,7 +729,7 @@ app.post('/api/apps', async (req, res) => {
     try { panelLog.logEvent({ level: 'error', area: 'create', site: creatingId, message: error }); } catch {}
     const needsDockerfile = /no Dockerfile in build context and type/i.test(error);
     const needsModernization = /Jekyll static build needs modernization/i.test(error);
-    const pendingId = creatingId && fs.existsSync(path.join(appDir(APPS_DIR, creatingId), '.pending-create.json')) ? creatingId : null;
+    let pendingId=null;try{if(creatingId){siteIdentity.pending(APPS_DIR,creatingId);pendingId=creatingId;}}catch{}
     res.status(needsDockerfile || needsModernization ? 409 : (e.status || 500)).json({ error, needsDockerfile, needsModernization, ...(pendingId ? { pendingId } : {}) });
   } finally {
     if (creatingId) creatingSites.delete(creatingId);
@@ -743,15 +745,19 @@ app.delete('/api/apps/pending/:id', async (req, res) => {
     if (load().apps.some(a => a.id === id)) return res.status(409).json({ error: 'site is already registered' });
     const dir = appDir(APPS_DIR, id);
     if (fs.existsSync(path.join(dir, 'docker-compose.yml'))) return res.status(409).json({ error: 'refusing to remove a composed site' });
+    const staged=siteIdentity.draftDir(APPS_DIR,id);
+    if(fs.existsSync(staged))siteIdentity.sourceOnly(staged,id);
+    if(fs.existsSync(dir))siteIdentity.sourceOnly(dir,id);
     const hadFiles = fs.existsSync(dir);
     let charged = fs.existsSync(path.join(dir, '.storage-quota.json'));
     try { await quotas.usage(id); charged = true; }
     catch (e) { if (charged || (e.status !== 404 && e.status !== 503)) throw e; }
     fs.rmSync(dir, { recursive: true, force: true });
+    const removedDraft=siteIdentity.removeDraft(APPS_DIR,id);
     // The quota bridge is optional for legacy pending checkouts, but a saved
     // reservation must never silently leak after a successful cancellation.
     if (charged) await quotas.release(id);
-    res.json({ ok: true, removed: hadFiles });
+    res.json({ ok: true, removed: hadFiles||removedDraft });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

@@ -171,6 +171,12 @@ database inputs are prepared. Cancel removes only that unregistered draft.
 Compose-defined services/databases replace the template runtime/database pills.
 Deploy keeps a compact access/source/database summary; diagnostic inventories,
 commands and reports are collapsed. Later source-file repairs live in Setup.
+Source previews live in `/srv/apps/.drafts/<id>`, separate from site allocation.
+Creation allocates the empty site directory first, then copies source into it so
+new file inodes inherit the enforced quota. Source-only previews made by older
+panels can be safely staged on retry; deployed directories and database data are
+never adopted or reassigned automatically. Capacity failures retain the draft,
+and Cancel removes only validated, unregistered source checkouts.
 
 There is no 200-file/depth cutoff in instruction discovery. Git internals,
 generated dependencies/caches and binary files are disclosed exclusions. Text

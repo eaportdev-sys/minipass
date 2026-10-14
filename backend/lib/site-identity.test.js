@@ -28,5 +28,20 @@ try {
   assert.throws(() => identity.pending(root, 'old-name'), /invalid pending/);
   fs.writeFileSync(path.join(dir, '.pending-create.json'), JSON.stringify({ id: next }));
   assert.throws(() => identity.pending(root, id), /does not match/);
+  const draftId='site-'+ 'd'.repeat(24),legacy=path.join(root,draftId);
+  fs.mkdirSync(path.join(legacy,'code'),{recursive:true});
+  fs.writeFileSync(path.join(legacy,'.pending-create.json'),JSON.stringify({id:draftId,repoUrl:'https://example.invalid/source.git',branch:'main',subdir:''}));
+  fs.writeFileSync(path.join(legacy,'code','source.txt'),'keep inspected source');
+  const staged=identity.stage(root,draftId);
+  assert.equal(staged,path.join(root,'.drafts',draftId));assert(!fs.existsSync(legacy),'legacy source-only previews move out of the site allocation path');
+  assert.equal(identity.pending(root,draftId).directory,staged);
+  assert.throws(()=>identity.allocate(root,{},new Set(),()=>draftId.slice(5)),/unique site id/,'staged IDs cannot be reused');
+  fs.mkdirSync(legacy);assert(identity.copyDraft(root,draftId));
+  const source=path.join(staged,'code','source.txt'),copy=path.join(legacy,'code','source.txt');
+  assert.equal(fs.readFileSync(copy,'utf8'),'keep inspected source');assert.notEqual(fs.statSync(copy).ino,fs.statSync(source).ino,'charged files are new inodes, not renamed uncharged source');
+  assert(identity.removeDraft(root,draftId));assert(fs.existsSync(copy),'discarding the preview never deletes the registered checkout');
+  const existingId='site-'+'e'.repeat(24),existing=path.join(root,existingId);fs.mkdirSync(existing);
+  fs.writeFileSync(path.join(existing,'.pending-create.json'),JSON.stringify({id:existingId}));fs.writeFileSync(path.join(existing,'docker-compose.yml'),'existing deployment/data');
+  assert.throws(()=>identity.stage(root,existingId),/deployment\/data files/);assert.equal(fs.readFileSync(path.join(existing,'docker-compose.yml'),'utf8'),'existing deployment/data');
   console.log('Site identity: independent opaque IDs, live/Trash/busy/orphan collision guards, display-name recovery and pending retry isolation: OK');
 } finally { fs.rmSync(root, { recursive: true, force: true }); }

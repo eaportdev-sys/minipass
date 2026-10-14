@@ -3,12 +3,13 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const net = require('net');
+const http = require('http');
 const { spawn, execFileSync } = require('child_process');
 const { once } = require('events');
 
 async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-workflow-api-'));
-  let child, exit;
+  let child, exit,quotaServer;
   const apps = path.join(tmp, 'apps');
   const recipe = 'FROM nginx:alpine\nEXPOSE 80\n';
   const compose = 'services:\n  app:\n    build: ./code\n    ports:\n      - "8000:80"\n';
@@ -37,11 +38,27 @@ async function main() {
   git(tmp, 'clone', remote, checkout);
   fs.writeFileSync(path.join(tmp, 'apps.json'), JSON.stringify(metadata));
   try {
+    const quotaSocket=process.platform==='win32'?`\\\\.\\pipe\\minipass-quota-${require('crypto').randomBytes(8).toString('hex')}`:path.join(tmp,'quotas.sock');
+    const allocations=new Map(),quotaAttempts=[];let nextProject=100000;
+    quotaServer=http.createServer((req,res)=>{
+      let input='';req.on('data',c=>input+=c);req.on('end',()=>{
+        const reply=(status,data)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(data));};
+        if(req.url==='/status')return reply(200,{ready:true,availableBytes:1e12});
+        const id=req.url.split('/').pop(),dir=path.join(apps,id),old=allocations.get(id);
+        if(req.method==='GET')return reply(old?200:404,old||{error:'no allowance'});
+        if(req.method==='DELETE'){if(fs.existsSync(dir))return reply(409,{error:'site files still exist'});allocations.delete(id);return reply(200,{ok:true,released:!!old});}
+        const body=JSON.parse(input);quotaAttempts.push({id,children:fs.existsSync(dir)?fs.readdirSync(dir):[]});
+        if(body.limitBytes>1e12)return reply(409,{error:'Not enough unallocated disk space'});
+        if(!old&&fs.existsSync(dir)&&fs.readdirSync(dir).some(n=>!['deploy-key','deploy-key.pub'].includes(n)))return reply(409,{error:'Existing site data is not quota-managed. Cancel the unfinished checkout or migrate it explicitly.'});
+        fs.mkdirSync(dir,{recursive:true});const record=old||{projectId:nextProject++,limitBytes:body.limitBytes,enforced:true,usedBytes:0};allocations.set(id,record);reply(200,record);
+      });
+    });
+    await new Promise(resolve=>quotaServer.listen(quotaSocket,resolve));
     const listener = net.createServer(); listener.listen(0, '127.0.0.1'); await once(listener, 'listening');
     const port = listener.address().port;
     await new Promise(resolve => listener.close(resolve));
     const base = `http://127.0.0.1:${port}`;
-    child = spawn(process.execPath, ['server.js'], { cwd: path.resolve(__dirname, '..'), env: { ...process.env, PORT: String(port), APPS_DIR: apps, DATA_FILE: path.join(tmp, 'apps.json') }, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn(process.execPath, ['server.js'], { cwd: path.resolve(__dirname, '..'), env: { ...process.env, PORT: String(port), APPS_DIR: apps, DATA_FILE: path.join(tmp, 'apps.json'),QUOTA_SOCKET:quotaSocket }, stdio: ['ignore', 'pipe', 'pipe'] });
     exit = once(child, 'exit');
     let log = ''; const capture = b => { log = (log + b).slice(-10000); };
     child.stdout.on('data', capture); child.stderr.on('data', capture);
@@ -156,21 +173,29 @@ async function main() {
     git(declaredRepo,'init','-b','main');git(declaredRepo,'config','user.name','Fixture');git(declaredRepo,'config','user.email','fixture@example.test');git(declaredRepo,'add','.');git(declaredRepo,'commit','-m','declared deployment files');
     const createBody={name:'Creation choice fixture',type:'node',repoUrl:declaredRepo,branch:'main',access:'local',domain:'ignored.example.test',storageGB:'1'};
     const draft=await call('/api/apps','POST',{...createBody,prepareOnly:true});assert.equal(draft.status,200,JSON.stringify(draft));assert(draft.data.prepared&&draft.data.needsEntrypoint);
-    const draftId=draft.data.pendingId,draftDir=path.join(apps,draftId);
+    const draftId=draft.data.pendingId,draftDir=path.join(apps,draftId),stagingDir=path.join(apps,'.drafts',draftId);
+    assert(!fs.existsSync(draftDir)&&fs.existsSync(path.join(stagingDir,'code')),'inspection stays outside the future quota-managed site directory');
     assert(!fs.existsSync(path.join(draftDir,'.env'))&&!fs.existsSync(path.join(draftDir,'docker-compose.yml')),'inspection does not create database/env/compose scaffolding');
     assert(!(await call('/api/apps')).data.some(a=>a.id===draftId),'ambiguous draft is not a registered website');
+    fs.renameSync(stagingDir,draftDir); // reproduce an uncharged preview from the previous panel
     const choice={kind:'compose',file:'production.recipe'};
     const pickedDraft=await call('/api/apps','POST',{...createBody,pendingId:draftId,prepareOnly:true,deploymentEntrypoint:choice});assert.equal(pickedDraft.status,200);assert.equal(pickedDraft.data.repositoryDatabases[0].type,'postgres');
+    assert(!fs.existsSync(draftDir)&&fs.existsSync(stagingDir),'retry safely stages the older preview instead of asking the host to adopt existing data');
+    const tooLarge=await call('/api/apps','POST',{...createBody,pendingId:draftId,deploymentEntrypoint:choice,storageGB:'1000000'});assert.equal(tooLarge.status,409);assert.equal(tooLarge.data.pendingId,draftId);assert(fs.existsSync(path.join(stagingDir,'code','production.recipe')),'capacity refusal preserves the inspected checkout for retry');
     const registered=await call('/api/apps','POST',{...createBody,pendingId:draftId,deploymentEntrypoint:choice,dbs:['mysql']});assert.equal(registered.status,200,JSON.stringify(registered));
+    assert(!fs.existsSync(stagingDir),'successful creation removes only its temporary source preview');
+    assert(registered.data.storageEnforced&&registered.data.storageQuota.projectId>=100000,'creation succeeds with enforcement enabled, not an unavailable-bridge fallback');
+    assert(quotaAttempts.filter(a=>a.id===draftId).every(a=>a.children.length===0),'the host allocates an empty site before source is copied into it');
     assert.equal(registered.data.accessMode,'local');assert.equal(registered.data.domain,'');assert.equal(registered.data.deploymentEntrypoint.file,'production.recipe');assert.equal(registered.data.repositoryDatabases[0].type,'postgres');
     assert(!registered.data.plan.blockers.some(b=>b.code==='REQUIRED_ENV'),'chosen source prepares all declared database and local inputs during creation');
     const variables=require('dotenv').parse(fs.readFileSync(path.join(draftDir,'.env')));assert(variables.SQL_PASSWORD&&variables.API_CONNECTION&&variables.LOCAL_HOST);assert(!JSON.stringify(registered.data).includes(variables.SQL_PASSWORD));
     const pendingDbs=(await call('/api/apps/'+draftId+'/databases')).data;assert.equal(pendingDbs.databases[0].state,'prepared');assert(pendingDbs.repositoryOwned);
-    const cancelled=await call('/api/apps','POST',{...createBody,prepareOnly:true});assert.equal((await call('/api/apps/pending/'+cancelled.data.pendingId,'DELETE')).status,200);assert(!fs.existsSync(path.join(apps,cancelled.data.pendingId)),'Cancel cleans only the unregistered draft');
+    const cancelled=await call('/api/apps','POST',{...createBody,prepareOnly:true});assert.equal((await call('/api/apps/pending/'+cancelled.data.pendingId,'DELETE')).status,200);assert(!fs.existsSync(path.join(apps,'.drafts',cancelled.data.pendingId)),'Cancel cleans only the unregistered draft');
     console.log('Workflow API: name validation, manual create, uploads, saved/stale choices, real Git pull, shared persistent analysis and pre-Docker blocking: OK');
   } finally {
     if (child && child.exitCode === null) child.kill();
     if (exit) await exit;
+    if(quotaServer)await new Promise(resolve=>quotaServer.close(resolve));
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
