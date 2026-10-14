@@ -254,4 +254,57 @@ function prismaDatabaseHints(text) {
   return dbs;
 }
 
-module.exports = { decideType, detectPackageManager, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints };
+// Deep runnable-root search: read every downloaded file path and find the
+// correct build folder so a nested app (htdocs/, public/, app/ wrapper)
+// succeeds without manual subdir entry. Pure - unit-test with fixtures.
+const SKIP_ROOT_DIRS = new Set(['.git', 'node_modules', 'vendor', '.next', '.nuxt', '.venv', '__pycache__', 'dist', 'build']);
+function findRunnableRoot(tree, pkgs = {}) {
+  const list = Array.isArray(tree) ? tree.filter(p => typeof p === 'string' && p) : [];
+  if (!list.length) return null;
+  const inSkipped = p => String(p).split('/').some(seg => SKIP_ROOT_DIRS.has(seg));
+  const usable = list.filter(p => !inSkipped(p));
+  if (!usable.length) return null;
+  const dirs = new Set(['']);
+  for (const p of usable) {
+    const parts = p.split('/');
+    parts.pop();
+    for (let i = 1; i <= parts.length; i++) dirs.add(parts.slice(0, i).join('/'));
+  }
+  const found = [];
+  for (const d of dirs) {
+    const prefix = d ? d + '/' : '';
+    const rel = [];
+    for (const p of usable) {
+      if (p === d) continue;
+      if (d === '' || p.startsWith(prefix)) rel.push(p.slice(prefix.length));
+    }
+    if (!rel.length) continue;
+    // Direct markers only: a parent is not runnable because a child is.
+    // decideType itself matches nested php/static, so gate on direct files
+    // first (mirrors ensureDockerfile seeding: index.html / index.php /
+    // composer.json / package.json at the folder root).
+    const direct = new Set(rel.filter(p => !p.includes('/')).map(p => p.toLowerCase()));
+    if (!direct.size) continue;
+    const hasPkg = direct.has('package.json');
+    const hasPhp = direct.has('composer.json') || direct.has('index.php');
+    const hasStatic = direct.has('index.html') || direct.has('index.htm');
+    if (!hasPkg && !hasPhp && !hasStatic) continue;
+    const pkg = pkgs[d] !== undefined ? pkgs[d] : (d === '.' ? pkgs[''] : undefined);
+    // Private workspace roots without a runtime are folders, not apps.
+    if (pkg && pkg.private === true && !((pkg.scripts || {}).start) && !pkg.main) continue;
+    const r = decideType(rel, pkg || null);
+    if (r && r.type) found.push({ subdir: d, type: r.type, detected: r.detected, reason: r.reason, dbs: r.dbs || [] });
+  }
+  if (!found.length) return null;
+  found.sort((a, b) => {
+    if ((a.subdir === '') !== (b.subdir === '')) return a.subdir === '' ? -1 : 1;
+    const da = a.subdir ? a.subdir.split('/').length : 0;
+    const db = b.subdir ? b.subdir.split('/').length : 0;
+    if (da !== db) return da - db;
+    if (a.subdir.length !== b.subdir.length) return a.subdir.length - b.subdir.length;
+    return a.subdir.localeCompare(b.subdir);
+  });
+  return found[0];
+}
+
+module.exports = { decideType, detectPackageManager, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints, findRunnableRoot };

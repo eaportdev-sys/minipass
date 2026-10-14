@@ -99,12 +99,12 @@ app.post('/api/apps/:id/upload', upload.single('zip'), async (req, res) => {
     const tmpBase = fs.mkdtempSync(path.join('/tmp', 'minipass-extract-'));
     await sh(`unzip -o "${req.file.path}" -d "${tmpBase}"`, '/tmp');
     fs.unlinkSync(req.file.path);
-    // smart flatten: descend through single wrapper folders until index.html level (max 3)
+    // smart flatten: descend through single wrapper folders until runnable level (max 3)
     let src = tmpBase;
     for (let d = 0; d < 3; d++) {
       const kids = fs.readdirSync(src).filter(e => !JUNK.has(e) && !e.startsWith('._'));
-      const hasIndex = kids.some(e => /^index\.html?$/i.test(e));
-      if (!hasIndex && kids.length === 1 && fs.statSync(path.join(src, kids[0])).isDirectory()) {
+      const hasRunnable = kids.some(e => /^(index\.html?|index\.php|composer\.json|package\.json)$/i.test(e));
+      if (!hasRunnable && kids.length === 1 && fs.statSync(path.join(src, kids[0])).isDirectory()) {
         src = path.join(src, kids[0]);
         continue;
       }

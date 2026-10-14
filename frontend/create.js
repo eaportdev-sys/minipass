@@ -160,6 +160,13 @@ async function detectType() {
     const fb = (r.frontends || []).map(f => `<button onclick="setSubdir('${f}', 'react')">${f} (web)</button>`).join(' ');
     const bb = (r.backends || []).map(b => `<button onclick="setSubdir('${b}', 'node')">${b} (api)</button>`).join(' ');
     const sb = (r.staticFrontends || []).map(f => `<button onclick="setSubdir('${f}', 'static')">${f} (static)</button>`).join(' ');
+    if (r.suggestedSubdir && !document.getElementById('subdir').value.trim()) {
+      document.getElementById('subdir').value = r.suggestedSubdir;
+      if (r.type) {
+        const radio = document.querySelector(`input[name=apptype][value=${r.type}]`);
+        if (radio) radio.checked = true;
+      }
+    }
     if (fb || bb || sb) {
       hint.style.display = 'block';
       hint.innerHTML = 'Choose a build folder: ' + fb + ' ' + sb + ' ' + bb;

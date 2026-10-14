@@ -191,7 +191,7 @@ async function detectRepo(repo, { login, token, branch } = {}) {
       if (blob && blob.content) pkg = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8'));
     } catch {}
   }
-  const { decideType, detectPackageManager, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints } = require('./detect');
+  const { decideType, detectPackageManager, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, findRunnableRoot, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints } = require('./detect');
   const out = decideType(tree, pkg);
   out.packageManager = detectPackageManager({ pkg, files: tree }).manager;
   Object.assign(out, source);
@@ -308,6 +308,24 @@ async function detectRepo(repo, { login, token, branch } = {}) {
     }
     if (!out.dbReason) out.dbReason = `Database dialect marker in ${p}`;
   }
+  // Nested runnable root: root has no markers but every file shows the app
+  // lives in a subfolder (htdocs/, public/, wrapper/). Suggest the correct
+  // build folder so create succeeds without manual subdir entry.
+  try {
+    if (!out.type) {
+      const best = findRunnableRoot(tree, pkgs);
+      if (best && best.subdir) {
+        out.type = best.type;
+        out.detected = best.detected;
+        out.reason = `${best.reason} (in /${best.subdir})`;
+        out.suggestedSubdir = best.subdir;
+        if (Array.isArray(best.dbs)) for (const db of best.dbs) if (!out.dbs.includes(db)) out.dbs.push(db);
+      }
+    } else if (!out.frontends.length && !out.backends.length && !out.staticFrontends.length) {
+      const best = findRunnableRoot(tree, pkgs);
+      if (best && best.subdir) out.suggestedSubdir = best.subdir;
+    }
+  } catch {}
   return out;
 }
   return { detectRepo, firstSyncClone, createLocalPushStage, currentSha, configureDetectedServices, hasStaleRootService, requiredDatabases };

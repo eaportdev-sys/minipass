@@ -1,7 +1,7 @@
 // Repository analysis used by service creation and managed-database wiring.
 // Read-only: never runs repository code or rewrites build files.
 const path = require('path');
-const { decideType, findBackends, findFrontends, prismaDatabaseHints, sqlDatabaseHints, databaseConfigHints } = require('./detect');
+const { decideType, findBackends, findFrontends, findRunnableRoot, prismaDatabaseHints, sqlDatabaseHints, databaseConfigHints } = require('./detect');
 const { standardDockerfileType, findDockerfiles } = require('./dockerfiles');
 const { inventory, readSource } = require('./repository-files');
 
@@ -56,6 +56,15 @@ function analyzeRepository(codeDir) {
   for (const f of frontends) services.push(analyzeService(path.join(codeDir, f), 'react', f));
   for (const b of backends) services.push(analyzeService(path.join(codeDir, b), 'node', b));
   if (!services.length && typeResult.type) services.push(analyzeService(codeDir, typeResult.type, ''));
+  if (!services.length) {
+    try {
+      const best = findRunnableRoot(paths, pkgs);
+      if (best && best.subdir !== undefined) {
+        const ctx = best.subdir ? path.join(codeDir, best.subdir) : codeDir;
+        services.push(analyzeService(ctx, best.type, best.subdir));
+      }
+    } catch {}
+  }
   return { services };
 }
 
