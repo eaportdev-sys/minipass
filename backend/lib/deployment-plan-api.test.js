@@ -239,10 +239,8 @@ async function main() {
     assert(normDetectedDbs(detected.data).includes('postgres'),'a runnable backend with a PostgreSQL dependency gets its managed database wiring');
     for(const service of detectedServices)assert(fs.existsSync(path.join(detectedDir,'code',service.subdir,'Dockerfile')),'each detected runnable context has a build recipe');
     const explicit=await call('/api/apps','POST',{name:'Explicit workspace context',type:'react',repoUrl:workspace,branch:'main',subdir:'packages/worker',access:'local',storageGB:'1',launch:false});
-    assert.equal(explicit.status,200,JSON.stringify(explicit));
-    const explicitServices=(await call('/api/apps/'+explicit.data.id+'/services')).data.services;
-    assert.equal(explicitServices.length,1,'an explicitly selected repository context does not opt into sibling services');
-    assert.equal(explicitServices[0].subdir,'packages/worker');assert.equal(explicitServices[0].type,'node','source detection corrects a stale manual type');
+    assert.equal(explicit.status,500,JSON.stringify(explicit));
+    assert(/detects as node.*select node/.test(explicit.data.error),JSON.stringify(explicit.data));
     function normDetectedDbs(meta){return [].concat(meta.db||[]);}
     console.log('Workflow API: direct creation, mandatory capacity-checked quotas, no unenforced fallback, advisory detection and actual Docker errors: OK');
   } finally {

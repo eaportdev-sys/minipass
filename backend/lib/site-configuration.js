@@ -1,6 +1,6 @@
 // site-configuration: extracted from the original backend without changing route semantics.
 module.exports = function createHelpers(ctx) {
-  const { APPS_DIR, RELATIONAL_DBS, TEMPLATES_DIR, appDir, dbService, envDefaults, findDockerfiles, fs, normDbs, path, quotas, readEnvVars, resolveServiceDockerfile, svc } = ctx;
+  const { APPS_DIR, RELATIONAL_DBS, TEMPLATES_DIR, appDir, dbService, envDefaults, findDockerfiles, fs, normDbs, path, quotas, readEnvVars, resolveServiceDockerfile, hasRunnableEntry, svc } = ctx;
   const load = (...args) => ctx.load(...args);
   const refreshDeploymentPlan = (...args) => ctx.refreshDeploymentPlan(...args);
   const save = (...args) => ctx.save(...args);
@@ -140,7 +140,24 @@ function serviceCandidate(meta, dir, input, requireSubdir = false) {
   const folderOwner = services.find(s => (s.subdir || '') === subdir);
   if (folderOwner) return { error: `folder '${subdir || '.'}' already runs as ${folderOwner.name}` };
   const detected = svc.detectServiceType(ctxDir);
-  const type = detected.type || (requestedType === 'auto' ? null : requestedType);
+  // An explicit runtime wins when the folder can run it; detection fills the
+  // gap. Silent substitution built the wrong stack, so disagreement fails loud.
+  let type = null;
+  if (requestedType !== 'auto') {
+    let rel = [];
+    try { rel = fs.readdirSync(ctxDir); } catch {}
+    let cpkg = null;
+    try { cpkg = JSON.parse(fs.readFileSync(path.join(ctxDir, 'package.json'), 'utf8')); } catch {}
+    const manual = hasRunnableEntry(rel, cpkg, requestedType);
+    if (manual.runnable) type = requestedType;
+    else if (detected.type && detected.type !== requestedType) {
+      const det = hasRunnableEntry(rel, cpkg, detected.type);
+      if (det.runnable) return { error: `folder '${subdir || '.'}' detects as ${detected.type} (${det.why}) but '${requestedType}' was chosen (${manual.why})` };
+    }
+    if (!type) type = detected.type || requestedType;
+  } else {
+    type = detected.type || null;
+  }
   if (!type) return { error: `could not detect a runnable service: ${detected.reason}` };
   // Build file candidates for this folder. An explicit pick is validated;
   // otherwise the effective file resolves automatically (exact Dockerfile,

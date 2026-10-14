@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { execSync,execFileSync } = require('child_process');
 const { appGitEnv } = require('./ssh');
-const { readBuildProfile, prepareStaticBuild } = require('./build-profile');
+const { hasRunnableEntry } = require('./detect');const { readBuildProfile, prepareStaticBuild } = require('./build-profile');
 const { resolveServiceDockerfile, findDockerfiles, standardDockerfileType, isInfraDockerfile, BYPASS_DOCKERFILE } = require('./dockerfiles');
 const { sourceFile, readSource } = require('./repository-files');
 
@@ -292,6 +292,7 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   }
   let sub = wantSub;
   if (sub && !fs.existsSync(path.join(dir, 'code', sub))) sub = '';
+  let autoTyped = false;
   const codeRoot = path.join(dir, 'code');
   const discoveredPlan = require('./deployment-plan').analyze(codeRoot, { templatesDir, selection });
   // A workspace manifest is not itself a runnable service. Choose a detected
@@ -303,12 +304,27 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
     if (discoveredServices.length && !discoveredServices.some(s => !s.subdir)) {
       sub = discoveredServices[0].subdir;
       type = discoveredServices[0].type;
+      autoTyped = true;
     }
   }
   const buildDir = sub ? path.join(dir, 'code', sub) : path.join(dir, 'code');
-  if (repoUrl) {
+  if (repoUrl && !autoTyped) {
+    // An explicit runtime choice wins when the folder can run it; detection
+    // only fills the gap. When the choice and the folder disagree and the
+    // folder is runnable another way, fail loud instead of silently building
+    // something else.
     const detected = require('./services').detectServiceType(buildDir);
-    if (detected.type) type = detected.type;
+    let rel = [];
+    try { rel = fs.readdirSync(buildDir); } catch {}
+    let bpkg = null;
+    try { bpkg = JSON.parse(fs.readFileSync(path.join(buildDir, 'package.json'), 'utf8')); } catch {}
+    const main = bpkg && typeof bpkg.main === 'string' ? bpkg.main.replace(/\\/g, '/').replace(/^\.\//, '') : null;
+    if (main && !rel.includes(main)) { try { if (fs.existsSync(path.join(buildDir, main))) rel.push(main); } catch {} }
+    const manual = hasRunnableEntry(rel, bpkg, type);
+    if (!manual.runnable && detected.type && detected.type !== type) {
+      const det = hasRunnableEntry(rel, bpkg, detected.type);
+      if (det.runnable) throw new Error(`build folder '${sub || '.'}' detects as ${detected.type} (${det.why}) but '${type}' was selected (${manual.why}) - select ${detected.type} or fix the folder`);
+    }
   }
   // Repository values win over examples. Read without modifying its .env.
   let repoEnv = {}, repoEnvText = '';
