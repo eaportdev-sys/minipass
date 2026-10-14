@@ -308,6 +308,21 @@ async function detectRepo(repo, { login, token, branch } = {}) {
     }
     if (!out.dbReason) out.dbReason = `Database dialect marker in ${p}`;
   }
+  // Sample repos with no package.json still reveal the database through
+  // driver use in their sources (require('mariadb')). Bounded: 10 files max.
+  const jsCandidates = tree.filter(p => /\.(?:js|mjs|cjs|ts)$/i.test(p) && !/(^|\/)(node_modules|vendor|dist|build|\.git)\//.test(p)).slice(0, 10);
+  for (const p of jsCandidates) {
+    const text = await readText(p);
+    if (!text) continue;
+    const { jsDriverHints } = require('./detect');
+    const hinted = jsDriverHints(text);
+    if (!hinted.length) continue;
+    for (const db of hinted) {
+      if (db === 'mariadb') out.dbs = (out.dbs || []).filter(item => item !== 'mysql');
+      if (!out.dbs.includes(db)) out.dbs.push(db);
+    }
+    if (!out.dbReason) out.dbReason = `Database driver used in ${p}`;
+  }
   // Nested runnable root: root has no markers but every file shows the app
   // lives in a subfolder (htdocs/, public/, wrapper/). Suggest the correct
   // build folder so create succeeds without manual subdir entry.

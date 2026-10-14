@@ -187,6 +187,23 @@ function findFrontends(tree, pkgs = {}) {
   return [...new Set(found)];
 }
 
+// Driver use inside JS/TS sources: require('mariadb') / import ... from 'pg'
+// when there is no package.json to read deps from (sample repos, vendored
+// scripts). Comment-only mentions are ignored; the call must look like code.
+function jsDriverHints(text) {
+  const dbs = [];
+  const src = String(text || '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1');
+  const mods = new Set();
+  for (const m of src.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)) mods.add(m[1].toLowerCase());
+  for (const m of src.matchAll(/from\s+['"]([^'"]+)['"]/g)) mods.add(m[1].toLowerCase());
+  const has = (...names) => names.some(n => mods.has(n) || [...mods].some(m => m === n || m.startsWith(n + '/')));
+  if (has('mariadb')) dbs.push('mariadb');
+  else if (has('mysql', 'mysql2')) dbs.push('mysql');
+  if (has('pg', 'postgres', 'pg-hstore', '@neondatabase/serverless')) dbs.push('postgres');
+  if (has('mongoose', 'mongodb')) dbs.push('mongo');
+  if (has('redis', 'ioredis', 'bull', 'bullmq')) dbs.push('redis');
+  return [...new Set(dbs)];
+}
 // A MariaDB export can be consumed through MySQL-compatible drivers, so
 // package dependencies alone often say mysql/mysql2. Schema syntax is the
 // stronger signal when it names MariaDB or a MariaDB-only UCA 1400 collation.
@@ -308,4 +325,4 @@ function findRunnableRoot(tree, pkgs = {}) {
   return found[0];
 }
 
-module.exports = { decideType, detectPackageManager, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints, findRunnableRoot };
+module.exports = { decideType, detectPackageManager, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints, findRunnableRoot, jsDriverHints };

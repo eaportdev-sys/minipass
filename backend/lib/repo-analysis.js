@@ -1,7 +1,7 @@
 // Repository analysis used by service creation and managed-database wiring.
 // Read-only: never runs repository code or rewrites build files.
 const path = require('path');
-const { decideType, findBackends, findFrontends, findRunnableRoot, prismaDatabaseHints, sqlDatabaseHints, databaseConfigHints } = require('./detect');
+const { decideType, findBackends, findFrontends, findRunnableRoot, jsDriverHints, prismaDatabaseHints, sqlDatabaseHints, databaseConfigHints } = require('./detect');
 const { standardDockerfileType, findDockerfiles } = require('./dockerfiles');
 const { inventory, readSource } = require('./repository-files');
 
@@ -27,6 +27,14 @@ function analyzeService(ctxDir, type, subdir) {
     if (/\.sql$/i.test(p)) hints.push(...sqlDatabaseHints(readText(path.join(ctxDir, p))));
     if (/(knexfile|ormconfig|drizzle|typeorm|sequelize|config\/database)/i.test(p)) {
       hints.push(...databaseConfigHints(p, readText(path.join(ctxDir, p))));
+    }
+  }
+  if (!hints.length) {
+    let n = 0;
+    for (const p of paths) {
+      if (!/\.(?:js|mjs|cjs|ts)$/i.test(p) || /(^|\/)(node_modules|vendor|dist|build|\.git)\//.test(p)) continue;
+      if (n++ >= 10) break;
+      hints.push(...jsDriverHints(readText(path.join(ctxDir, p))));
     }
   }
   return { subdir, type, databaseNeeds: [...new Set(hints)].filter(db => db !== 'sqlite') };
