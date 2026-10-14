@@ -14,7 +14,7 @@ async function main(){
     fs.mkdirSync(path.join(repo,'nested'));fs.writeFileSync(path.join(repo,'nested','source.bin'),Buffer.alloc(1024*1024,65));
     const git=args=>execFileSync('git',args,{cwd:repo,stdio:'pipe'});git(['init','-b','main']);git(['config','user.name','Fixture']);git(['config','user.email','fixture@example.test']);git(['add','.']);git(['commit','-m','synthetic source']);
     const listener=net.createServer();listener.listen(0,'127.0.0.1');await once(listener,'listening');const port=listener.address().port;await new Promise(r=>listener.close(r));
-    child=spawn(process.execPath,['server.js'],{cwd:path.resolve(__dirname,'..'),env:{...process.env,PORT:String(port),DATA_FILE:data},stdio:['ignore','pipe','pipe']});exit=once(child,'exit');
+    child=spawn(process.execPath,['server.js'],{cwd:path.resolve(__dirname,'..'),env:{...process.env,PORT:String(port),DATA_FILE:data,PANEL_DB_FILE:path.join(temp,'panel.sqlite')},stdio:['ignore','pipe','pipe']});exit=once(child,'exit');
     let output='';child.stdout.on('data',b=>output=(output+b).slice(-10000));child.stderr.on('data',b=>output=(output+b).slice(-10000));
     const base='http://127.0.0.1:'+port;
     for(let i=0;;i++){try{if((await fetch(base+'/health')).ok)break;}catch{}if(i>100)throw Error(output);await new Promise(r=>setTimeout(r,100));}

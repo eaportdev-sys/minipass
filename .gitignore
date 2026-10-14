@@ -2,6 +2,10 @@ node_modules/
 apps/*/
 !.gitkeep
 backend/data.json
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-migration-backup
 backend/.env
 opencode.json
 opencode.json.example

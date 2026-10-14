@@ -1,8 +1,8 @@
-FROM node:20-alpine
+FROM node:24-alpine
 ARG GIT_SHA=dev
 ENV GIT_SHA=${GIT_SHA}
 # docker CLI (to manage app containers via mounted sock) + git (for self-upgrade).
-# BuildKit is enabled by Compose; both direct verifier builds and Compose builds
+# BuildKit is enabled by Compose; direct Docker builds and Compose builds
 # require buildx inside the panel, not just on the host. Fail the image build if
 # either plugin is missing instead of shipping a panel that cannot deploy sites.
 # util-linux-misc provides `script`, used as the PTY relay for browser terminals.

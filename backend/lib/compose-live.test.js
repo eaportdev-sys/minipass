@@ -70,7 +70,7 @@ http.createServer((req,res)=>{const f=routes.get(req.url);if(!f){res.statusCode=
   const inspect = () => { const ids = docker(['ps', '-a', '-q', '--filter', 'label=com.docker.compose.project=' + id]).trim().split(/\s+/).filter(Boolean); return ids.length ? JSON.parse(docker(['inspect', ...ids])) : []; };
   try {
     const listener=net.createServer();listener.listen(0,'127.0.0.1');await once(listener,'listening');const port=listener.address().port;await new Promise(r=>listener.close(r));
-    child=spawn(process.execPath,['server.js'],{cwd:path.resolve(__dirname,'..'),env:{...process.env,PORT:String(port),APPS_DIR:path.join(tmp,'apps'),DATA_FILE:path.join(tmp,'apps.json')},stdio:['ignore','pipe','pipe']});exit=once(child,'exit');
+    child=spawn(process.execPath,['server.js'],{cwd:path.resolve(__dirname,'..'),env:{...process.env,PORT:String(port),APPS_DIR:path.join(tmp,'apps'),DATA_FILE:path.join(tmp,'apps.json'),PANEL_DB_FILE:path.join(tmp,'panel.sqlite')},stdio:['ignore','pipe','pipe']});exit=once(child,'exit');
     let logs='';child.stdout.on('data',d=>{logs=(logs+d).slice(-15000)});child.stderr.on('data',d=>{logs=(logs+d).slice(-15000)});
     const base='http://127.0.0.1:'+port;
     for(let i=0;;i++){try{if((await fetch(base+'/health')).ok)break}catch{}if(i>100)throw Error(logs);await new Promise(r=>setTimeout(r,100))}

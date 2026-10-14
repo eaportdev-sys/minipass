@@ -106,8 +106,9 @@ node server.js
 ```
 
 Windows can exercise the UI, site creation and configuration API; container builds
-and launches need Docker on Linux. Storage allowances are optional, off by default,
-and not a prerequisite for creating, editing or starting a site. To test the API on a throwaway port:
+and launches need Docker on Linux. Every new site receives an enforced storage
+allowance after a capacity check. Editing existing sites does not need a fresh
+quota-service approval. To test the API on a throwaway port:
 
 ```powershell
 $env:PORT='31xx'
@@ -140,9 +141,25 @@ SSH_PUBKEY="ssh-ed25519 AAAA..." sudo -E bash install-linux.sh
 
 Per-app: `cd /srv/apps/<id> && docker compose ps | docker compose logs --tail=30`.
 Panel logs: `docker logs minipass-panel-1 --tail=30`.
-Site metadata lives on the `/srv/panel-data` volume — never inside the container.
+Site metadata lives in `/srv/panel-data/panel.sqlite` — never inside the container.
 
 ## Manual
+
+### Panel records and audit
+
+Panel site records and named operator accounts now use SQLite on the persistent
+panel-data volume. Existing JSON is imported once and retained as a migration
+backup. Sign in as **admin** with the existing panel password after migration;
+old anonymous sessions are signed out. Create individual accounts under
+**Audit & accounts** to identify each operator's actions.
+
+Deletion, restore and permanent destruction retain their time, site identity and
+authenticated operator in append-only audit history. The same view provides
+filters and a read-only SQL editor for `audit_events` and `panel_sites`. Passwords,
+session tokens and private site configuration are not queryable. Historical
+actions the old panel never recorded cannot be retroactively attributed.
+
+Backend code is split by function; see [backend/README.md](backend/README.md).
 
 ### 1 · Create a site
 
@@ -189,9 +206,10 @@ erasing volumes or silently replacing database credentials/versions.
 The Database tab lists declared databases and completion tasks from the actual
 Compose project; ordinary deploys do not download database-admin images.
 
-Storage enforcement is optional and unchecked by default. Explicit requests can
-use the Linux host quota bridge; existing enforced data layouts are retained.
-Normal create, edit and start requests do not require a quota-service approval.
+Every new site receives an enforced storage allowance from the Linux host quota
+bridge, subject to available capacity. A missing/unready bridge is reported,
+never bypassed with an unenforced limit. Existing data layouts are retained;
+edits and starts do not reallocate the site's allowance.
 
 Jekyll repositories (`Gemfile` + `_config.yml` and Jekyll markers) are detected as
 **Static**, including those with a Webpack `package.json`. Their standard build
@@ -418,9 +436,10 @@ installer once on older installations to replace their legacy cron entry.
 
 ## Security
 
-- **Admin gate.** First visit shows a one-time setup: choose a 12+ character
-  admin password (scrypt-hashed, `panel-auth.json` next to the data file —
-  gitignored, kept on the `/srv/panel-data` volume). All `/api/*` routes and
+- **Named accounts.** First visit creates an administrator with a 12+ character
+  password. Password hashes and hashed sessions live in `panel.sqlite` on the
+  persistent `/srv/panel-data` volume. Legacy `panel-auth.json` is retained only
+  as a migration source/backup. All protected `/api/*` routes and
   the web terminal need the session cookie after that. GitHub push webhooks
   stay open by design — each carries its own per-app token. Rotate under
   Upgrade → Maintenance.
@@ -432,7 +451,7 @@ installer once on older installations to replace their legacy cron entry.
   range private too.
 - Webhook secrets are generated per site; rotate them from that site's Deploy tab.
 - Never commit `backend/.env`, `backend/data.json`, `panel-auth.json`,
-  `apps/*/`, or `panel-key*` — all are gitignored for a reason.
+  `panel.sqlite*`, migration backups, `apps/*/`, or `panel-key*` — all are gitignored for a reason.
 
 ## Backups
 

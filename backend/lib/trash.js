@@ -187,7 +187,7 @@ async function destroySite({ record, trashRoot, images, protectedImages = [], sk
       await step('Unused build cache cleanup', () => cli.docker(['builder', 'prune', '--all', '--force']));
     } catch (e) { buildCachePruned = false; buildCacheWarning = e.message; }
   }
-  await step('Site files removal', async () => fs.rmSync(dir, { recursive: true, force: true }));
+  await step('Site files removal', () => fs.promises.rm(dir, { recursive: true, force: true }));
   return { removedImages, sharedImages, buildCachePruned, ...(buildCacheSkipped ? { buildCacheSkipped: true } : {}), ...(buildCacheWarning ? { buildCacheWarning } : {}) };
 }
 

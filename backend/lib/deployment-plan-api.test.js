@@ -41,7 +41,7 @@ async function main() {
   fs.writeFileSync(path.join(tmp, 'apps.json'), JSON.stringify(metadata));
   try {
     const quotaSocket=process.platform==='win32'?`\\\\.\\pipe\\minipass-quota-${require('crypto').randomBytes(8).toString('hex')}`:path.join(tmp,'quotas.sock');
-    const allocations=new Map(),quotaAttempts=[];let nextProject=100000;
+    const allocations=new Map(),quotaAttempts=[];let nextProject=100000,quotaUnavailable=false;
     quotaServer=http.createServer((req,res)=>{
       let input='';req.on('data',c=>input+=c);req.on('end',()=>{
         const reply=(status,data)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(data));};
@@ -49,6 +49,7 @@ async function main() {
         const id=req.url.split('/').pop(),dir=path.join(apps,id),old=allocations.get(id);
         if(req.method==='GET')return reply(old?200:404,old||{error:'no allowance'});
         if(req.method==='DELETE'){if(fs.existsSync(dir))return reply(409,{error:'site files still exist'});allocations.delete(id);return reply(200,{ok:true,released:!!old});}
+        if(quotaUnavailable)return reply(503,{error:'Host quota enforcement unavailable'});
         const body=JSON.parse(input);quotaAttempts.push({id,children:fs.existsSync(dir)?fs.readdirSync(dir):[]});
         if(body.limitBytes>1e12)return reply(409,{error:'Not enough unallocated disk space'});
         if(!old&&fs.existsSync(dir)&&fs.readdirSync(dir).some(n=>!['deploy-key','deploy-key.pub'].includes(n)))return reply(409,{error:'Existing site data is not quota-managed. Cancel the unfinished checkout or migrate it explicitly.'});
@@ -60,7 +61,7 @@ async function main() {
     const port = listener.address().port;
     await new Promise(resolve => listener.close(resolve));
     const base = `http://127.0.0.1:${port}`;
-    child = spawn(process.execPath, ['server.js'], { cwd: path.resolve(__dirname, '..'), env: { ...process.env, PORT: String(port), APPS_DIR: apps, DATA_FILE: path.join(tmp, 'apps.json'),QUOTA_SOCKET:quotaSocket }, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn(process.execPath, ['server.js'], { cwd: path.resolve(__dirname, '..'), env: { ...process.env, PORT: String(port), APPS_DIR: apps, DATA_FILE: path.join(tmp, 'apps.json'), PANEL_DB_FILE:path.join(tmp,'panel.sqlite'),QUOTA_SOCKET:quotaSocket }, stdio: ['ignore', 'pipe', 'pipe'] });
     exit = once(child, 'exit');
     let log = ''; const capture = b => { log = (log + b).slice(-10000); };
     child.stdout.on('data', capture); child.stderr.on('data', capture);
@@ -97,7 +98,14 @@ async function main() {
     const created = await call('/api/apps', 'POST', { name: 'Manual creation fixture', type: 'static', storageGB: '1' });
     assert.equal(created.status, 200);
     assert(created.data.plan && created.data.plan.scan.complete);
-    assert.equal(quotaAttempts.length,0,'normal create does not allocate or require host quotas');
+    assert.equal(quotaAttempts.length,1,'normal creation always allocates its enforced allowance');
+    assert(created.data.storageEnforced&&created.data.storageQuota.projectId);
+    quotaUnavailable=true;
+    const refused=await call('/api/apps','POST',{name:'Unavailable quota fixture',type:'static',storageGB:'1',enforceStorage:false});
+    assert.equal(refused.status,503,'an unavailable bridge cannot be bypassed by an opt-out flag');
+    assert(!(await call('/api/apps')).data.some(a=>a.name==='Unavailable quota fixture'),'a site is not registered with a fake unenforced limit');
+    quotaUnavailable=false;
+    if(refused.data.pendingId)await call('/api/apps/pending/'+refused.data.pendingId,'DELETE');
     assert(!created.data.lastDeploy, 'creation does not deploy');
     let plan = (await call('/api/apps/test-upload/deployment-plan')).data;
     assert(plan.ready);
@@ -200,8 +208,36 @@ async function main() {
     const automatic=await call('/api/apps','POST',createBody);
     assert.equal(automatic.status,200,JSON.stringify(automatic));assert(automatic.data.id&&!automatic.data.prepared,'multiple deployment files do not force a source-approval step');
     assert.equal(automatic.data.deploymentEntrypoint.file,'production.recipe','production source is selected automatically');
-    assert(!automatic.data.storageQuota,'storage enforcement is optional');
-    console.log('Workflow API: direct creation, optional quotas, advisory detection, uploads, saved choices, real Git pull and actual Docker errors: OK');
+    assert(automatic.data.storageQuota.enforced&&automatic.data.storageQuota.projectId,'automatic source selection preserves mandatory quota enforcement');
+    const workspace=path.join(tmp,'workspace-source');fs.mkdirSync(workspace);
+    const put=(file,content)=>{const p=path.join(workspace,file);fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,content);};
+    put('package.json',JSON.stringify({private:true,workspaces:['packages/*']}));
+    put('packages/interface/package.json',JSON.stringify({scripts:{build:'vite build'},dependencies:{react:'19.0.0',vite:'6.0.0'}}));
+    put('packages/interface/index.html','<div id="root"></div>');
+    put('packages/interface/.env.example','VITE_API_URL=http://localhost:4100\n');
+    put('packages/worker/package.json',JSON.stringify({main:'server.js',scripts:{start:'node server.js'},dependencies:{express:'4.19.2',pg:'8.16.3'}}));
+    put('packages/worker/server.js',"const app=require('express')();app.get('/records',(req,res)=>res.json([]));app.listen(process.env.PORT||4100);");
+    put('packages/worker/.env','REPOSITORY_SETTING=kept-from-source\n');
+    put('packages/worker/.env.example','DATABASE_URL=\nSESSION_SECRET=change-me\n');
+    git(workspace,'init','-b','main');git(workspace,'config','user.name','Fixture');git(workspace,'config','user.email','fixture@example.test');git(workspace,'add','.');git(workspace,'commit','-m','generic workspace services');
+    const detected=await call('/api/apps','POST',{name:'Workspace detection fixture',type:'node',repoUrl:workspace,branch:'main',access:'local',storageGB:'1'});
+    assert.equal(detected.status,200,JSON.stringify(detected));
+    const serviceResponse=await call('/api/apps/'+detected.data.id+'/services');
+    const detectedServices=serviceResponse.data.services||serviceResponse.data;
+    assert(detectedServices.some(s=>s.type==='react'&&s.subdir==='packages/interface'),JSON.stringify(serviceResponse));
+    assert(detectedServices.some(s=>s.type==='node'&&s.subdir==='packages/worker'),JSON.stringify(serviceResponse));
+    assert(!detectedServices.some(s=>!s.subdir),'a workspace manifest is not incorrectly run as a root application');
+    const detectedDir=path.join(apps,detected.data.id),detectedEnv=require('dotenv').parse(fs.readFileSync(path.join(detectedDir,'.env')));
+    assert.equal(detectedEnv.REPOSITORY_SETTING,'kept-from-source');
+    assert(normDetectedDbs(detected.data).includes('postgres'),'a runnable backend with a PostgreSQL dependency gets its managed database wiring');
+    for(const service of detectedServices)assert(fs.existsSync(path.join(detectedDir,'code',service.subdir,'Dockerfile')),'each detected runnable context has a build recipe');
+    const explicit=await call('/api/apps','POST',{name:'Explicit workspace context',type:'react',repoUrl:workspace,branch:'main',subdir:'packages/worker',access:'local',storageGB:'1'});
+    assert.equal(explicit.status,200,JSON.stringify(explicit));
+    const explicitServices=(await call('/api/apps/'+explicit.data.id+'/services')).data.services;
+    assert.equal(explicitServices.length,1,'an explicitly selected repository context does not opt into sibling services');
+    assert.equal(explicitServices[0].subdir,'packages/worker');assert.equal(explicitServices[0].type,'node','source detection corrects a stale manual type');
+    function normDetectedDbs(meta){return [].concat(meta.db||[]);}
+    console.log('Workflow API: direct creation, mandatory capacity-checked quotas, no unenforced fallback, advisory detection and actual Docker errors: OK');
   } finally {
     if (child && child.exitCode === null) child.kill();
     if (exit) await exit;

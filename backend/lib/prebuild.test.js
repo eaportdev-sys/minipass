@@ -74,12 +74,12 @@ async function main() {
   const pulls = [];
   await prebuild.ensureBuilderImage(async args => { pulls.push(args); if (args[1] === 'inspect') throw new Error('missing'); return ''; });
   assert.deepEqual(pulls[1], ['image', 'pull', prebuild.BUILDER_IMAGE], 'builder image pulls only when absent');
-  const server = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+  const server = fs.readFileSync(path.join(__dirname, 'deployment-state.js'), 'utf8');
   const start = server.indexOf('async function recordDeploy(');
   const stored = { id: 'demo', pendingImportBuilds: ['app', 'admin'] };
   const context = vm.createContext({ deployOps: new Map(), load: () => ({ apps: [stored] }), save: () => {},
     panelLog: { redact: text => text, logEvent: () => {}, deploymentEvent: (id, rec) => rec } });
-  vm.runInContext(server.slice(start, server.indexOf('// Anything that changes', start)), context);
+  vm.runInContext(server.slice(start, server.indexOf('async function markDirty(', start)), context);
   await vm.runInContext("recordDeploy('demo', {status:'error', error:'build failed', services:['app']})", context);
   assert.deepEqual(stored.pendingImportBuilds, ['app', 'admin'], 'failed builds retain the pending source rebuild');
   await vm.runInContext("recordDeploy('demo', {status:'ok', services:['app']})", context);

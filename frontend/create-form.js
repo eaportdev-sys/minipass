@@ -31,10 +31,10 @@ async function loadCreateStorage() {
     const r = await (await fetch('/api/panel/storage')).json();
     if (session !== createModalSession) return;
     createStorageAvailable = r.ready && Number.isFinite(r.availableBytes) ? r.availableBytes : null;
-    state.textContent = r.ready ? `${storageSize(r.availableBytes)} available for optional allowances, after existing allocations, Trash and host headroom.` : ((r.error || 'Host quotas are unavailable.') + ' Leave the request unchecked to create without an allowance.');
+    state.textContent = r.ready ? `${storageSize(r.availableBytes)} available for site allowances, after existing allocations, Trash and host headroom.` : ((r.error || 'Host quota enforcement is not ready.') + ' Repair host quota setup before creating a site.');
     updateCreateStorageHint();
   } catch {
-    if (session === createModalSession) state.textContent = 'Host quotas unavailable. Normal site creation does not need them.';
+    if (session === createModalSession) state.textContent = 'Cannot check host quota enforcement. Repair the storage service before creating a site.';
   }
 }
 function resetCreateForm() {
@@ -46,7 +46,6 @@ function resetCreateForm() {
   createPendingId = null;
   createStorageAvailable = null;
   document.getElementById('createStorageGB').value = '5';
-  document.getElementById('createEnforceStorage').checked = false;
   document.getElementById('createStorageState').textContent = 'Checking host quota setup…';
   document.getElementById('createStorageHint').textContent = '';
   document.getElementById('createRepoSize').textContent = 'Repository size: choose a GitHub repository.';

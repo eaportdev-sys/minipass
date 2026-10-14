@@ -1,0 +1,65 @@
+const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const crypto = require('crypto');
+const { PanelStore } = require('./panel-store');
+const { PanelAccounts } = require('./panel-accounts');
+const { query } = require('./audit-query');
+const { deletionQueue } = require('./deletion-queue');
+async function main() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'minipass-sqlite-'));
+  const legacy = path.join(dir, 'apps.json'), auth = path.join(dir, 'panel-auth.json'), file = path.join(dir, 'panel.sqlite');
+  const password = 'legacy-administrator-password', salt = crypto.randomBytes(16).toString('hex');
+  const original = JSON.stringify({ apps: [{ id: 'alpha', name: 'Alpha', type: 'node', github: { token: 'private-site-token' } }, { id: 'beta', name: 'Beta', type: 'static' }], trash: [{ id: 'old', name: 'Old', deletedAt: 1234567890000, trashDir: 'old' }], customSetting: { kept: true } });
+  fs.writeFileSync(legacy, original); fs.writeFileSync(auth, JSON.stringify({ hash: crypto.scryptSync(password, salt, 64).toString('hex'), salt, sessions: [{ token: 'anonymous-legacy-token', createdAt: Date.now() }] }));
+  let store;
+  try {
+    store = new PanelStore({ file, legacyFile: legacy, authFile: auth });
+    const accounts = new PanelAccounts(store);
+    assert.equal(store.load().apps.length, 2); assert.equal(store.load().trash.length, 1); assert(store.load().customSetting.kept);
+    assert.equal(fs.readFileSync(legacy, 'utf8'), original); assert.equal(fs.readFileSync(legacy + '.sqlite-migration-backup', 'utf8'), original);
+    assert(!accounts.session('anonymous-legacy-token'), 'anonymous sessions cannot acquire an invented named identity');
+    const admin = accounts.login('admin', password); assert.equal(accounts.session(admin.token).username, 'admin');
+    const alice = accounts.create({ username: 'alice', password: 'alice-long-test-password' });
+    const bob = accounts.create({ username: 'bob', password: 'bob-long-test-password' });
+    const a = store.load(), b = store.load();
+    a.apps.find(x => x.id === 'alpha').domain = 'alpha.example.test'; store.save(a);
+    b.apps.find(x => x.id === 'beta').domain = 'beta.example.test'; store.save(b);
+    assert.equal(store.load().apps.find(x => x.id === 'alpha').domain, 'alpha.example.test', 'a stale save for another site cannot overwrite this site');
+    const queue = deletionQueue(); let active = 0, peak = 0, batchCleanups = 0;
+    queue.onDrain(async()=>{batchCleanups++;});
+    const remove = (id, user) => store.withActor({ ...user, requestId: id, ip: '127.0.0.1' }, () => queue.run(async () => {
+      active++; peak = Math.max(peak, active); await new Promise(r => setTimeout(r, 20));
+      const d = store.load(), record = d.apps.find(x => x.id === id);
+      d.apps = d.apps.filter(x => x.id !== id); d.trash.push({ ...record, deletedAt: Date.now(), trashDir: id, deletedBy: { username: 'forged' } }); store.save(d); active--;
+    }));
+    const stale = store.load();
+    await Promise.all([remove('alpha', alice), remove('beta', bob)]);
+    assert.equal(peak, 1); assert.equal(batchCleanups,1,'the queued batch shares one cleanup rather than repeating expensive work for each site'); assert.equal(store.load().apps.length, 0);
+    const events = store.db.prepare("SELECT * FROM audit_events WHERE action='site.deleted' ORDER BY id").all();
+    assert.deepEqual(events.map(e => e.actor_username), ['alice', 'bob']); assert.deepEqual(events.map(e => e.site_id), ['alpha', 'beta']);
+    assert.equal(store.load().trash.find(t => t.id === 'alpha').deletedBy.username, 'alice', 'the authenticated account overrides client-supplied attribution');
+    Object.assign(stale, store.load()); stale.customSetting = { kept: true, edited: true };
+    store.withActor(bob,()=>store.save(stale));
+    assert.equal(store.db.prepare("SELECT count(*) AS n FROM audit_events WHERE action='site.deleted'").get().n,2,'reloading into a stale object cannot fabricate duplicate deletions or replace their original actor');
+    assert.equal(store.db.prepare("SELECT deleted_by FROM sites WHERE id='alpha'").get().deleted_by,'alice');
+    store.withActor(alice, () => { const d = store.load(), record = d.trash.find(t => t.id === 'alpha'); d.apps.push({ ...record }); d.trash = d.trash.filter(t => t.id !== 'alpha'); store.save(d); });
+    store.withActor(bob, () => { const d = store.load(); d.trash = d.trash.filter(t => t.id !== 'beta'); store.save(d); });
+    assert.equal(store.db.prepare("SELECT state FROM sites WHERE id='beta'").get().state, 'destroyed');
+    assert(store.db.prepare("SELECT id FROM audit_events WHERE action='site.destroyed' AND actor_username='bob'").get());
+    assert.throws(() => store.db.exec('DELETE FROM audit_events'), /append-only/);
+    assert.throws(() => store.db.exec("UPDATE audit_events SET actor_username='forged'"), /append-only/);
+    const result = await query(file, "SELECT name, state, deleted_by FROM panel_sites ORDER BY id");
+    assert(result.rows.some(row => row.name === 'Beta' && row.state === 'destroyed' && row.deleted_by === 'bob'));
+    for (const sql of ['SELECT data_json FROM sites', 'SELECT password_hash FROM operators', 'SELECT * FROM sessions', 'DELETE FROM audit_events', "SELECT load_extension('foreign')", "WITH RECURSIVE x(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM x) SELECT * FROM x"]) await assert.rejects(query(file, sql), /read-only|allowed/);
+    const session = accounts.login('alice', 'alice-long-test-password'); accounts.disable(alice.id, true); assert(!accounts.session(session.token));
+    assert.throws(() => accounts.disable(admin.user.id, true), /one enabled administrator/);
+    const count = store.db.prepare('SELECT count(*) AS n FROM audit_events').get().n;
+    store.close(); store = new PanelStore({ file, legacyFile: legacy, authFile: auth });
+    assert.equal(store.db.prepare('SELECT count(*) AS n FROM audit_events').get().n, count, 'restart does not reimport legacy JSON or duplicate historical events');
+    assert.equal(store.load().apps.length, 1); assert.equal(fs.readFileSync(legacy, 'utf8'), original);
+    console.log('SQLite: preserved migration backups, independent/stale-safe records, named identities, queued deletion attribution, durable append-only audit and private/read-only SQL: OK');
+  } finally { if (store) store.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+}
+main().catch(e => { console.error(e); process.exitCode = 1; });

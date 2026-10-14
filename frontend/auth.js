@@ -1,9 +1,10 @@
+let panelUser = null;
 async function panelSetup() {
   const out = document.getElementById('setupOut');
   const pw = document.getElementById('setupPass').value;
   if (!document.getElementById('setupTerms').checked) { out.textContent = 'tick the terms checkbox first'; return; }
   out.textContent = 'creating…';
-  const r = await (await fetch('/api/panel/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw, acceptTerms: true }) })).json();
+  const r = await (await fetch('/api/panel/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: document.getElementById('setupUsername').value.trim(), password: pw, acceptTerms: true }) })).json();
   if (r.ok) { document.getElementById('setupPass').value = ''; authBoot(); }
   else out.textContent = r.error || 'setup failed';
 }
@@ -11,7 +12,7 @@ async function panelLogin() {
   const out = document.getElementById('loginOut');
   const input = document.getElementById('loginPass');
   out.textContent = 'checking…';
-  const r = await (await fetch('/api/panel/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: input.value }) })).json();
+  const r = await (await fetch('/api/panel/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: document.getElementById('loginUsername').value.trim(), password: input.value }) })).json();
   input.value = '';
   if (!r.ok) { out.textContent = r.error || 'login failed'; return; }
   out.textContent = '';
@@ -27,6 +28,7 @@ async function panelLogin() {
 async function panelLogout() {
   try { await fetch('/api/panel/logout', { method: 'POST' }); } catch {}
   currentApp = null;
+  panelUser = null;
   showLogin();
 }
 async function panelChangePassword() {
@@ -45,6 +47,8 @@ async function showTerms() {
 }
 async function showLogin() {
   currentApp = null;
+  panelUser = null;
+  document.getElementById('signedInOperator').textContent = '';
   showView('login');
   try {
     const s = await (await fetch('/api/panel/auth-status')).json();
@@ -67,6 +71,8 @@ async function authBoot() {
   let s = null;
   try { s = await (await fetch('/api/panel/auth-status')).json(); } catch {}
   if (!s || !s.authenticated) { showLogin(); return; }
+  panelUser = s.user;
+  document.getElementById('signedInOperator').textContent = s.user.username;
   if (new URLSearchParams(location.search).get('github') === 'connected') {
     toast('github connected - pick a repo at create time');
     showView('panel');

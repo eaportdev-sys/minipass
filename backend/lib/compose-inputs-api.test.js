@@ -57,7 +57,7 @@ http.createServer((req,res)=>{const f=handlers.get(req.url);if(!f){res.statusCod
     const git=args=>execFileSync('git',args,{cwd:repo,stdio:'pipe'});
     git(['init','-b','main']);git(['config','user.email','fixture@example.test']);git(['config','user.name','Fixture']);git(['add','.']);git(['commit','-m','fixture']);
     const listener=net.createServer();listener.listen(0,'127.0.0.1');await once(listener,'listening');const port=listener.address().port;await new Promise(r=>listener.close(r));
-    child=spawn(process.execPath,['server.js'],{cwd:path.resolve(__dirname,'..'),env:{...process.env,PORT:String(port),APPS_DIR:apps,DATA_FILE:data},stdio:['ignore','pipe','pipe']});exit=once(child,'exit');
+    child=spawn(process.execPath,['server.js'],{cwd:path.resolve(__dirname,'..'),env:{...process.env,PORT:String(port),APPS_DIR:apps,DATA_FILE:data,PANEL_DB_FILE:path.join(temp,'panel.sqlite')},stdio:['ignore','pipe','pipe']});exit=once(child,'exit');
     let log='';child.stdout.on('data',d=>{log=(log+d).slice(-10000)});child.stderr.on('data',d=>{log=(log+d).slice(-10000)});
     const base='http://127.0.0.1:'+port;
     for(let i=0;;i++){try{if((await fetch(base+'/health')).ok)break}catch{}if(i>100)throw Error(log);await new Promise(r=>setTimeout(r,100))}

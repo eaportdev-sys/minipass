@@ -35,7 +35,7 @@ try{
   assert(!read(f).APP_ORIGIN,'Compose remains responsible for the derived origin');
   const domain=fixture('domain',{database:pg,api:{...api,environment:{APP_ORIGIN:'https://${DOMAIN:?set domain}'}}});domain.meta.publicUrl='https://public.example.test';
   provision(domain);assert.equal(read(domain).DOMAIN,'public.example.test');assert(fs.readFileSync(path.join(domain.dir,'.env'),'utf8').includes('DOMAIN=public.example.test'),'plain canonical domains remain valid/editable in the Environment UI');
-  const server=fs.readFileSync(path.resolve(__dirname,'../server.js'),'utf8');
+   const server=fs.readFileSync(path.resolve(__dirname,'deployment-state.js'),'utf8');
   const stored={id:'domain',domain:'',untouched:'preserved'};
   const context=vm.createContext({fs,path,envDefaults:require('./env-defaults'),cleanDomain:v=>v,load:()=>({apps:[stored]}),save:()=>{}});
    vm.runInContext(server.slice(server.indexOf('function syncProvisionedDomain('),server.indexOf('async function autodetectHome(')),context);

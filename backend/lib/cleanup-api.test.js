@@ -27,7 +27,7 @@ async function main() {
     await new Promise(resolve => listener.close(resolve));
     const base = `http://127.0.0.1:${port}`;
     child = spawn(process.execPath, ['server.js'], { cwd: path.resolve(__dirname, '..'),
-      env: { ...process.env, PORT: String(port), APPS_DIR: apps, DATA_FILE: path.join(tmp, 'apps.json') }, stdio: ['ignore', 'pipe', 'pipe'] });
+      env: { ...process.env, PORT: String(port), APPS_DIR: apps, DATA_FILE: path.join(tmp, 'apps.json'), PANEL_DB_FILE: path.join(tmp, 'panel.sqlite') }, stdio: ['ignore', 'pipe', 'pipe'] });
     exit = once(child, 'exit');
     let log = '';
     const capture = b => { log = (log + b).slice(-8000); };

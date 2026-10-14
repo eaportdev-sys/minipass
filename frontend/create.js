@@ -17,16 +17,14 @@ async function createApp(options = {}) {
     return;
   }
   if (typeof createBusyOps !== 'undefined' && createBusyOps > 0) { toast('Wait for repository listing and detection to finish.', false); return; }
-  const enforceStorage = document.getElementById('createEnforceStorage').checked;
   const storageGB = v('createStorageGB');
-  if (enforceStorage && (!/^(?:[1-9]\d*|0)(?:\.\d{1,3})?$/.test(storageGB) || Number(storageGB) < 0.1 || Number(storageGB) > 1000000)) { toast('Enter a storage allowance from 0.1 to 1,000,000 GB (up to 3 decimal places).', false); return; }
+  if (!/^(?:[1-9]\d*|0)(?:\.\d{1,3})?$/.test(storageGB) || Number(storageGB) < 0.1 || Number(storageGB) > 1000000) { toast('Enter a storage allowance from 0.1 to 1,000,000 GB (up to 3 decimal places).', false); return; }
   const typeEl = document.querySelector('input[name=apptype]:checked');
   const dbs = [...document.querySelectorAll('input[name=appdb]:checked')].map(e => e.value);
   const accessEl = document.querySelector('input[name=access]:checked');
   const access = accessEl ? accessEl.value : 'local';
   const body = {
-    name: v('name'), type: typeEl ? typeEl.value : 'static', dbs,
-    ...(enforceStorage ? { enforceStorage: true, storageGB } : {}),
+    name: v('name'), type: typeEl ? typeEl.value : 'static', dbs, storageGB,
     repoUrl: v('repo'), access,domain: access === 'domain' ? v('domain') : '',
     subdir: v('subdir'), standardDockerfile: approvedStandardDockerfile,
     packageManager: createDetectedManager,

@@ -117,4 +117,5 @@ function showView(view) {
   if (view === 'trash') loadTrash();
   if (view === 'errors') loadPanelErrors();
   if (view === 'storage') loadHostStorage();
+  if (view === 'audit') loadAudit(true);
 }

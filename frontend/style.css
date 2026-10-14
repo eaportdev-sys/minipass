@@ -670,3 +670,5 @@ input[aria-invalid="true"] { border-color: #ff6b6b; }
 #deploymentPlan li { margin: 8px 0; }
 .plan-blockers { border-left: 3px solid #ff6b6b; padding-left: 24px; }
 .plan-ready { color: #42c98b; }
+/* Audit records are tabular and may be wider than their card on small screens. */
+.audit-filters{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.audit-filters input{flex:1;min-width:140px}.audit-table-wrap{overflow:auto;max-height:520px}.audit-table{border-collapse:collapse;width:100%;font-size:12px}.audit-table th,.audit-table td{text-align:left;padding:8px;vertical-align:top;border-bottom:1px solid var(--border);max-width:360px;overflow-wrap:anywhere}.audit-table th{position:sticky;top:0;background:var(--card)}.operator-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0}#auditSql{width:100%;font-family:monospace;margin:12px 0}

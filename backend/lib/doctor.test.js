@@ -1,11 +1,11 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-// The rules live in server.js next to the doctor route: extract the const
+// The rules live beside the doctor route: extract the const
 // (pure data + message functions, no server deps) and test it directly.
-const source = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8').replace(/\r\n/g, '\n');
+const source = fs.readFileSync(path.join(__dirname, '../routes/doctor.js'), 'utf8').replace(/\r\n/g, '\n');
 const start = source.indexOf('const LOG_RULES = [');
-const end = source.indexOf('];\napp.get(\'/api/apps/:id/doctor\'', start);
+const end = source.indexOf('];', start);
 assert(start > 0 && end > start, 'LOG_RULES block found');
 const LOG_RULES = eval(source.slice(start, end + 2) + '\nLOG_RULES');
 const hit = text => {

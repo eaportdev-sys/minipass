@@ -25,10 +25,11 @@ async function main() {
   element('name').value = '   '; await run('createApp()');
   assert.equal(requests.length, 0); assert(element('name').focused);
   element('name').value = 'Site'; element('repo').value = 'https://example.test/source.git';
+  element('createStorageGB').value = '5';
   await run('createApp()');
   assert.equal(requests.length, 1, 'create submits once, without a required source-preview round trip');
   assert.equal(requests[0].url, '/api/apps'); assert(!requests[0].body.prepareOnly);
-  assert(!requests[0].body.enforceStorage, 'ordinary creation has no quota prerequisite');
+  assert.equal(requests[0].body.storageGB, '5', 'normal creation requests the required site allowance');
   context.fetch = async () => ({ ok: true, json: async () => fixture }); await run('loadDeploymentPlan()');
   const html = element('deploymentPlan').innerHTML;
   assert(html.includes('does not approve or block deployment'));
@@ -50,6 +51,6 @@ async function main() {
   context.fetch = async () => ({ ok: true, json: async () => ({ ...fixture, reason: 'CURRENT RESPONSE' }) }); await run('loadDeploymentPlan()');
   finish(); await old;
   assert(element('deploymentPlan').innerHTML.includes('CURRENT RESPONSE')); assert(!element('deploymentPlan').innerHTML.includes('OLD RESPONSE'));
-  console.log('Basic workflow UI: one create request, optional quotas/source overrides, advisory detection, escaping and stale-response protection: OK');
+  console.log('Basic workflow UI: one create request, mandatory site allowance, optional source overrides, advisory detection and stale-response protection: OK');
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

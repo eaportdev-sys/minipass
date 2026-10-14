@@ -16,16 +16,18 @@
       <button class="navitem" data-view="trash" onclick="showView('trash')">Trash <span id="trashCount" class="badge" style="display:none"></span></button>
       <button class="navitem" data-view="terminal" onclick="showView('terminal')">Terminal</button>
       <button class="navitem" data-view="errors" onclick="showView('errors')">Error log</button>
+      <button class="navitem" data-view="audit" onclick="showView('audit')">Audit &amp; accounts</button>
       <button class="navitem" data-view="storage" onclick="showView('storage')">Storage</button>
       <button class="navitem" data-view="panel" onclick="showView('panel')">Upgrade</button>
     </nav>
-    <div class="sidefoot"><button onclick="toggleTheme()" title="dark / light mode">Theme</button><button onclick="showTerms()" title="operator terms">Terms</button><button onclick="panelLogout()" title="sign out of the panel">Logout</button></div>
+    <div class="sidefoot"><span id="signedInOperator" class="meta"></span><button onclick="toggleTheme()" title="dark / light mode">Theme</button><button onclick="showTerms()" title="operator terms">Terms</button><button onclick="panelLogout()" title="sign out of the panel">Logout</button></div>
   </aside>
   <main>
     <section id="view-login" class="view">
       <div class="pagehead"><div><h1>Panel login</h1><div class="meta">Localhost testing build — sign in to manage sites.</div></div></div>
       <div class="card" id="setupBox" style="display:none">
-        <div class="sectionhead"><div><b>Create admin password</b><div class="meta">First run only. 12+ characters. Creating it records your acceptance of the operator terms.</div></div></div>
+        <div class="sectionhead"><div><b>Create administrator account</b><div class="meta">Named accounts identify who performed audited actions. Passwords require 12+ characters.</div></div></div>
+        <input id="setupUsername" placeholder="administrator username" value="admin" autocomplete="username">
         <input id="setupPass" type="password" placeholder="new admin password" autocomplete="new-password">
         <pre id="termsPreview" class="compact-output"></pre>
         <label class="radiorow"><input type="checkbox" id="setupTerms"> I accept the operator terms — I am responsible for the apps I deploy.</label>
@@ -33,10 +35,26 @@
         <pre id="setupOut" class="compact-output"></pre>
       </div>
       <div class="card" id="loginBox" style="display:none">
-        <div class="sectionhead"><div><b>Admin login</b><div class="meta">Enter the panel password.</div></div></div>
+        <div class="sectionhead"><div><b>Operator login</b><div class="meta">Existing panels migrate to username admin with the existing password. Previous anonymous sessions are signed out.</div></div></div>
+        <input id="loginUsername" placeholder="username" value="admin" autocomplete="username">
         <input id="loginPass" type="password" placeholder="admin password" autocomplete="current-password" onkeydown="if(event.key==='Enter')panelLogin()">
         <div class="actions"><button class="btn primary" onclick="panelLogin()">log in</button></div>
         <pre id="loginOut" class="compact-output"></pre>
+      </div>
+    </section>
+    <section id="view-audit" class="view">
+      <div class="pagehead"><div><h1>Audit &amp; accounts</h1><div class="meta">Deletion, restore and destruction records remain after a site is gone. Operator names come from authenticated sessions.</div></div></div>
+      <div class="card"><b>Audit history</b><div class="audit-filters">
+        <input id="audit-actor" placeholder="Operator username"><input id="audit-action" placeholder="Action, e.g. site.deleted"><input id="audit-site" placeholder="Site ID">
+        <label>From<input id="audit-from" type="datetime-local"></label><label>To<input id="audit-to" type="datetime-local"></label><button onclick="loadAudit(true)">Search</button>
+      </div><div id="auditHistory"></div><div class="actions"><button id="auditPrev" onclick="auditPage(-1)">Previous</button><span id="auditRange" class="meta"></span><button id="auditNext" onclick="auditPage(1)">Next</button></div></div>
+      <div class="card"><b>Read-only SQL query</b><div class="meta">Query audit_events and panel_sites only. Passwords, sessions and private site configuration are not accessible. Results are limited to 200 rows and three seconds.</div>
+        <div class="actions"><button onclick="auditExample('deletions')">Deletion history</button><button onclick="auditExample('sites')">Site inventory</button></div>
+        <textarea id="auditSql" rows="5" spellcheck="false">SELECT occurred_at, actor_username, action, site_name, outcome FROM audit_events ORDER BY id DESC</textarea>
+        <button id="auditQueryBtn" class="btn primary" onclick="runAuditQuery()">Run query</button><div id="auditQueryResult"></div>
+      </div>
+      <div class="card" id="operatorCard" style="display:none"><b>Named operator accounts</b><div class="meta">Disabled accounts retain their identity in audit history. At least one administrator must remain enabled.</div><div id="operatorList"></div>
+        <div class="audit-filters"><input id="operatorUsername" placeholder="New username" autocomplete="off"><input id="operatorPassword" type="password" placeholder="New password (12+ characters)" autocomplete="new-password"><select id="operatorRole"><option value="operator">Operator</option><option value="admin">Administrator</option></select><button onclick="createOperator()">Create account</button></div>
       </div>
     </section>
     <section id="view-websites" class="view active">
@@ -448,10 +466,9 @@
       </section>
     </div>
     <section class="create-section create-storage">
-       <h3>Storage <span class="meta">optional</span></h3>
-       <label class="radiorow"><input id="createEnforceStorage" type="checkbox"> Request a host-enforced storage allowance</label>
+       <h3>Storage allowance</h3>
       <div class="create-storage-row"><label for="createStorageGB">Limit (GB)<input id="createStorageGB" type="number" min="0.1" max="1000000" step="0.001" value="5" oninput="updateCreateStorageHint()"></label><div class="create-storage-presets"><button onclick="setCreateStorage(5)">5 GB</button><button onclick="setCreateStorage(20)">20 GB</button><button onclick="setCreateStorage(200)">200 GB</button></div></div>
-       <div class="meta">Off by default. Existing site and database storage is never migrated by this choice.</div>
+       <div class="meta">Every new site receives this enforced limit. Site files and managed database data share it; available capacity is checked before allocation.</div>
       <div id="createStorageState" class="meta" role="status">Checking host quota setup…</div>
       <div id="createStorageHint" class="meta" aria-live="polite"></div>
     </section>
@@ -492,4 +509,5 @@
 <script src="power.js"></script>
 <script src="poll.js"></script>
 <script src="auth.js"></script>
+<script src="audit.js"></script>
 </body></html>

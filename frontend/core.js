@@ -8,7 +8,7 @@ let deployStatusSeq = 0;
 // their own error instead of looping.
 const _fetch = window.fetch.bind(window);
 window.fetch = (...a) => _fetch(...a).then(r => {
-  if (r.status === 401 && !String(a[0] || '').includes('/api/panel/')) showLogin();
+  if (r.status === 401 && !/^\/api\/panel\/(?:login|setup|auth-status|terms-text)(?:$|\?)/.test(String(a[0] || ''))) showLogin();
   return r;
 });
 const dbPopupSlots = new Map();

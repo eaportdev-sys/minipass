@@ -276,6 +276,19 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   }
   let sub = wantSub;
   if (sub && !fs.existsSync(path.join(dir, 'code', sub))) sub = '';
+  const codeRoot = path.join(dir, 'code');
+  const discoveredPlan = require('./deployment-plan').analyze(codeRoot, { templatesDir, selection });
+  // A workspace manifest is not itself a runnable service. Choose a detected
+  // context before validating/seeding its recipe; later service discovery still
+  // includes every runnable sibling. Explicit subfolders and repository-owned
+  // Compose/root recipes retain their existing precedence.
+  if (repoUrl && !sub && discoveredPlan.selected?.kind !== 'compose') {
+    const discoveredServices = require('./repo-analysis').analyzeRepository(codeRoot).services;
+    if (discoveredServices.length && !discoveredServices.some(s => !s.subdir)) {
+      sub = discoveredServices[0].subdir;
+      type = discoveredServices[0].type;
+    }
+  }
   const buildDir = sub ? path.join(dir, 'code', sub) : path.join(dir, 'code');
   if (repoUrl) {
     const detected = require('./services').detectServiceType(buildDir);
@@ -292,7 +305,6 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   if (profile.kind === 'jekyll') type = 'static';
   // Creation inspects the real checkout before registration. A draft contains
   // source only: no compose/.env/database scaffolding, so Cancel stays safe.
-  const discoveredPlan = require('./deployment-plan').analyze(path.join(dir, 'code'), { templatesDir, selection });
   const hasDeclaredCompose = discoveredPlan.selected?.kind === 'compose';
   if(prepareOnly)return {dir,type,subdir:sub,hasDeclaredCompose,plan:discoveredPlan};
   // Explicit create-modal opt-in. Never replace a repository Dockerfile; this
