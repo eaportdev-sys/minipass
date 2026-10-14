@@ -66,6 +66,42 @@ function decideType(paths, pkg) {
   return { type: null, detected: null, dbs, reason: 'no recognizable markers (package.json, composer.json, index.php, index.html) - pick manually' };
 }
 
+// Runnable-entry gate: does this folder have what the type template needs to
+// start a server? Mirrors ensureDockerfile seeding so the gate and the seeder
+// never disagree. Pure - unit-test with fixtures.
+const RUNNABLE_START = ['start', 'start:prod', 'start:production', 'start:built', 'serve'];
+const RUNNABLE_NODE_FILES = ['index.js', 'server.js', 'index.cjs', 'server.cjs', 'index.mjs', 'server.mjs'];
+function hasRunnableEntry(relPaths, pkg, type) {
+  const rel = Array.isArray(relPaths) ? relPaths.filter(p => typeof p === 'string' && p) : [];
+  const direct = new Set(rel.filter(p => !p.includes('/')));
+  const lower = new Set([...direct].map(f => f.toLowerCase()));
+  if (type === 'static') {
+    if (lower.has('index.html') || lower.has('index.htm')) return { runnable: true, why: 'index.html present' };
+    return { runnable: false, why: 'static sites need index.html in the build folder' };
+  }
+  if (type === 'php') {
+    if (lower.has('composer.json') || lower.has('index.php')) return { runnable: true, why: 'composer.json/index.php present' };
+    return { runnable: false, why: 'PHP sites need index.php or composer.json in the build folder' };
+  }
+  if (type === 'react') {
+    const scripts = (pkg && pkg.scripts) || {};
+    if (scripts.build) return { runnable: true, why: 'package.json build script present' };
+    return { runnable: false, why: 'React sites need a package.json "build" script emitting dist/' };
+  }
+  if (type === 'node') {
+    const scripts = (pkg && pkg.scripts) || {};
+    for (const k of RUNNABLE_START) {
+      if (scripts[k] && !DEV_SERVER_START.some(re => re.test(String(scripts[k])))) return { runnable: true, why: `package.json "${k}" script present` };
+    }
+    const main = pkg && typeof pkg.main === 'string' ? pkg.main.replace(/\\/g, '/').replace(/^\.\//, '') : null;
+    if (main && /\.(?:js|cjs|mjs)$/.test(main) && rel.includes(main)) return { runnable: true, why: `package.json main ${main} present` };
+    for (const f of RUNNABLE_NODE_FILES) {
+      if (direct.has(f)) return { runnable: true, why: `${f} present` };
+    }
+    return { runnable: false, why: 'Node sites need a production start script, a main entry, or server.js/index.js in the build folder' };
+  }
+  return { runnable: false, why: `unknown runtime type '${type}'` };
+}
 // One canonical package-manager read for every detector: the packageManager
 // field wins, then lockfiles, then npm. Takes { pkg, files } where files are
 // basenames or relative paths. Pure - unit-test with fixtures.
@@ -325,4 +361,4 @@ function findRunnableRoot(tree, pkgs = {}) {
   return found[0];
 }
 
-module.exports = { decideType, detectPackageManager, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints, findRunnableRoot, jsDriverHints };
+module.exports = { decideType, detectPackageManager, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints, findRunnableRoot, jsDriverHints, hasRunnableEntry };

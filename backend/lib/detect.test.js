@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { decideType, detectPackageManager, findBackends, findFrontends, prismaDatabaseHints, databaseConfigHints, sqlDatabaseHints } = require('./detect');
+const { decideType, detectPackageManager, findBackends, findFrontends, prismaDatabaseHints, databaseConfigHints, sqlDatabaseHints, hasRunnableEntry } = require('./detect');
 
 // Mirrors docker/awesome-compose shapes: CRA frontend, express backend, angular.
 const tree = [
@@ -136,5 +136,18 @@ assert.deepEqual(databaseConfigHints('config/config.json', `{"development":{"dia
 assert.deepEqual(sqlDatabaseHints('CREATE EXTENSION IF NOT EXISTS pgcrypto;'), ['postgres']);
 assert.deepEqual(sqlDatabaseHints('id BIGINT AUTO_INCREMENT PRIMARY KEY ENGINE=InnoDB;'), ['mysql']);
 assert.deepEqual(sqlDatabaseHints('-- MariaDB dump\nENGINE=InnoDB;'), ['mariadb']);
+
+// Runnable-entry gate agrees with the template seeder: real entries pass,
+// script samples and dev-only servers fail fast with a named fix.
+assert(hasRunnableEntry(['package.json', 'src/main.js'], { scripts: { start: 'node src/main.js' } }, 'node').runnable);
+assert(hasRunnableEntry(['server.js'], null, 'node').runnable);
+assert(!hasRunnableEntry(['connection.js', 'query.js'], null, 'node').runnable, 'sample scripts are not a server');
+assert(!hasRunnableEntry(['package.json'], { scripts: { start: 'vite', build: 'vite build' } }, 'node').runnable, 'dev server start is not production');
+assert(hasRunnableEntry(['index.html'], null, 'static').runnable);
+assert(!hasRunnableEntry(['README.md'], null, 'static').runnable);
+assert(hasRunnableEntry(['package.json'], { scripts: { build: 'vite build' } }, 'react').runnable);
+assert(!hasRunnableEntry(['package.json'], { scripts: { dev: 'vite' } }, 'react').runnable);
+assert(hasRunnableEntry(['index.php'], null, 'php').runnable);
+assert(!hasRunnableEntry(['README.md'], null, 'php').runnable);
 
 console.log('frontend/backend folder classification: OK');

@@ -1,6 +1,6 @@
 // deployment-executor: extracted from the original backend without changing route semantics.
 module.exports = function createHelpers(ctx) {
-  const { APPS_DIR, COMPOSE_BIN, DOCKER_BIN, LEGACY_PANEL_PHP_DOCKERFILE, TEMPLATES_DIR, appDir, appGitEnv, composeInputs, crypto, deployChildren, deployLocks, deployOps, deploymentPlan, dockerfileProtection, ensureDockerfile, exec, execSync, failureSummary, fs, gh, importProtection, localAccess, missingEnvVars, nginxConf, normDbs, panelLog, path, portsLib, prebuild, publication, pushEvents, readBuildProfile, redactUrl, refreshStandardDockerfile, repositoryCompose, resolveServiceDockerfile, runLogged, standardDockerfileType, svc, trashLib, findDockerfiles, isInfraDockerfile, BYPASS_DOCKERFILE } = ctx;
+  const { APPS_DIR, COMPOSE_BIN, DOCKER_BIN, LEGACY_PANEL_PHP_DOCKERFILE, TEMPLATES_DIR, appDir, appGitEnv, composeInputs, crypto, deployChildren, deployLocks, deployOps, deploymentPlan, dockerfileProtection, ensureDockerfile, exec, execSync, failureSummary, fs, gh, importProtection, localAccess, missingEnvVars, nginxConf, normDbs, panelLog, path, portsLib, prebuild, publication, pushEvents, readBuildProfile, redactUrl, refreshStandardDockerfile, repositoryCompose, resolveServiceDockerfile, runLogged, standardDockerfileType, svc, trashLib, findDockerfiles, isInfraDockerfile, BYPASS_DOCKERFILE, hasRunnableEntry } = ctx;
   const appContainers = (...args) => ctx.appContainers(...args);
   const attachDatabase = (...args) => ctx.attachDatabase(...args);
   const autodetectHome = (...args) => ctx.autodetectHome(...args);
@@ -329,6 +329,24 @@ async function deployNow(id, opts = {}) {
       // Refresh panel-owned PHP images so existing sites gain standard Apache
       // rewrite support. The pre-marker legacy file is recognized only by an
       // exact byte-normalized match; repository/custom Dockerfiles stay sacred.
+      // Runnable-entry gate: template-driven builds must have something to
+      // start (start script, server file, index). Unrunnable folders fail here
+      // in seconds with a named fix, not after a 60s crash-loop. Repository
+      // custom recipes are the author's contract and keep Docker's own errors.
+      if (!/^db(-|$)/.test(s.name || '') && (!df || df.file === BYPASS_DOCKERFILE || standardDockerfileType(ctxDir, TEMPLATES_DIR, df.file))) {
+        let top = [];
+        try { top = fs.readdirSync(ctxDir); } catch {}
+        let spkg = null;
+        try { spkg = JSON.parse(fs.readFileSync(path.join(ctxDir, 'package.json'), 'utf8')); } catch {}
+        const rel = top.slice();
+        try {
+          const main = spkg && typeof spkg.main === 'string' ? spkg.main.replace(/\\/g, '/').replace(/^\.\//, '') : null;
+          if (main && !rel.includes(main) && fs.existsSync(path.join(ctxDir, main))) rel.push(main);
+        } catch {}
+        const gate = hasRunnableEntry(rel, spkg, s.type);
+        const jekyll = s.type === 'static' && readBuildProfile(ctxDir).kind === 'jekyll';
+        if (!gate.runnable && !jekyll) throw new Error(`service '${s.name}' cannot run as ${s.type}: ${gate.why} (build folder '${s.subdir || '.'}')`);
+      }
       if (s.type === 'php') {
         const df = path.join(ctxDir, 'Dockerfile');
         const tpl = path.join(TEMPLATES_DIR, 'php', 'Dockerfile');
