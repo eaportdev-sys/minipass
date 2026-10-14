@@ -260,7 +260,7 @@ function gate(containers, model, previous) {
   const steady = previous && current.size === previous.size && [...current].every(([k, v]) => previous.get(k) === v);
   return { ok: !!steady, pending: !steady, current, detail: steady ? 'all runtime services steady and completion tasks exited successfully' : 'waiting for a second steady observation' };
 }
-async function deploy({ model, compose, docker, id, dir, run, logged, verify, check = () => {}, sleep = ms => new Promise(r => setTimeout(r, ms)), notify = () => {} }) {
+async function deploy({ model, compose, docker, id, dir, run, logged, check = () => {}, sleep = ms => new Promise(r => setTimeout(r, ms)), notify = () => {} }) {
   const base = composeArgs(compose, id, model.file, model.directory);
   const action = args => { check(); return logged(compose[0], [...base, ...args], { cwd: dir }); };
   const before = await inspectProject({ id, docker, run });
@@ -367,22 +367,21 @@ async function deploy({ model, compose, docker, id, dir, run, logged, verify, ch
     for (const name of tasks) await start(name);
     for (const name of databases) await start(name);
     for (const name of Object.keys(model.categories).filter(n => !['database', 'task'].includes(model.categories[n]))) await start(name);
-    notify('verify');
+    notify('runtime');
     let previous;
+    let runtime;
     for (let i = 0; ; i++) {
       check();
       const state = gate(await inspectProject({ id, docker, run }), model, previous);
-      if (state.ok) break;
+      if (state.ok) { runtime = state.detail; break; }
       if (!state.pending || i >= 40) throw new Error('Repository service verification failed: ' + state.detail);
       previous = state.current;
       await sleep(3000);
     }
-    const verification = await verify(model);
-    if (!verification.ok) throw new Error('Application verification failed: ' + verification.errors.join('; '));
     privateWrite(oldFile, model.config);
     const orphans = (await inspectProject({ id, docker, run })).filter(c => !model.config.services[c.Config.Labels['com.docker.compose.service']]);
     if (orphans.length) await run(docker, ['rm', '-f', ...orphans.map(c => c.Id)]); // no -v: data retained
-    return { verification, tasks };
+    return { runtime, tasks };
   } catch (error) {
     // Include task/container output in the persisted deploy log, not credentials
     // in metadata. The adapter redacts all process output before writing it.

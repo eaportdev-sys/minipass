@@ -38,7 +38,7 @@ try{
   const server=fs.readFileSync(path.resolve(__dirname,'../server.js'),'utf8');
   const stored={id:'domain',domain:'',untouched:'preserved'};
   const context=vm.createContext({fs,path,envDefaults:require('./env-defaults'),cleanDomain:v=>v,load:()=>({apps:[stored]}),save:()=>{}});
-  vm.runInContext(server.slice(server.indexOf('function syncProvisionedDomain('),server.indexOf('async function enforceDeploymentPlan(')),context);
+   vm.runInContext(server.slice(server.indexOf('function syncProvisionedDomain('),server.indexOf('async function autodetectHome(')),context);
   context.syncProvisionedDomain(domain.meta,domain.dir,{changed:['DOMAIN']});
   assert.equal(stored.domain,'public.example.test');assert.equal(domain.meta.domain,stored.domain);assert.equal(stored.untouched,'preserved','generated DOMAIN synchronizes site metadata without replacing unrelated work');
   const http=fixture('http',{database:pg,migrate,api});http.meta.publicUrl='http://10.0.0.1:8000';

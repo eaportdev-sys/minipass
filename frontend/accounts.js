@@ -63,7 +63,7 @@ let createPendingId = null;
 let createBusyOps = 0;
 function setBuildBusy(on) {
   createBusyOps = Math.max(0, createBusyOps + (on ? 1 : -1));
-  try { document.getElementById('createBuildBtn').disabled = createBusyOps > 0||(typeof createSourceNeedsChoice==='function'&&createSourceNeedsChoice()); } catch {}
+  try { document.getElementById('createBuildBtn').disabled = createBusyOps > 0; } catch {}
 }
 async function modalListRepos() {
   const session = createModalSession;

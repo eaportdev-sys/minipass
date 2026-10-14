@@ -49,6 +49,9 @@ try{
   inputs.provision({dir:tmp,root:urlRoot,selection:selected,meta});assert.equal(require('dotenv').parse(fs.readFileSync(path.join(tmp,'.env'))).COMPLETE_ORIGIN,'https://public.example.test','switching public routing updates only a tracked, unchanged generated origin');
   meta.accessMode='local';meta.publicUrl=null;
   inputs.provision({dir:tmp,root:urlRoot,selection:selected,meta});assert.equal(require('dotenv').parse(fs.readFileSync(path.join(tmp,'.env'))).COMPLETE_ORIGIN,'https://10.0.0.30:8022','switching back to local routing restores its allocated origin');
-  assert.throws(()=>access.applyOrigins({services:{api:{environment:{APP_ORIGIN:'https://kept.example.test'}}}},tmp,urlRoot,selected,meta),/saved value was preserved/,'local verification cannot pretend a preserved external application origin matches the local browser');
+   const external={services:{api:{environment:{APP_ORIGIN:'https://kept.example.test'}}}};
+   assert(access.applyOrigins(external,tmp,urlRoot,selected,meta).length, 'a saved external origin is a note, not a launch veto');
+   assert.equal(external.services.api.environment.APP_ORIGIN,'https://kept.example.test');
+   assert.throws(()=>access.validPublicUrl('https://user:secret@example.test'),/credentials/);
   console.log('Local access: no public domain, declared HTTPS, safe IP/localhost origins, other-site port refusal, credential preservation and tracked port changes: OK');
 }finally{fs.rmSync(tmp,{recursive:true,force:true});}

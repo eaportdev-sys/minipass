@@ -42,7 +42,8 @@ try {
   assert.deepEqual(plan.selected, { kind: 'compose', file: 'Dockerfile.compose' });
   assert.equal(plan.reason, 'Referenced by repository deployment command');
   assert.equal(plan.topology.services[0].build.target, 'runtime');
-  assert(plan.blockers.some(b => b.code === 'REQUIRED_ENV' && b.message.includes('PUBLIC_DOMAIN')));
+   assert(plan.warnings.some(b => b.code === 'REQUIRED_ENV' && b.message.includes('PUBLIC_DOMAIN')));
+   assert(plan.ready && plan.advisory && !plan.blockers.length, 'missing settings are advice, not a panel approval gate');
   assert(!plan.blockers.some(b => b.code === 'REQUIRED_ENV' && b.message.includes('APP_ORIGIN')), 'derived value is not falsely required as a separate input');
   assert(!JSON.stringify(plan).includes('literal-private-credential'));
   assert(!JSON.stringify(plan).includes('literal-private-default'));
@@ -55,11 +56,12 @@ try {
   const ambiguity = put('ambiguous', 'recipe.production', recipe);
   put('ambiguous', 'recipe.development', recipe);
   plan = analyze(ambiguity, options);
-  assert(plan.blockers.some(b => b.code === 'ENTRYPOINT_CHOICE'));
+   assert.equal(plan.selected.file, 'recipe.production', 'production recipe is detected without mandatory selection');
+   assert(plan.warnings.some(b => b.code === 'ALTERNATE_ENTRYPOINTS'));
   plan = analyze(ambiguity, { ...options, selection: { kind: 'dockerfile', file: 'recipe.production' }, services: [{ ...service, dockerfile: 'recipe.production' }] });
   assert.equal(plan.ready, true);
   fs.unlinkSync(path.join(ambiguity, 'recipe.production'));
-  assert(analyze(ambiguity, { ...options, selection: { kind: 'dockerfile', file: 'recipe.production' } }).blockers.some(b => b.code === 'STALE_SELECTION'));
+   assert(analyze(ambiguity, { ...options, selection: { kind: 'dockerfile', file: 'recipe.production' } }).warnings.some(b => b.code === 'STALE_SELECTION'));
 
   const reference = put('references', 'build.entry', recipe);
   put('references', 'other.entry', recipe);
@@ -72,7 +74,7 @@ try {
   put('references', 'README.md', 'Example: docker compose -f not-in-repo up\n');
   assert(analyze(reference, { ...options, services: [{ ...service, dockerfile: 'build.entry' }] }).warnings.length);
   put('references', 'release.sh', 'docker compose -f "$PLAN" up\n');
-  assert(analyze(reference, options).blockers.some(b => b.code === 'UNRESOLVED_REFERENCE'));
+   assert(analyze(reference, options).warnings.some(b => b.code === 'UNRESOLVED_REFERENCE'));
 
   const overlay = put('overlays', 'base', 'services:\n  web:\n    image: nginx\n');
   put('overlays', 'prod', 'services:\n  web:\n    image: nginx\n');
@@ -80,11 +82,12 @@ try {
   assert.deepEqual(analyze(overlay).selected.files, ['base', 'prod'], 'an ordered multi-file invocation is selected as one deployment path');
   assert(!analyze(overlay).blockers.some(b => b.code === 'COMPOSE_OVERLAY'));
   const broken = put('broken', 'odd.entry', 'services:\n  web:\n    image: a\n    image: b\n');
-  assert(analyze(broken).blockers.some(b => b.code === 'INVALID_COMPOSE'));
+   assert(analyze(broken).warnings.some(b => b.code === 'INVALID_COMPOSE'));
 
   const oversized = put('oversized', 'build.instructions', 'x'.repeat(100));
   assert.equal(analyze(oversized, {}, { maxFileBytes: 50 }).scan.complete, false);
-  assert(analyze(oversized, {}, { maxFileBytes: 50 }).blockers.some(b => b.code === 'INCOMPLETE_SCAN'));
+   assert(analyze(oversized, {}, { maxFileBytes: 50 }).warnings.some(b => b.code === 'INCOMPLETE_SCAN'));
+   assert(analyze(oversized, {}, { maxFileBytes: 50 }).ready, 'bounded/incomplete discovery cannot veto a launch');
   assert.equal(inventory(root, { maxTextBytes: 10 }).complete, false);
   const utf16 = put('encoding', 'instructions', 'placeholder');
   fs.writeFileSync(path.join(utf16, 'instructions'), Buffer.from([0xff, 0xfe, 0x46, 0, 0x52, 0]));
@@ -122,5 +125,7 @@ try {
   fs.writeFileSync(path.join(explicit, 'release.sh'), 'docker build -f recipe.production .\n');
   const authoredCreate = createApp({ appsDir: applications, templatesDir, name: 'explicit-site', type: 'static', repoUrl: 'https://example.test/repo.git', db: 'none' });
   assert(fs.readFileSync(path.join(authoredCreate.dir, 'docker-compose.yml'), 'utf8').includes('dockerfile: recipe.production'), 'creation follows the explicit build reference rather than the conventional filename');
+  put('references', 'compose.dev.yml', 'services:\n  development:\n    image: nginx\n');
+  assert.equal(analyze(reference, options).selected.file, 'build.entry', 'a declared Docker build command wins over an unused development Compose file');
   console.log('Deployment plan: full source inventory, content-based entrypoints, references, choices, derived env, explicit limits, no execution and safe registration: OK');
 } finally { fs.rmSync(tmp, { recursive: true, force: true }); }

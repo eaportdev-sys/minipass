@@ -13,6 +13,7 @@ vm.runInContext('let createModalSession=1, createDetectRequest=0, createConnectR
 const run = code => vm.runInContext(code, context);
 async function main() {
   run('resetCreateForm()');
+  assert.equal(element('createEnforceStorage').checked, false, 'storage enforcement is opt-in');
   assert.equal(element('createStorageGB').value, '5');
   run('setCreateStorage(20)');
   assert.equal(element('createStorageGB').value, '20');
@@ -21,7 +22,11 @@ async function main() {
   let saved;
   context.fetch = async (url, opts) => { saved = JSON.parse(opts.body); return { json: async () => ({ error: 'simulated create failure' }) }; };
   await run('createApp()');
+  assert(!('storageGB' in saved) && !('enforceStorage' in saved), 'normal create does not require a host quota bridge');
+  element('createEnforceStorage').checked = true;
+  await run('createApp()');
   assert.equal(saved.storageGB, '7.125', 'custom size is sent without truncating/rounding to a preset');
+  assert(saved.enforceStorage);
   saved = null;
   element('createStorageGB').value = '-1';
   await run('createApp()');

@@ -25,6 +25,8 @@ async function main() {
   const code = fixture('test-upload');
   fs.writeFileSync(path.join(code, 'Dockerfile'), recipe);
   fs.writeFileSync(path.join(code, 'index.html'), '<h1>fixture</h1>');
+  const editCode=fixture('test-edit');fs.writeFileSync(path.join(editCode,'Dockerfile'),recipe);fs.writeFileSync(path.join(editCode,'index.html'),'<h1>fixture</h1>');
+  metadata.apps.at(-1).storageQuota={projectId:999999,limitBytes:1e9,enforced:true};
   const remote = path.join(tmp, 'source');
   fs.mkdirSync(remote);
   const git = (cwd, ...args) => execFileSync('git', args, { cwd, stdio: 'pipe', encoding: 'utf8' });
@@ -74,17 +76,18 @@ async function main() {
     const setup = await fetch(base + '/api/panel/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'isolated-workflow-test-only', acceptTerms: true }) });
     assert.equal(setup.status, 200);
     const cookie = setup.headers.get('set-cookie').split(';')[0];
-    const screenshot=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l2sAAAAASUVORK5CYII=','base64');
-    fs.writeFileSync(path.join(apps,'test-upload','.verification-0.png'),screenshot);
-    const screenshotResponse=await fetch(base+'/api/apps/test-upload/verification/screenshot/0',{headers:{Cookie:cookie}});
-    assert.equal(screenshotResponse.status,200,'panel-owned hidden screenshots are served explicitly, not rejected as dotfiles');
-    assert(Buffer.from(await screenshotResponse.arrayBuffer()).equals(screenshot));
-    assert.equal((await fetch(base+'/api/apps/test-upload/verification/screenshot/99',{headers:{Cookie:cookie}})).status,404);
     const headers = { Cookie: cookie, 'Content-Type': 'application/json' };
     const call = async (url, method = 'GET', body) => {
       const response = await fetch(base + url, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
       return { status: response.status, data: await response.json() };
     };
+    const edit=await call('/api/apps/test-edit/env','PUT',{set:{APP_SETTING:'kept'}});
+    assert.equal(edit.status,200,JSON.stringify(edit));
+    assert(fs.readFileSync(path.join(apps,'test-edit','.env'),'utf8').includes('APP_SETTING=kept'));
+    assert.equal(quotaAttempts.length,0,'editing an existing quota-managed site does not contact/revalidate the host quota bridge');
+    const start=await call('/api/apps/test-edit/start','POST',{});
+    assert.equal(start.status,500,'on Windows Docker is absent, but Start attempts the real command without requiring a verified-release record');
+    assert(!/verified release|Browser/i.test(start.data.error));
     for (const name of ['', '   ']) {
       const before = fs.readdirSync(apps);
       const r = await call('/api/apps', 'POST', { name, type: 'static', storageGB: '1' });
@@ -94,6 +97,7 @@ async function main() {
     const created = await call('/api/apps', 'POST', { name: 'Manual creation fixture', type: 'static', storageGB: '1' });
     assert.equal(created.status, 200);
     assert(created.data.plan && created.data.plan.scan.complete);
+    assert.equal(quotaAttempts.length,0,'normal create does not allocate or require host quotas');
     assert(!created.data.lastDeploy, 'creation does not deploy');
     let plan = (await call('/api/apps/test-upload/deployment-plan')).data;
     assert(plan.ready);
@@ -118,7 +122,8 @@ async function main() {
     const picked = await call('/api/apps/test-upload/deployment-plan', 'POST', { selection: { kind: 'compose', file: 'compose.dockerfile' } });
     assert.equal(picked.status, 200);
     assert.equal(picked.data.plan.selection.file, 'compose.dockerfile');
-    assert.equal((await call('/api/apps/test-upload/deployment-plan', 'POST', { selection: { kind: 'dockerfile', file: 'Dockerfile' } })).status, 409, 'no single-service escape from declared topology');
+    assert.equal((await call('/api/apps/test-upload/deployment-plan', 'POST', { selection: { kind: 'dockerfile', file: 'Dockerfile' } })).status, 200, 'an unused Compose file does not veto an explicit build-file choice before the site has deployed a topology');
+    await call('/api/apps/test-upload/deployment-plan', 'POST', { selection: { kind: 'compose', file: 'compose.dockerfile' } });
     const unchanged = fs.readFileSync(path.join(apps, 'test-upload/docker-compose.yml'), 'utf8');
     const blocked = await call('/api/apps/test-upload/deploy', 'POST', { source: 'local' });
     assert.equal(blocked.status, 500, JSON.stringify(blocked));
@@ -141,7 +146,8 @@ async function main() {
     assert.equal((await call('/api/apps/test-upload/file', 'PUT', { path: 'another.plan', content: 'services:\n  web:\n    image: nginx\n' })).status, 200);
     assert.equal((await call('/api/apps/test-upload/file?path=compose.dockerfile', 'DELETE')).status, 200);
     plan = (await call('/api/apps/test-upload/deployment-plan')).data;
-    assert(plan.blockers.some(b => b.code === 'STALE_SELECTION'));
+    assert(plan.warnings.some(b => b.code === 'STALE_SELECTION'));
+    assert(plan.ready&&!plan.blockers.length,'source findings no longer veto deployment');
     assert.equal(plan.selection.file, 'compose.dockerfile');
     assert.equal((await call('/api/apps/test-upload/deployment-plan', 'POST', { selection: { kind: 'compose', file: '../outside' } })).status, 400);
     const publicRoute=await call('/api/apps/test-pull/verification','POST',{url:'https://public.example.test'});
@@ -172,7 +178,7 @@ async function main() {
     fs.writeFileSync(path.join(declaredRepo,'production.recipe'),declared);fs.writeFileSync(path.join(declaredRepo,'development.recipe'),declared.replace('postgres:17-alpine','postgres:16-alpine'));
     git(declaredRepo,'init','-b','main');git(declaredRepo,'config','user.name','Fixture');git(declaredRepo,'config','user.email','fixture@example.test');git(declaredRepo,'add','.');git(declaredRepo,'commit','-m','declared deployment files');
     const createBody={name:'Creation choice fixture',type:'node',repoUrl:declaredRepo,branch:'main',access:'local',domain:'ignored.example.test',storageGB:'1'};
-    const draft=await call('/api/apps','POST',{...createBody,prepareOnly:true});assert.equal(draft.status,200,JSON.stringify(draft));assert(draft.data.prepared&&draft.data.needsEntrypoint);
+    const draft=await call('/api/apps','POST',{...createBody,prepareOnly:true});assert.equal(draft.status,200,JSON.stringify(draft));assert(draft.data.prepared&&!draft.data.needsEntrypoint);
     const draftId=draft.data.pendingId,draftDir=path.join(apps,draftId),stagingDir=path.join(apps,'.drafts',draftId);
     assert(!fs.existsSync(draftDir)&&fs.existsSync(path.join(stagingDir,'code')),'inspection stays outside the future quota-managed site directory');
     assert(!fs.existsSync(path.join(draftDir,'.env'))&&!fs.existsSync(path.join(draftDir,'docker-compose.yml')),'inspection does not create database/env/compose scaffolding');
@@ -181,8 +187,8 @@ async function main() {
     const choice={kind:'compose',file:'production.recipe'};
     const pickedDraft=await call('/api/apps','POST',{...createBody,pendingId:draftId,prepareOnly:true,deploymentEntrypoint:choice});assert.equal(pickedDraft.status,200);assert.equal(pickedDraft.data.repositoryDatabases[0].type,'postgres');
     assert(!fs.existsSync(draftDir)&&fs.existsSync(stagingDir),'retry safely stages the older preview instead of asking the host to adopt existing data');
-    const tooLarge=await call('/api/apps','POST',{...createBody,pendingId:draftId,deploymentEntrypoint:choice,storageGB:'1000000'});assert.equal(tooLarge.status,409);assert.equal(tooLarge.data.pendingId,draftId);assert(fs.existsSync(path.join(stagingDir,'code','production.recipe')),'capacity refusal preserves the inspected checkout for retry');
-    const registered=await call('/api/apps','POST',{...createBody,pendingId:draftId,deploymentEntrypoint:choice,dbs:['mysql']});assert.equal(registered.status,200,JSON.stringify(registered));
+    const tooLarge=await call('/api/apps','POST',{...createBody,pendingId:draftId,deploymentEntrypoint:choice,enforceStorage:true,storageGB:'1000000'});assert.equal(tooLarge.status,409);assert.equal(tooLarge.data.pendingId,draftId);assert(fs.existsSync(path.join(stagingDir,'code','production.recipe')),'explicit capacity refusal preserves the checkout for retry');
+    const registered=await call('/api/apps','POST',{...createBody,pendingId:draftId,deploymentEntrypoint:choice,enforceStorage:true,dbs:['mysql']});assert.equal(registered.status,200,JSON.stringify(registered));
     assert(!fs.existsSync(stagingDir),'successful creation removes only its temporary source preview');
     assert(registered.data.storageEnforced&&registered.data.storageQuota.projectId>=100000,'creation succeeds with enforcement enabled, not an unavailable-bridge fallback');
     assert(quotaAttempts.filter(a=>a.id===draftId).every(a=>a.children.length===0),'the host allocates an empty site before source is copied into it');
@@ -191,7 +197,11 @@ async function main() {
     const variables=require('dotenv').parse(fs.readFileSync(path.join(draftDir,'.env')));assert(variables.SQL_PASSWORD&&variables.API_CONNECTION&&variables.LOCAL_HOST);assert(!JSON.stringify(registered.data).includes(variables.SQL_PASSWORD));
     const pendingDbs=(await call('/api/apps/'+draftId+'/databases')).data;assert.equal(pendingDbs.databases[0].state,'prepared');assert(pendingDbs.repositoryOwned);
     const cancelled=await call('/api/apps','POST',{...createBody,prepareOnly:true});assert.equal((await call('/api/apps/pending/'+cancelled.data.pendingId,'DELETE')).status,200);assert(!fs.existsSync(path.join(apps,'.drafts',cancelled.data.pendingId)),'Cancel cleans only the unregistered draft');
-    console.log('Workflow API: name validation, manual create, uploads, saved/stale choices, real Git pull, shared persistent analysis and pre-Docker blocking: OK');
+    const automatic=await call('/api/apps','POST',createBody);
+    assert.equal(automatic.status,200,JSON.stringify(automatic));assert(automatic.data.id&&!automatic.data.prepared,'multiple deployment files do not force a source-approval step');
+    assert.equal(automatic.data.deploymentEntrypoint.file,'production.recipe','production source is selected automatically');
+    assert(!automatic.data.storageQuota,'storage enforcement is optional');
+    console.log('Workflow API: direct creation, optional quotas, advisory detection, uploads, saved choices, real Git pull and actual Docker errors: OK');
   } finally {
     if (child && child.exitCode === null) child.kill();
     if (exit) await exit;

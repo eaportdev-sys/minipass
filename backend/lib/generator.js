@@ -4,7 +4,8 @@ const crypto = require('crypto');
 const { execSync,execFileSync } = require('child_process');
 const { appGitEnv } = require('./ssh');
 const { readBuildProfile, prepareStaticBuild } = require('./build-profile');
-const { resolveServiceDockerfile, findDockerfiles } = require('./dockerfiles');
+const { resolveServiceDockerfile, findDockerfiles, standardDockerfileType } = require('./dockerfiles');
+const { sourceFile, readSource } = require('./repository-files');
 
 const DB_IMAGES = {
   postgres: 'postgres:16-alpine',
@@ -64,7 +65,11 @@ function ensureDockerfile(ctxDir, type, templatesDir, options = {}) {
   if (type === 'php' && (has('index.php') || has('composer.json'))) { seed('Dockerfile'); return 'seeded-php'; }
   if (type === 'node') {
     const pkg = readPkg();
-    if (has('index.js') || (pkg && pkg.scripts && pkg.scripts.start)) { seed('Dockerfile'); return 'seeded-node'; }
+    const scripts = pkg && pkg.scripts || {};
+    const main = pkg && typeof pkg.main === 'string' && !path.isAbsolute(pkg.main) && !pkg.main.split(/[\\/]/).includes('..') ? pkg.main : null;
+    if (has('index.js', 'server.js', 'index.cjs', 'server.cjs', 'index.mjs', 'server.mjs') ||
+      ['start', 'start:prod', 'start:production', 'start:built', 'serve'].some(k => scripts[k]) ||
+      (main && /\.(?:js|cjs|mjs)$/.test(main) && (has(main) || scripts.build))) { seed('Dockerfile'); return 'seeded-node'; }
   }
   throw new Error(`no Dockerfile in build context and type '${type}' has no safe default here - add a Dockerfile (with EXPOSE + CMD) to the repo`);
 }
@@ -93,10 +98,13 @@ function needsDockerfileOptIn(ctxDir, type) {
   }
   if (type === 'php' && (has('index.php') || has('composer.json'))) return false;
   if (type === 'node') {
-    if (has('index.js')) return false;
+    if (has('index.js', 'server.js', 'index.cjs', 'server.cjs', 'index.mjs', 'server.mjs')) return false;
     try {
       const pkg = JSON.parse(fs.readFileSync(path.join(ctxDir, 'package.json'), 'utf8'));
-      if (pkg && pkg.scripts && pkg.scripts.start) return false;
+      const scripts = pkg.scripts || {};
+      if (['start', 'start:prod', 'start:production', 'start:built', 'serve'].some(k => scripts[k])) return false;
+      const main = typeof pkg.main === 'string' && !path.isAbsolute(pkg.main) && !pkg.main.split(/[\\/]/).includes('..') ? pkg.main : null;
+      if (main && /\.(?:js|cjs|mjs)$/.test(main) && (has(main) || scripts.build)) return false;
     } catch {}
   }
   return true;
@@ -269,13 +277,23 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
   let sub = wantSub;
   if (sub && !fs.existsSync(path.join(dir, 'code', sub))) sub = '';
   const buildDir = sub ? path.join(dir, 'code', sub) : path.join(dir, 'code');
+  if (repoUrl) {
+    const detected = require('./services').detectServiceType(buildDir);
+    if (detected.type) type = detected.type;
+  }
+  // Repository values win over examples. Read without modifying its .env.
+  let repoEnv = {}, repoEnvText = '';
+  try {
+    const file = sourceFile(buildDir, '.env');
+    if (file) { repoEnvText = readSource(file, 256 * 1024).text || ''; repoEnv = require('dotenv').parse(repoEnvText); }
+  } catch {}
   // Only the selected context owns this profile; nested sites never retype APIs.
   const profile = readBuildProfile(buildDir);
   if (profile.kind === 'jekyll') type = 'static';
   // Creation inspects the real checkout before registration. A draft contains
   // source only: no compose/.env/database scaffolding, so Cancel stays safe.
   const discoveredPlan = require('./deployment-plan').analyze(path.join(dir, 'code'), { templatesDir, selection });
-  const hasDeclaredCompose = discoveredPlan.candidates.some(c => c.kind === 'compose');
+  const hasDeclaredCompose = discoveredPlan.selected?.kind === 'compose';
   if(prepareOnly)return {dir,type,subdir:sub,hasDeclaredCompose,plan:discoveredPlan};
   // Explicit create-modal opt-in. Never replace a repository Dockerfile; this
   // only fills the missing file after the first validation explains why it is
@@ -303,8 +321,16 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
       else ensureDockerfile(buildDir, type, templatesDir, { modernize: modernizeBuild });
     }
   }
+  const declaredPort = Number(repoEnv.PORT);
+  const nodeEnvPort = type === 'node' && Number.isInteger(declaredPort) && declaredPort > 0 && declaredPort < 65536 ? declaredPort : null;
   let appPort = port || TYPE_PORT[type] || 3000;
-  if (!port) appPort = inferPort(sub ? path.join(dir, 'code', sub) : path.join(dir, 'code'), appPort, createDockerfile);
+  if (!port) {
+    const exposed = inferPort(buildDir, 0, createDockerfile);
+    const managedRecipe = standardDockerfileType(buildDir, templatesDir, createDockerfile);
+    // A generated Node server honors PORT. A React development PORT must not
+    // replace nginx's production port, and authored EXPOSE remains authoritative.
+    appPort = managedRecipe === 'node' && nodeEnvPort ? nodeEnvPort : exposed || nodeEnvPort || appPort;
+  }
   // static/react always need our nginx.conf (SPA fallback; proxy added on link).
   // Never overwrite a repo's own conf - only fill the gap (react template has none).
   if (!hasDeclaredCompose && (type === 'static' || type === 'react')) {
@@ -337,19 +363,20 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
     dbBlock = blocks.map(b => b.compose).join('\n') + '\n';
     volBlock = '\nvolumes:\n' + blocks.map(b => `  ${b.vol}:`).join('\n');
   }
-  const envLines = hasDeclaredCompose ? [`DOMAIN=${domain || ''}`] : [
+  const envLines = hasDeclaredCompose ? [`DOMAIN=${domain || repoEnv.DOMAIN || ''}`] : [
     `APP_NAME=${name}`, `APP_TYPE=${type}`, `PORT=${appPort}`, `HOST_PORT=${host}`,
-    `DOMAIN=${domain || ''}`, ...extraLines
+    `DOMAIN=${domain || repoEnv.DOMAIN || ''}`, ...extraLines
   ];
-  fs.writeFileSync(path.join(dir, '.env'), envLines.join('\n') + '\n');
+  fs.writeFileSync(path.join(dir, '.env'), (repoEnvText ? '# --- from repo .env ---\n' + repoEnvText.replace(/\s*$/, '\n') : '') + envLines.join('\n') + '\n', { mode: 0o600 });
   // track managed keys so the env editor knows what's safe to delete
   try {
     fs.writeFileSync(path.join(dir, '.env.managed'), envLines.map(l => l.split('=')[0]).join('\n') + '\n');
   } catch {}
-  // seed app-specific keys from the repo's .env.example (never overwrite generated)
+  // Use the repository's .env first, with examples filling only missing keys.
+  // Keep generated Docker wiring separate and never rewrite source files.
   try {
     const exDir = sub ? path.join(dir, 'code', sub) : path.join(dir, 'code');
-    const have = new Set(envLines.map(l => l.split('=')[0]));
+    const have = new Set([...envLines.map(l => l.split('=')[0]), ...Object.keys(repoEnv)]);
     const missing = seedEnvExample(exDir, have);
     if (missing.length) {
       fs.appendFileSync(path.join(dir, '.env'), '# --- from repo .env.example (defaults - review secrets/domains) ---\n' + missing.map(a => `${a.key}=${a.value}`).join('\n') + '\n');

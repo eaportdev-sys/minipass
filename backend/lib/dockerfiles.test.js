@@ -231,9 +231,8 @@ try {
       assert(template.includes('pnpm install --dangerously-allow-all-builds --frozen-lockfile'), 'node: installs pnpm repos non-interactively with corepack');
       assert(template.includes('yarn install --frozen-lockfile'), 'node: installs yarn repos with corepack');
       assert(template.includes('start:built'), 'node: avoids dev start scripts when a production script exists');
-      assert(template.includes('[ ! -d .next ]'), 'node: fails the build when a next app produces no .next output');
-      assert(template.includes('BUILD PRODUCED NO .next/'), 'node: names the missing next build output loudly');
-      assert(template.includes('rebinding to 0.0.0.0'), 'node: rebinds localhost-bound start scripts so published ports can reach them');
+       assert(!template.includes('[ ! -d .next ]') && !template.includes('BUILD PRODUCED NO .next/'), 'node: a framework dependency does not impose an unrelated build-output gate');
+       assert(template.includes('--hostname 0.0.0.0'), 'node: rebinds localhost-bound start scripts so published ports can reach them');
     } else {
       assert(template.includes('FROM minipass/node:22 AS build'), 'react: uses minipass base image for build');
       assert(template.includes('FROM nginx:alpine'), 'react: uses nginx for serving');

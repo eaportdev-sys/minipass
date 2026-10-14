@@ -62,7 +62,7 @@ volumes:
   const nodeTemplate = fs.readFileSync(path.resolve(__dirname, '../../templates/node/Dockerfile'), 'utf8');
   assert(nodeTemplate.includes('npm run build --if-present') && nodeTemplate.includes('pnpm run build --if-present'), 'standard Node image builds compiled projects with the detected manager');
   assert(nodeTemplate.includes('start:built') && nodeTemplate.includes('next start'), 'standard Node image prefers production start scripts/framework start');
-  assert(nodeTemplate.includes('exec node index.js'), 'standard Node image retains the simple index.js fallback');
+   assert(nodeTemplate.includes("'index.js'") && nodeTemplate.includes('exec node'), 'standard Node image retains the simple index.js fallback alongside declared main/server entrypoints');
 
   const { serviceBlock } = require('./generator');
   const rootDefault = serviceBlock({ svcName: 'app', ctx: './code', port: 3000, host: 8000, portEnv: null });

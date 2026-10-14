@@ -4,100 +4,52 @@ const path = require('path');
 const vm = require('vm');
 const elements = new Map();
 const element = id => {
-  if (!elements.has(id)) elements.set(id, { value: '', textContent: '', innerHTML: '', style: {}, attributes: {},
+  if (!elements.has(id)) elements.set(id, { value: '', checked: false, textContent: '', innerHTML: '', style: {}, attributes: {},
     setAttribute(k, v) { this.attributes[k] = v; }, focus() { this.focused = true; } });
   return elements.get(id);
 };
-const context = vm.createContext({
-  currentApp: 'first',
+const context = vm.createContext({ currentApp: 'first',
   document: { getElementById: element, querySelector: () => ({ value: 'static' }), querySelectorAll: () => [] },
   safeHtml: t => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
-  renderDeployMarkup: (box, html) => { box.innerHTML = html; }, toast() {}, refresh() {}, closeCreate() {}, refreshSiteData: async () => {},
+  renderDeployMarkup: (box, html) => { box.innerHTML = html; }, toast() {}, refresh() {}, closeCreate() {}, refreshSiteData: async () => {}, loadEnv() {},
 });
 vm.runInContext(fs.readFileSync(path.join(__dirname, 'deployment-plan.js'), 'utf8'), context);
 const creation = fs.readFileSync(path.join(__dirname, 'create.js'), 'utf8');
 vm.runInContext('let createModalSession=1, createCleanupPromise=Promise.resolve(), createPendingId=null, createStandardDockerfile=false, createBusyOps=0, createDetectedManager="npm";\n' + creation.slice(0, creation.indexOf('async function detectType(')), context);
 const run = code => vm.runInContext(code, context);
-const fixture = { ready: false, scan: { complete: true, files: 410, textFiles: 400 }, candidates: [{ kind: 'compose', file: 'unexpected.entry', complete: true }],
-  selected: { kind: 'compose', file: 'unexpected.entry' }, reason: 'Repository reference',
-  blockers: [{ code: 'BLOCKED', message: '<img src=x onerror=boom>', file: '<file>' }],
-  manifests: [], topology: { services: [{ name: 'migrate', oneShot: true, build: { context: '.', dockerfile: 'recipe' }, dependsOn: ['db'], dependencyConditions: { db: 'service_healthy' }, env: [{ key: 'APP_ORIGIN', refs: ['PUBLIC_DOMAIN'], derived: true }] }], envNeeds: [{ key: 'PUBLIC_DOMAIN', required: true }] } };
+const fixture = { ready: false, candidates: [{ kind: 'compose', file: 'production.recipe' }], selected: { kind: 'compose', file: 'production.recipe' },
+  reason: 'Detected source', warnings: [{ message: '<img src=x onerror=boom>' }], topology: { services: [{ name: 'migrate', oneShot: true, image: 'node:24' }] } };
 async function main() {
-  let requests = 0;
-  context.fetch = async () => { requests++; throw new Error('should not request'); };
-  element('name').value = '   ';
+  let requests = [];
+  context.fetch = async (url, opts) => { requests.push({ url, body: JSON.parse(opts.body) }); return { json: async () => ({ error: 'fixture failure' }) }; };
+  element('name').value = '   '; await run('createApp()');
+  assert.equal(requests.length, 0); assert(element('name').focused);
+  element('name').value = 'Site'; element('repo').value = 'https://example.test/source.git';
   await run('createApp()');
-  assert.equal(requests, 0);
-  assert.equal(element('createNameError').textContent, 'Site name is required.');
-  assert.equal(element('name').attributes['aria-invalid'], 'true');
-  assert(element('name').focused);
-  element('name').value = 'Valid name';
-  run('createBusyOps=1');
-  await run('createApp()');
-  assert.equal(requests, 0, 'programmatic create cannot bypass busy detection');
-  run('createBusyOps=0');
-  element('createStorageGB').value = '1';
-  context.fetch = async () => ({ json: async () => ({ error: 'Site name is required.', field: 'name' }) });
-  await run('createApp()');
-  assert.equal(element('createNameError').textContent, 'Site name is required.');
-
-  context.fetch = async () => ({ ok: true, json: async () => fixture });
-  await run('loadDeploymentPlan()');
+  assert.equal(requests.length, 1, 'create submits once, without a required source-preview round trip');
+  assert.equal(requests[0].url, '/api/apps'); assert(!requests[0].body.prepareOnly);
+  assert(!requests[0].body.enforceStorage, 'ordinary creation has no quota prerequisite');
+  context.fetch = async () => ({ ok: true, json: async () => fixture }); await run('loadDeploymentPlan()');
   const html = element('deploymentPlan').innerHTML;
-  assert(html.includes('410 source files'));
-  assert(html.includes('Deployment blocked'));
-  assert(html.includes('required one-shot task') && html.includes('service_healthy'));
-  assert(html.includes('APP_ORIGIN ← PUBLIC_DOMAIN'));
+  assert(html.includes('does not approve or block deployment'));
+  assert(html.includes('not proof that every application feature works'));
   assert(html.includes('&lt;img') && !html.includes('<img'));
-  assert(!html.includes('save selection')&&!html.includes('id="deploymentEntrypoint"'),'deployment file is not selected again in Deploy');
-  assert(html.includes('<summary>Technical details</summary>')&&!html.includes('data-record="deployment-details" open'),'technical output starts collapsed');
-  assert(element('deploymentFileSetup').innerHTML.includes('save source change'),'post-creation source repairs stay in Setup');
-  context.currentApp='first';
-  context.reportPlan={...fixture,verification:{ok:false,at:'2026-10-13',errors:['Stylesheet failed <unsafe>'],pages:[{service:'web',url:'http://example.test',status:200,ok:false,assets:[],screenshotIndex:0}],probes:[{service:'api',ok:true}]}};
-  const reportHtml=run('deploymentPlanMarkup(reportPlan)');
-  assert(reportHtml.includes('Last browser/API verification — failed'));
-  assert(reportHtml.includes('Stylesheet failed &lt;unsafe&gt;'));
-  assert(reportHtml.includes('/api/apps/first/verification/screenshot/0'));
-  context.warningPlan={...fixture,verification:{ok:true,errors:[],warnings:['web: Optional external font unavailable <unsafe>'],pages:[{service:'web',url:'http://example.test',status:200,ok:true,assets:[],warnings:['Optional external font unavailable <unsafe>'],screenshotIndex:0}]}};
-  const warningHtml=run('deploymentPlanMarkup(warningPlan)');
-  assert(warningHtml.includes('Last check: passed with warnings')&&warningHtml.includes('Last browser/API verification — passed with warnings'));
-  assert(warningHtml.includes('Warning:</b> web: Optional external font unavailable &lt;unsafe&gt;')&&!warningHtml.includes('<unsafe>'));
-  context.provisioningPlan={...fixture,provisioning:[{key:'SQL_PASSWORD',service:'database',reason:'database password generated'},{key:'DB_CONNECTION',service:'api',reason:'repository database connection linked'}]};
-  const privateInputs=run('deploymentPlanMarkup(provisioningPlan)');
-  assert(privateInputs.includes('Prepared repository inputs (values kept private)'));
-  assert(privateInputs.includes('DB_CONNECTION')&&privateInputs.includes('database password generated'));
-  context.localPlan={...fixture,localUrl:'https://10.0.0.30:8021/',accessMode:'local',localCaReady:true};
-  const localMarkup=run('deploymentPlanMarkup(localPlan)');
-  assert(localMarkup.includes('Local / LAN')&&localMarkup.includes('https://10.0.0.30:8021/'));
-  assert(localMarkup.includes('/api/apps/first/local-ca')&&localMarkup.includes('Trust certificate'));
-  assert(!localMarkup.includes('use local / LAN address'),'saved local access is displayed, not requested again');
-  const originalLoad=context.loadDeploymentPlan;
-  context.loadEnv=()=>{};context.loadDeploymentPlan=()=>{};
-  context.fetch=async(url,opts)=>{sent={url,body:JSON.parse(opts.body)};return{json:async()=>({ok:true,changed:['DB_CONNECTION'],issues:[]})}};
+  assert(!html.includes('Deployment blocked') && !html.includes('browser/API verification'));
+  assert(element('deploymentFileSetup').innerHTML.includes('auto-detect'));
   let sent;
-  await run('prepareComposeInputs()');
-  assert.equal(sent.url,'/api/apps/first/compose-inputs');
-  await run('saveVerificationUrl(true)');
-  assert.deepEqual(sent.body,{access:'local'},'local selection never reuses a stale/copied public URL');
-  context.loadDeploymentPlan=originalLoad;
-  element('deploymentEntrypoint').value = '0';
-  sent=null;
   context.fetch = async (url, opts) => { sent = { url, body: JSON.parse(opts.body) }; return { json: async () => ({ ok: true }) }; };
-  await run('saveDeploymentEntrypoint()');
-  assert.equal(sent.url, '/api/apps/first/deployment-plan');
-  assert.deepEqual(sent.body.selection, { kind: 'compose', file: 'unexpected.entry' });
-  await run('saveDeploymentEntrypoint(true)');
-  assert.equal(sent.body.selection, null);
-
+  element('deploymentEntrypoint').value = '0'; await run('saveDeploymentEntrypoint()');
+  assert.equal(sent.body.selection.file, 'production.recipe');
+  await run('saveDeploymentEntrypoint(true)'); assert.equal(sent.body.selection, null);
+  const originalLoad = context.loadDeploymentPlan; context.loadDeploymentPlan = () => {};
+  await run('saveSiteAccess(true)'); assert.equal(sent.url, '/api/apps/first/access'); assert.deepEqual(sent.body, { access: 'local' });
+  context.loadDeploymentPlan = originalLoad;
   let finish;
   context.fetch = () => new Promise(resolve => { finish = () => resolve({ ok: true, json: async () => ({ ...fixture, reason: 'OLD RESPONSE' }) }); });
-  const old = run('loadDeploymentPlan()');
-  context.currentApp = 'second';
-  context.fetch = async () => ({ ok: true, json: async () => ({ ...fixture, reason: 'CURRENT RESPONSE' }) });
-  await run('loadDeploymentPlan()');
+  const old = run('loadDeploymentPlan()'); context.currentApp = 'second';
+  context.fetch = async () => ({ ok: true, json: async () => ({ ...fixture, reason: 'CURRENT RESPONSE' }) }); await run('loadDeploymentPlan()');
   finish(); await old;
-  assert(element('deploymentPlan').innerHTML.includes('CURRENT RESPONSE'));
-  assert(!element('deploymentPlan').innerHTML.includes('OLD RESPONSE'));
-  console.log('Workflow UI: inline name validation, busy gate, escaped persistent plan, saved entrypoints and stale response isolation: OK');
+  assert(element('deploymentPlan').innerHTML.includes('CURRENT RESPONSE')); assert(!element('deploymentPlan').innerHTML.includes('OLD RESPONSE'));
+  console.log('Basic workflow UI: one create request, optional quotas/source overrides, advisory detection, escaping and stale-response protection: OK');
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

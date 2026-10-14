@@ -43,16 +43,6 @@ RUN if [ "$PACKAGE_MANAGER" = "pnpm" ]; then pnpm run build --if-present; \
     elif [ "$PACKAGE_MANAGER" = "yarn" ]; then if node -e "const s=require('./package.json').scripts||{};process.exit(s.build?0:1)"; then yarn run build; fi; \
     else npm run build --if-present; fi
 
-# A Next.js production server needs the build output. Fail here with the
-# reason instead of shipping an image that crash-loops on `next start`
-# (e.g. repos whose build script targets a worker bundle, never .next/).
-RUN if node -e "const p=require('./package.json');const d={...(p.dependencies||{}),...(p.devDependencies||{})};process.exit(d.next?0:1)"; then \
-      if [ ! -d .next ]; then \
-        echo "BUILD PRODUCED NO .next/ BUT next IS A DEPENDENCY. The repo build did not run 'next build' (this repo may target a different runtime, e.g. a worker bundle). Add a repo Dockerfile that serves the real output, or a start:prod script for it - 'next start' can never work without .next/."; \
-        exit 1; \
-      fi; \
-    fi
-
 # Runtime stage — smaller, no build tools
 FROM minipass/node:22-runtime
 ARG PACKAGE_MANAGER=npm
@@ -61,17 +51,14 @@ ENV PACKAGE_MANAGER=${PACKAGE_MANAGER}
 WORKDIR /app
 
 # Copy built application from build stage
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/package*.json ./
 COPY --from=build /app ./
 
 EXPOSE 3000
 
-# Prefer a production script, avoid common dev-server `start` scripts, then fall
-# back to framework CLIs or index.js. Run scripts with the same manager used to
-# install so pnpm/yarn workspaces keep their runtime layout.
+# Use the repository's launch script or declared main, then a conventional
+# server entrypoint. Run scripts with the same manager used to install.
 # A 127.0.0.1 bind is unreachable through Docker port publishing (the socket
 # only accepts loopback inside the container's own network namespace), so known
 # server bind flags are normalized to 0.0.0.0 - same class of environment
 # adaptation as PORT injection. Anything else runs untouched.
-CMD ["sh", "-c", "pm=npm; if [ \"$PACKAGE_MANAGER\" = \"pnpm\" ]; then corepack enable >/dev/null 2>&1; pm=pnpm; elif [ \"$PACKAGE_MANAGER\" = \"yarn\" ]; then corepack enable >/dev/null 2>&1; pm=yarn; fi; script=$(node -e \"const p=require('./package.json');const s=p.scripts||{};const dev=/^(next dev|nuxt dev|vite($| )|react-scripts start|ng serve|vue-cli-service serve)/;for (const k of ['start:prod','start:production','start:built','serve']) if(s[k]){console.log(k);process.exit(0)} if(s.start&&!dev.test(s.start)){console.log('start');process.exit(0)} process.exit(1)\" 2>/dev/null || true); if [ -n \"$script\" ]; then body=$(node -e \"console.log((require('./package.json').scripts||{})['$script']||'')\" 2>/dev/null || true); case \"$body\" in *-H\\ 127.0.0.1*|*-H127.0.0.1*|*--hostname*127.0.0.1*|*--host*127.0.0.1*) echo \"panel: start script binds 127.0.0.1, rebinding to 0.0.0.0 so the published port can reach it\"; body=$(printf '%s' \"$body\" | sed -e 's/-H  *127\\.0\\.0\\.1/-H 0.0.0.0/g' -e 's/-H127\\.0\\.0\\.1/-H0.0.0.0/g' -e 's/--hostname[= ]127\\.0\\.0\\.1/--hostname 0.0.0.0/g' -e 's/--host[= ]127\\.0\\.0\\.1/--host 0.0.0.0/g'); exec sh -c \"export PATH=\\\"$PWD/node_modules/.bin:$PATH\\\"; $body\";; *) exec $pm run $script;; esac; elif node -e \"const p=require('./package.json');process.exit((p.dependencies&&p.dependencies.next)||(p.devDependencies&&p.devDependencies.next)?0:1)\"; then exec $pm exec next start -H 0.0.0.0 -p ${PORT:-3000}; elif [ -f index.js ]; then exec node index.js; else echo 'No production start script found (start was a dev server). Add start:prod/start:built/serve or index.js.'; exit 1; fi"]
+CMD ["sh", "-c", "pm=npm; if [ \"$PACKAGE_MANAGER\" = \"pnpm\" ]; then corepack enable >/dev/null 2>&1; pm=pnpm; elif [ \"$PACKAGE_MANAGER\" = \"yarn\" ]; then corepack enable >/dev/null 2>&1; pm=yarn; fi; script=$(node -e \"const p=require('./package.json');const s=p.scripts||{};for(const k of ['start:prod','start:production','start:built','start','serve'])if(s[k]){console.log(k);process.exit(0)}process.exit(1)\" 2>/dev/null || true); if [ -n \"$script\" ]; then body=$(node -e \"console.log((require('./package.json').scripts||{})['$script']||'')\" 2>/dev/null || true); case \"$body\" in *-H\\ 127.0.0.1*|*-H127.0.0.1*|*--hostname*127.0.0.1*|*--host*127.0.0.1*) body=$(printf '%s' \"$body\" | sed -e 's/-H  *127\\.0\\.0\\.1/-H 0.0.0.0/g' -e 's/-H127\\.0\\.0\\.1/-H0.0.0.0/g' -e 's/--hostname[= ]127\\.0\\.0\\.1/--hostname 0.0.0.0/g' -e 's/--host[= ]127\\.0\\.0\\.1/--host 0.0.0.0/g'); exec sh -c \"export PATH=\\\"$PWD/node_modules/.bin:$PATH\\\"; $body\";; *) exec $pm run $script;; esac; elif entry=$(node -e \"const fs=require('fs'),path=require('path');let p={};try{p=require('./package.json')}catch{}const root=fs.realpathSync('.');for(const file of [p.main,'server.js','index.js','server.cjs','index.cjs','server.mjs','index.mjs','dist/server.js','dist/index.js']){if(typeof file!=='string'||!/[.](js|cjs|mjs)$/.test(file))continue;try{const real=fs.realpathSync(file);if(real.startsWith(root+path.sep)&&fs.statSync(real).isFile()){console.log('./'+path.relative(root,real));process.exit(0)}}catch{}}process.exit(1)\"); then exec node \"$entry\"; elif node -e \"const p=require('./package.json');process.exit((p.dependencies&&p.dependencies.next)||(p.devDependencies&&p.devDependencies.next)?0:1)\"; then exec $pm exec next start -H 0.0.0.0 -p ${PORT:-3000}; else echo 'No production start script or runnable entrypoint found. Declare package.json start/main or provide server.js/index.js.'; exit 1; fi"]

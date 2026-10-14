@@ -32,16 +32,23 @@ function address(meta, root, selection, port=meta.hostPort) {
   return `${scheme}://${net.isIP(host)===6?'['+host+']':host}:${port}/`;
 }
 function isLocal(meta) { return meta.accessMode==='local'||(!meta.publicUrl&&!meta.domain&&meta.accessMode!=='public'); }
+function validPublicUrl(value) {
+  const u = new URL(value);
+  if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password || u.search || u.hash) throw new Error('Site address must be a plain HTTP/HTTPS URL without credentials/query/fragment');
+  return u.toString();
+}
 function applyOrigins(config,dir,root,selection,meta) {
-  if(!isLocal(meta)||!meta.localUrl)return;
+  const warnings=[];
+  if(!isLocal(meta)||!meta.localUrl)return warnings;
   let inputs={};try{inputs=JSON.parse(fs.readFileSync(path.join(dir,'.compose-inputs.json'),'utf8')).origins || {};}catch{}
   for(const origin of derivedOrigins(root,selection)) {
     const s=config.services[origin.service];
     if(!s||!s.environment)continue;
     if(inputs[origin.key]&&(origin.direct?s.environment[origin.field]===inputs[origin.key]:s.environment[origin.field]===`${origin.scheme}://${inputs[origin.key]}`||s.environment[origin.field]===`${origin.scheme}://${inputs[origin.key]}/`))s.environment[origin.field]=new URL(meta.localUrl).origin;
     let actual;try{actual=new URL(s.environment[origin.field]).origin;}catch{continue;}
-    if(actual!==new URL(meta.localUrl).origin)throw Object.assign(new Error(`Declared origin input ${origin.key} points somewhere other than this site's local address. Select local/LAN access to explicitly relink it, or configure public routing; its saved value was preserved.`),{status:409});
+    if(actual!==new URL(meta.localUrl).origin)warnings.push(`Saved origin ${origin.key} differs from the local address; its value was preserved. Update it if local access needs it.`);
   }
+  return warnings;
 }
 function validateTarget(url, meta, sites) {
   if(!url)return;
@@ -79,4 +86,4 @@ async function ensureTls({dir,host,run}) {
     return {cert:fs.readFileSync(certFile,'utf8'),key:fs.readFileSync(keyFile,'utf8'),ca:fs.readFileSync(caFile,'utf8')};
   }finally{fs.rmSync(temporary,{recursive:true,force:true});}
 }
-module.exports={derivedOrigins,hostname,address,isLocal,validateTarget,ensureTls,applyOrigins};
+module.exports={derivedOrigins,hostname,address,isLocal,validateTarget,validPublicUrl,ensureTls,applyOrigins};

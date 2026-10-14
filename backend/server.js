@@ -34,7 +34,6 @@ const repoAnalysis = require('./lib/repo-analysis');
 const deploymentPlan = require('./lib/deployment-plan');
 const { sourceFile, readSource, isDockerfile } = require('./lib/repository-files');
 const repositoryCompose = require('./lib/repository-compose');
-const browserVerification = require('./lib/browser-verification');
 const publication = require('./lib/publication');
 const composeInputs = require('./lib/compose-inputs');
 const localAccess = require('./lib/local-access');
@@ -162,12 +161,8 @@ app.use((req, res, next) => {
   if (panelAuthed(req)) return next();
   return res.status(401).json({ error: 'panel login required' });
 });
-app.use('/api/apps/:id', async (req, res, next) => {
+app.use('/api/apps/:id', (req, res, next) => {
   if (!['GET', 'HEAD'].includes(req.method) && lifecycleLocks.has(req.params.id)) return res.status(409).json({ error: 'site lifecycle operation in progress - retry when it finishes' });
-  if (!['GET', 'HEAD', 'DELETE'].includes(req.method)) {
-    try { await quotas.ensure(load().apps.find(a => a.id === req.params.id) || {}); }
-    catch (e) { return res.status(e.status || 503).json({ error: e.message }); }
-  }
   next();
 });
 app.get('/api/panel/auth-status', (req, res) => {
@@ -573,7 +568,7 @@ app.post('/api/apps', async (req, res) => {
     const id = req.body.pendingId || siteIdentity.allocate(APPS_DIR, load(), new Set([...creatingSites, ...lifecycleLocks]));
     if (lifecycleLocks.has(id) || creatingSites.has(id) || [...load().apps, ...(load().trash || [])].some(a => a.id === id)) return res.status(409).json({ error: 'site identity is already registered or busy' });
     const draft = req.body.pendingId ? siteIdentity.pending(APPS_DIR, id) : null;
-    const storageBytes = quotas.limitBytes(req.body.storageGB);
+    const storageBytes = req.body.enforceStorage === true ? quotas.limitBytes(req.body.storageGB) : null;
     creatingId = id;
     creatingSites.add(id);
     let appDomain;
@@ -645,17 +640,16 @@ app.post('/api/apps', async (req, res) => {
       fs.writeFileSync(path.join(pendingDir,'.pending-create.json'),JSON.stringify({id,repoUrl:finalRepoUrl,branch:explicitBranch,subdir}),{mode:0o600});
       const prepared=createApp({appsDir:path.dirname(pendingDir),templatesDir:TEMPLATES_DIR,name:id,type,repoUrl:finalRepoUrl,db:dbs,domain:appDomain,hostPort,gitToken:siteToken,subdir,gitBranch:explicitBranch,prepareOnly:true,selection:entrypoint});
       const plan=prepared.plan;
-      const choiceErrors=plan.blockers.filter(b=>['ENTRYPOINT_CHOICE','STALE_SELECTION','TOPOLOGY_NOT_FOLLOWED','INVALID_COMPOSE','INCOMPLETE_SCAN','MISSING_COMPOSE_REFERENCE'].includes(b.code));
       let repositoryDatabases=[];try{if(plan.selected?.kind==='compose')repositoryDatabases=composeInputs.declaredDatabases(path.join(prepared.dir,'code'),plan.selected);}catch{}
-      if(req.body.prepareOnly===true||choiceErrors.length) return res.status(choiceErrors.length&&req.body.prepareOnly!==true?409:200).json({ok:!choiceErrors.length,prepared:true,pendingId:id,plan,repositoryDatabases,...(choiceErrors.length?{needsEntrypoint:true,error:'Choose the deployment file here before creating the site.'}:{})});
+      if(req.body.prepareOnly===true) return res.json({ok:true,prepared:true,pendingId:id,plan,repositoryDatabases});
       entrypoint=plan.selected;
     }
-    // Requested allowance is always validated and recorded. When the host
+    // Storage enforcement is opt-in. When its host bridge
     // quota bridge is unavailable, creation proceeds unenforced rather than
     // bricking site creation - the UI labels it honestly as not enforced.
     // Only validation (400) and capacity (409) failures stay hard.
     let storageQuota = null, storageWarning = null;
-    try {
+    if (storageBytes !== null) try {
       const reserved = await quotas.reserve(id, storageBytes);
       if (!reserved.enforced) throw Object.assign(new Error('host did not confirm an enforced storage allowance'), { status: 503 });
       storageQuota = { projectId: reserved.projectId, limitBytes: storageBytes, enforced: true };
@@ -670,8 +664,10 @@ app.post('/api/apps', async (req, res) => {
     fs.writeFileSync(path.join(pendingDir, '.pending-create.json'), JSON.stringify({ id, repoUrl: finalRepoUrl, branch: explicitBranch, subdir }), { mode: 0o600 });
     const created = createApp({ appsDir: APPS_DIR, templatesDir: TEMPLATES_DIR, name: id, type, repoUrl: finalRepoUrl, db: dbs, port, domain: appDomain, hostPort, gitToken: siteToken, subdir, gitBranch: explicitBranch, standardDockerfile: req.body.standardDockerfile === true, modernizeBuild: req.body.modernizeBuild === true,selection:entrypoint });
     siteIdentity.writeName(created.dir, id, rawName);
-    fs.writeFileSync(path.join(created.dir, '.storage-quota.json'), JSON.stringify({ projectId: storageQuota.projectId, limitBytes: storageBytes }), { mode: 0o600 });
-    quotas.bindDatabases(created.dir);
+    if (storageQuota) {
+      fs.writeFileSync(path.join(created.dir, '.storage-quota.json'), JSON.stringify({ projectId: storageQuota.projectId, limitBytes: storageBytes }), { mode: 0o600 });
+      quotas.bindDatabases(created.dir);
+    }
     envSetManaged(created.dir, { COMPOSE_PROJECT_NAME: id });
     const db_ = load();
     const meta = { id, name: rawName, type: created.type || type, repoUrl: finalRepoUrl, github: ghLink, db: created.hasDeclaredCompose ? [] : dbs, domain: appDomain, accessMode, deploymentEntrypoint:entrypoint,token, hostPort, accessHost: req.hostname, packageManager, subdir: created.subdir || '', storageQuota, buildOptions: { modernize: req.body.modernizeBuild === true }, createdAt: new Date().toISOString() };
@@ -723,7 +719,7 @@ app.post('/api/apps', async (req, res) => {
       }
     }catch(e){panelLog.logEvent({level:'warn',area:'create',site:id,message:'Repository input initialization needs review: '+e.message});}
     const plan = refreshDeploymentPlan(meta, created.dir);
-    res.json({ ...pubApp(meta), plan, localUrl: meta.localUrl || `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote, storageEnforced: storageQuota.enforced === true, ...(storageWarning ? { storageWarning } : {}), ...(envNeeds.length ? { envNeeds } : {}) });
+    res.json({ ...pubApp(meta), plan, localUrl: meta.localUrl || `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote, storageEnforced: storageQuota?.enforced === true, ...(storageWarning ? { storageWarning } : {}), ...(envNeeds.length ? { envNeeds } : {}) });
   } catch (e) {
     const error = redactUrl(e.message);
     try { panelLog.logEvent({ level: 'error', area: 'create', site: creatingId, message: error }); } catch {}
@@ -1057,19 +1053,6 @@ function syncProvisionedDomain(meta,dir,result) {
   if(stored){stored.domain=domain;save(db_);}
   meta.domain=domain;
 }
-async function enforceDeploymentPlan(meta, dir, root, deferEnvironment = false) {
-  const plan = refreshDeploymentPlan(meta, dir, root);
-  const blockers = plan.blockers.filter(b => (!deferEnvironment || b.code !== 'MISSING_BUILD_ENVIRONMENT') &&
-    // Compose resolves overrides, includes, interpolation and profiles. Static
-    // first-file advice must not reject valid values supplied by an overlay or
-    // a referenced env file before the engine's authoritative config validation.
-    !(plan.selected && plan.selected.kind === 'compose' && ['REQUIRED_ENV','MISSING_RECIPE','MISSING_DEPENDENCY','MISSING_ENV_FILE'].includes(b.code)));
-  if (!blockers.length) return plan;
-  const failure = 'Deployment plan blocked - running containers untouched: ' + blockers.map(b => b.message).join(' ');
-  fs.appendFileSync(path.join(dir, 'deploy.log'), failure + '\n');
-  await recordDeploy(meta.id, { sha: await currentSha(dir), at: new Date().toISOString(), status: 'error', error: failure.slice(0, 2000) });
-  throw Object.assign(new Error(failure), { status: 409 });
-}
 // Detect a landing path per service. Frontend images always open at /: SPA
 // fallbacks return 200 for arbitrary health paths and cannot prove such a route
 // exists. Backend services are probed by their own Compose DNS name and port.
@@ -1079,15 +1062,21 @@ async function autodetectHome(id) {
     const fresh = load().apps.find(a => a.id === id);
     if (!fresh) return;
     const services = svc.fullServices(fresh, dir).filter(s => s.enabled !== false);
-    const net = `${id}_default`;
+    const networks = new Map();
+    if (fresh.executor === 'repository-compose') {
+      for (const container of await repositoryCompose.inspectProject({ id, docker: DOCKER_BIN, run: runOut })) {
+        networks.set(container.Config.Labels['com.docker.compose.service'], Object.keys(container.NetworkSettings.Networks || {})[0]);
+      }
+    }
     const cands = routes.PROBE_PATHS;
     const results = [];
     for (const service of services) {
+      const net = networks.get(service.name) || `${id}_default`;
       if (['static', 'react'].includes(service.type)) {
         results.push({ name: service.name, path: '', openPaths: [{ path: '/', code: 200, live: true, source: 'frontend' }] });
         continue;
       }
-      const ctxDir = path.join(dir, 'code', service.subdir || '');
+      const ctxDir = path.join(fresh.composeSource || path.join(dir, 'code'), service.subdir || '');
       const sourceRoutes = routes.detectOpenPaths(ctxDir);
       const directRoutes = sourceRoutes.filter(r => r.direct).map(r => r.path);
       const mountedRoutes = sourceRoutes.filter(r => !r.direct).map(r => r.path);
@@ -1409,7 +1398,6 @@ async function deployNow(id, opts = {}) {
   // One log per attempt. Clear before any preflight/pre-build output, not just
   // before Docker build (which used to erase successful pre-build evidence).
   fs.writeFileSync(buildLog, `--- deploy ${opSource} started ${new Date().toISOString()} ---\n`);
-  fs.writeFileSync(path.join(dir, '.verification.json'), JSON.stringify({ ok: false, pending: true, phase: 'configuration/build', at: new Date().toISOString(), pages: [], probes: [], errors: [] }), { mode: 0o600 });
   let buildCodeDir = codeDir;
   let composeCmd = meta.storageQuota ? `${COMPOSE_BIN} -p ${id}` : COMPOSE_BIN;
   let sourceSha = null;
@@ -1462,9 +1450,9 @@ async function deployNow(id, opts = {}) {
     }
   } // end pull (local rebuilds skip the sync: box files are the source of truth)
   }
-  // The actual pulled/detached source, not yesterday's checkout, owns the plan.
-  // Stop before database wiring, recipe repair, pre-build or image building.
-  const sourcePlan = await enforceDeploymentPlan(meta, dir, buildCodeDir, true);
+  // Read the actual checkout to choose its executor. Analysis is advice, not
+  // permission to launch: Docker/Compose report real build and runtime failures.
+  const sourcePlan = refreshDeploymentPlan(meta, dir, buildCodeDir);
   if (sourcePlan.selected && sourcePlan.selected.kind === 'compose') {
     deployOps.get(id).executor = 'repository-compose';
     const result = await deployRepositoryCompose(meta, dir, buildCodeDir, sourcePlan, opts, sourceSha);
@@ -1472,7 +1460,16 @@ async function deployNow(id, opts = {}) {
     return result;
   }
   if (meta.executor === 'repository-compose') throw new Error('The repository Compose entrypoint is missing; restore its instructions before deploying (existing services are untouched)');
-  // Only a supported, complete source plan may reach the panel's executor.
+  if (sourcePlan.selected?.kind === 'dockerfile') {
+    const services = svc.fullServices(meta, dir);
+    const service = services.find(s => (s.subdir || '.') === path.posix.dirname(sourcePlan.selected.file));
+    if (service && !service.dockerfile) {
+      service.dockerfile = path.posix.basename(sourcePlan.selected.file);
+      meta.services = services;
+      const state = load(), stored = state.apps.find(a => a.id === id);
+      if (stored) { stored.services = services; save(state); }
+    }
+  }
   // Normalize the persisted project before its first Docker command.
   try {
     const ymlPath = path.join(dir, 'docker-compose.yml');
@@ -1495,9 +1492,7 @@ async function deployNow(id, opts = {}) {
     const unset = missingEnvVars(dir).unset;
     if (unset.length) fs.appendFileSync(buildLog, `--- env warning: code references unset vars (${unset.slice(0, 12).join(', ')}${unset.length > 12 ? ', …' : ''}) - add values in Environment if the app requires them ---\n`);
   } catch {}
-  await quotas.ensure(meta);
-  if (meta.storageQuota) await quotas.verifyDatabases(meta.id, dir);
-  // Rebind only after source-plan validation, preserving own-container claims.
+  // Preserve own-container claims while rebinding taken publication ports.
   try {
     const moved = await rebindHostPorts(id, dir, meta, composeCmd);
     if (moved.length) fs.appendFileSync(buildLog, moved.map(u => `host port ${u.from} taken - ${u.service} moved to ${u.to}\n`).join(''));
@@ -1599,7 +1594,6 @@ async function deployNow(id, opts = {}) {
     await recordDeploy(id, { sha: shaSe, at: new Date().toISOString(), status: 'error', error: ('missing build file - running containers untouched: ' + e.message).slice(-500) });
     throw e;
   }
-  await enforceDeploymentPlan(meta, dir, buildCodeDir);
   // automatic pre-build: a repo-owned Dockerfile that expects compiled output
   // (dist/) without compiling it gets the repo's own build script run first in
   // a disposable builder container. The Dockerfile itself is never modified;
@@ -1707,7 +1701,6 @@ async function deployNow(id, opts = {}) {
   // atomic deploy: snapshot running images, build WITHOUT touching containers,
   // swap only on success, health-gate the new containers, roll back on failure.
   const snaps = await snapshotImages(id, dir);
-  const verifierImage = await ensureBrowserVerifier(id, dir);
   checkCancelled(id);
   const scopeSuffix = scope ? ` ${scope}` : '';
   fs.appendFileSync(buildLog, '--- Docker image build ---\n');
@@ -1775,28 +1768,15 @@ async function deployNow(id, opts = {}) {
     await recordDeploy(id, { sha, at: stamp(), status: 'error', error: ('new containers unhealthy - rolled back: ' + gate.detail).slice(-500) });
     throw new Error('new containers unhealthy - rolled back: ' + gate.detail);
   }
-  const verification = await verifyPublishedApplication(meta, dir, buildCodeDir, verifierImage, null, opts.originHost);
-  if (!verification.ok) {
-    await rollbackImages(dir, snaps);
-    if (!snaps.length) await sh(`${composeCmd} stop`, dir);
-    const failure = 'Browser/API verification failed: ' + verification.errors.join('; ');
-    await recordDeploy(id, { sha, at: stamp(), status: 'error', error: failure.slice(0, 2000), verification });
-    throw new Error(failure);
-  }
-  await recordDeploy(id, { sha, at: stamp(), status: 'ok', verification, services: only.length ? only : svc.fullServices(meta, dir).filter(s => s.enabled !== false).map(s => s.name) });
+  await recordDeploy(id, { sha, at: stamp(), status: 'ok', runtime: gate.detail || 'Application containers are running steadily', services: only.length ? only : svc.fullServices(meta, dir).filter(s => s.enabled !== false).map(s => s.name) });
   // Landing-path discovery is optional follow-up work. Do not hold the deploy
   // lock (and keep the UI pulsing) after the release is already healthy/live.
   autodetectHome(id).catch(e => console.error(id, 'home detection:', e.message));
   return true;
   } catch (e) {
-    // Also retain failures before the build stage (quota checks, staging, etc.).
+    // Also retain failures before the build stage (source sync, staging, etc.).
     // Stage-specific failures already recorded above must not be duplicated.
     const op = deployOps.get(id);
-    try {
-      const verificationFile = path.join(appDir(APPS_DIR, id), '.verification.json');
-      const current = JSON.parse(fs.readFileSync(verificationFile, 'utf8'));
-      if (current.pending) fs.writeFileSync(verificationFile, JSON.stringify({ ...current, pending: false, errors: ['Browser verification was not reached: ' + panelLog.redact(e.message).slice(0, 1000)] }), { mode: 0o600 });
-    } catch {}
     if (op && !op.failureRecorded) {
       await recordDeploy(id, { at: new Date().toISOString(), status: 'error',
         error: panelLog.redact(e.message).slice(0, 2000) });
@@ -1825,30 +1805,6 @@ function deploymentRunners(id, dir) {
     logged: (bin, args, extra = {}) => { checkCancelled(id); return runLogged(bin, args, { ...options, logFile: path.join(dir, 'deploy.log'), ...extra }); }
   };
 }
-async function ensureBrowserVerifier(id, dir) {
-  fs.appendFileSync(path.join(dir, 'deploy.log'), '--- checking isolated browser verification engine ---\n');
-  return browserVerification.ensure({ docker: DOCKER_BIN, templates: TEMPLATES_DIR, dataDir: path.dirname(DATA_FILE), ...deploymentRunners(id, dir) });
-}
-async function verifyPublishedApplication(meta, dir, root, image, model = null, requestedHost = null) {
-  const services = model ? model.services.filter(s => s.role === 'application') : svc.fullServices(meta, dir).filter(s => s.enabled !== false);
-  const host = requestedHost || meta.accessHost || 'host.docker.internal';
-  const originHost = /^(?:localhost|127\.0\.0\.1|::1)$/.test(host) ? 'host.docker.internal' : host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-  const local=localAccess.isLocal(meta);
-  const publicUrl = local ? null : meta.publicUrl || (meta.domain ? `https://${meta.domain}` : null);
-  const targets = browserVerification.targetsFor({ services, config: model && model.config, root, originHost, publicUrl, homePath: meta.homePath || '' });
-  // The helper joins an actual project network, not an assumed *_default.
-  const inspected = await repositoryCompose.inspectProject({ id: meta.id, docker: DOCKER_BIN, ...deploymentRunners(meta.id, dir) });
-  const names = new Set(services.map(s => s.name));
-  const network = [...new Set(inspected.filter(c => names.has(c.Config.Labels['com.docker.compose.service']) || model && model.categories && model.categories[c.Config.Labels['com.docker.compose.service']] === 'routing').flatMap(c => Object.keys(c.NetworkSettings.Networks || {})))];
-  if (!network.length) throw new Error('No application network is available for website/API verification');
-  if (model && model.config['x-minipass']) for (const target of targets.targets) {
-    const route = (model.config['x-minipass'].routes || []).find(r => r.service === target.service);
-    if (route) target.release = route.release;
-    target.local=local;
-  }
-  const localCa=local&&meta.localUrl&&meta.localUrl.startsWith('https:')?fs.readFileSync(path.join(dir,'.local-tls','ca.crt'),'utf8'):null;
-  return browserVerification.execute({ id: meta.id, dir, image, docker: DOCKER_BIN, network, localCa, ...targets, ...deploymentRunners(meta.id, dir), check: () => checkCancelled(meta.id) });
-}
 async function deployRepositoryCompose(meta, dir, root, plan, opts, sourceSha) {
   const io = deploymentRunners(meta.id, dir);
   const entrypoint = { ...plan.selected };
@@ -1873,10 +1829,11 @@ async function deployRepositoryCompose(meta, dir, root, plan, opts, sourceSha) {
   const inputs=composeInputs.provision({dir,root,selection:entrypoint,meta,containers,volumes});
   syncProvisionedDomain(meta,dir,inputs);
   if(inputs.changed.length)fs.appendFileSync(path.join(dir,'deploy.log'),'--- repository database inputs prepared: '+inputs.changed.join(', ')+' ---\n');
-  if(inputs.issues.length)throw Object.assign(new Error(inputs.issues.map(i=>i.message).join(' ')),{status:409});
+  for(const issue of inputs.issues)fs.appendFileSync(path.join(dir,'deploy.log'),'--- configuration note: '+issue.message+' ---\n');
   plan=refreshDeploymentPlan(meta,dir,root);
   const config = await repositoryCompose.resolve({ compose: composeArgv(), id: meta.id, dir, root, entrypoint, run: io.run });
-  localAccess.applyOrigins(config,dir,root,entrypoint,meta);
+  const originWarnings=localAccess.applyOrigins(config,dir,root,entrypoint,meta);
+  for(const warning of originWarnings)fs.appendFileSync(path.join(dir,'deploy.log'),'--- '+warning+' ---\n');
   // Publish only keys and redacted command summaries from the authoritative
   // combined model. Literal env values never enter the report/API response.
   const resolvedTopology = require('./lib/compose-read').parseCompose(require('yaml').stringify(config),entrypoint.file);
@@ -1886,41 +1843,42 @@ async function deployRepositoryCompose(meta, dir, root, plan, opts, sourceSha) {
   plan.blockers=plan.blockers.filter(b=>!['REQUIRED_ENV','MISSING_RECIPE','MISSING_DEPENDENCY','MISSING_ENV_FILE'].includes(b.code));
   plan.ready=plan.blockers.length===0;deploymentPlan.persist(dir,plan);
   await repositoryCompose.inferImagePorts(config, { docker: DOCKER_BIN, ...io });
-  await quotas.ensure(meta);
   // Preserve claims held by the same declared service, but do not steal a port
   // from a differently named old service during executor/source migration.
   const model = repositoryCompose.prepare(config, { id: meta.id, dir, root, meta: { ...meta, deploymentEntrypoint: entrypoint }, occupied: [...occupied] });
   const apps = model.services.filter(s => s.role === 'application').sort((a, b) => Number(b.frontend) - Number(a.frontend));
+  for (const service of apps) {
+    const previous = (meta.services || []).find(s => s.name === service.name);
+    if (previous) for (const key of ['homePath', 'openPaths']) if (previous[key] !== undefined) service[key] = previous[key];
+  }
   const primary = apps.find(s => s.hostPort) || apps[0];
   if (primary) primary.primary = true;
   if(localAccess.isLocal(meta)&&primary&&primary.hostPort) {
     const actual=localAccess.address(meta,root,entrypoint,primary.hostPort);
-    if(actual!==meta.localUrl)throw Object.assign(new Error('The allocated local port changed. Save local/LAN access again before deploying; the application origin has not been guessed.'),{status:409});
+    meta.localUrl=actual;
+    localAccess.applyOrigins(model.config,dir,root,entrypoint,meta);
     const state=load(),stored=state.apps.find(a=>a.id===meta.id);if(stored){Object.assign(stored,{localUrl:actual,accessMode:'local'});save(state);}
   }
   model.services = [...apps, ...model.services.filter(s => s.role !== 'application')];
-  const browser = await ensureBrowserVerifier(meta.id, dir);
-  const publisher = await publication.ensure({ docker: DOCKER_BIN, templates: TEMPLATES_DIR, ...io });
   const tls=localAccess.isLocal(meta)&&meta.localUrl&&meta.localUrl.startsWith('https:')?await localAccess.ensureTls({dir,host:meta.accessHost||'localhost',run:io.run}):null;
-  publication.add(model, publisher, meta.id,tls);
-  model.services.push(...repositoryCompose.publicServices(model.config, root).filter(s => s.role === 'routing'));
+  if (tls) {
+    const publisher = await publication.ensure({ docker: DOCKER_BIN, templates: TEMPLATES_DIR, ...io });
+    publication.add(model, publisher, meta.id, tls);
+    model.services.push(...repositoryCompose.publicServices(model.config, root).filter(s => s.role === 'routing'));
+  }
   const result = await repositoryCompose.deploy({ model, compose: composeArgv(), docker: DOCKER_BIN, id: meta.id, dir, ...io,
-    check: () => checkCancelled(meta.id), notify: phase => fs.appendFileSync(path.join(dir, 'deploy.log'), `--- repository ${phase} ---\n`),
-    verify: m => verifyPublishedApplication(meta, dir, root, browser, m, opts.originHost) });
+    check: () => checkCancelled(meta.id), notify: phase => fs.appendFileSync(path.join(dir, 'deploy.log'), `--- repository ${phase} ---\n`) });
   const db_ = load();
   const stored = db_.apps.find(a => a.id === meta.id);
   Object.assign(stored, { executor: 'repository-compose', deploymentEntrypoint: entrypoint, services: apps, repositoryServices: model.services,
     repositoryDatabases:Object.entries(config.services).flatMap(([service,s])=>model.categories[service]==='database'?[{service,type:composeInputs.typeOf(s.image),image:s.image,repositoryOwned:true}]:[]),
     composePorts: model.ports, hostPort: primary && primary.hostPort || null, type: primary && primary.type || meta.type,
     composeSource: root === path.join(dir, 'code') ? null : root, publicUrl: meta.publicUrl || null, localUrl:meta.localUrl || null,accessMode:meta.accessMode || null,db: [] });
-  for (const page of result.verification.pages || []) {
-    const service = apps.find(s => s.name === page.service);
-    if (service) service.homePath = new URL(page.url).pathname;
-  }
-  if (primary) stored.homePath = primary.homePath === '/' ? '' : primary.homePath || '';
+  if (primary && !stored.homePathManual) stored.homePath = primary.homePath === '/' ? '' : primary.homePath || '';
   save(db_);
   await recordDeploy(meta.id, { sha: sourceSha || await currentSha(dir), at: new Date().toISOString(), status: 'ok',
-    services: apps.map(s => s.name), verification: result.verification, tasks: result.tasks });
+    services: apps.map(s => s.name), runtime: result.runtime, tasks: result.tasks });
+  autodetectHome(meta.id).catch(e => console.error(meta.id, 'home detection:', e.message));
   return true;
 }
 
@@ -2526,7 +2484,6 @@ app.get('/api/apps/:id/deployment-plan', (req, res) => {
     // performed outside the panel; persisted reports are not trusted as current.
     if (deployLocks.has(meta.id) && fs.existsSync(path.join(dir, '.deployment-plan.json'))) return res.json(JSON.parse(fs.readFileSync(path.join(dir, '.deployment-plan.json'), 'utf8')));
     const plan = refreshDeploymentPlan(meta, dir, meta.composeSource || path.join(dir, 'code'));
-    try { plan.verification = JSON.parse(fs.readFileSync(path.join(dir, '.verification.json'), 'utf8')); } catch {}
     plan.publicUrl = meta.publicUrl || '';
     res.json(plan);
   } catch (e) { res.status(500).json({ error: 'Deployment analysis failed: ' + e.message }); }
@@ -2542,7 +2499,6 @@ app.post('/api/apps/:id/deployment-plan', async (req, res) => {
     const choice = req.body.selection;
     if (meta.executor === 'repository-compose' && choice && choice.kind !== 'compose') return res.status(409).json({ error: 'This site runs a repository-owned topology; changing to a single generated service requires an explicit site/data migration' });
     if (choice !== null && (!choice || !previous.candidates.some(c => c.kind === choice.kind && c.file === choice.file && JSON.stringify(c.files || [c.file]) === JSON.stringify(choice.files || [choice.file]) && JSON.stringify(c.profiles || []) === JSON.stringify(choice.profiles || [])))) return res.status(400).json({ error: 'choose a discovered deployment entrypoint' });
-    if (choice && choice.kind === 'dockerfile' && previous.candidates.some(c => c.kind === 'compose')) return res.status(409).json({ error: 'a single Dockerfile cannot replace the declared Compose topology' });
     if (choice && choice.kind === 'dockerfile') {
       const services = svc.fullServices(meta, dir);
       const service = services.find(s => (s.subdir || '.') === path.posix.dirname(choice.file));
@@ -2560,7 +2516,7 @@ app.post('/api/apps/:id/deployment-plan', async (req, res) => {
     res.json({ ok: true, saved: true, pending: true, plan: refreshDeploymentPlan(meta, dir) });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
-app.post('/api/apps/:id/verification', async (req, res) => {
+app.post(['/api/apps/:id/access', '/api/apps/:id/verification'], async (req, res) => {
   try {
     await siteLifecycle(req.params.id,async()=>{
     if (deployQueues.has(req.params.id) || deployLocks.has(req.params.id)) return res.status(409).json({ error: 'wait for deployment to finish' });
@@ -2568,7 +2524,7 @@ app.post('/api/apps/:id/verification', async (req, res) => {
     if (!meta) return res.status(404).json({ error: 'unknown app' });
     const local=req.body.access==='local';
     const selected=refreshDeploymentPlan(meta,appDir(APPS_DIR,meta.id)).selected;
-    const url=req.body.url ? browserVerification.validPublicUrl(String(req.body.url).trim()) : null;
+    const url=req.body.url ? localAccess.validPublicUrl(String(req.body.url).trim()) : null;
     if(!local)localAccess.validateTarget(url,meta,db_.apps);
     meta.publicUrl=local?null:url;
     meta.accessMode=local||!url?'local':'public';
@@ -2576,7 +2532,7 @@ app.post('/api/apps/:id/verification', async (req, res) => {
     if(req.body.scheme)meta.localScheme=req.body.scheme;
     if(selected&&selected.kind==='compose'&&meta.accessMode==='local')meta.localUrl=localAccess.address(meta,path.join(appDir(APPS_DIR,meta.id),'code'),selected);
     save(db_);
-    await markDirty(meta.id, 'public verification URL saved');
+    await markDirty(meta.id, 'site address saved');
     const dir=appDir(APPS_DIR,meta.id);
     const plan=refreshDeploymentPlan(meta,dir);
     let provisioningError=null;
@@ -2609,12 +2565,6 @@ app.post('/api/apps/:id/compose-inputs', async (req,res)=>{
     res.json({ok:true,...result,plan:refreshDeploymentPlan(meta,dir,root)});
     });
   }catch(e){res.status(e.status||500).json({error:panelLog.redact(e.message)});}
-});
-app.get('/api/apps/:id/verification/screenshot/:index', (req, res) => {
-  if (!load().apps.some(a => a.id === req.params.id) || !/^\d{1,2}$/.test(req.params.index)) return res.status(404).end();
-  const file = path.join(appDir(APPS_DIR, req.params.id), `.verification-${Number(req.params.index)}.png`);
-  if (!fs.existsSync(file)) return res.status(404).end();
-  res.set('Cache-Control', 'no-store').sendFile(file,{dotfiles:'allow'},e=>{if(e&&!res.headersSent)res.status(e.status||404).end();});
 });
 app.get('/api/apps/:id/local-ca',(req,res)=>{
   if(!load().apps.some(a=>a.id===req.params.id))return res.status(404).end();
@@ -3586,9 +3536,6 @@ app.post('/api/apps/:id/start', async (req, res) => {
     const meta = load().apps.find(a => a.id === req.params.id);
     const dir = appDir(APPS_DIR, req.params.id);
     if (!meta) throw lifecycleError('unknown app', 404);
-    const existing = await appContainers(meta.id);
-    if (!meta.lastGoodDeploy) throw lifecycleError('site has no verified release yet - use Deploy first', 409);
-    if (meta && meta.storageQuota) await quotas.verifyDatabases(meta.id, dir);
     if (meta.executor === 'repository-compose') {
       const config = require('yaml').parse(fs.readFileSync(path.join(dir,'docker-compose.yml'),'utf8'));
       const roles = repositoryCompose.roles(config);
@@ -3596,10 +3543,6 @@ app.post('/api/apps/:id/start', async (req, res) => {
       const ca = composeArgv();
       await runOut(ca[0],[...ca.slice(1),'-p',meta.id,'up','-d','--no-deps','--no-build','--pull','never',...names],{cwd:dir});
     } else await sh(`${COMPOSE_BIN}${meta && meta.storageQuota ? ` -p ${meta.id}` : ''} up -d`, dir);
-    const image = await ensureBrowserVerifier(meta.id, dir);
-    const model = meta.executor === 'repository-compose' ? { config: require('yaml').parse(fs.readFileSync(path.join(dir, 'docker-compose.yml'), 'utf8')), services: meta.repositoryServices || meta.services } : null;
-    const verification = await verifyPublishedApplication(meta, dir, meta.composeSource || path.join(dir, 'code'), image, model, req.hostname);
-    if (!verification.ok) { await sh(`${COMPOSE_BIN} stop`, dir); throw new Error('Start verification failed: ' + verification.errors.join('; ')); }
   }); res.json({ ok: true }); }
   catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
@@ -3921,8 +3864,7 @@ app.post('/api/trash/:id/restore', async (req, res) => {
     const record = db_.trash[idx];
     if (db_.trash.filter(t => t.id === record.id).length > 1) return res.status(409).json({ error: 'multiple Trash generations share this name - use Empty trash to clean them together' });
     if (record.cleanupStartedAt || Date.now() - record.deletedAt >= TRASH_HOLD_MS) return res.status(410).json({ error: 'retention expired or permanent cleanup started - retry destruction instead' });
-    await quotas.ensure(record);
-    Object.assign(db_, load()); // preserve unrelated site updates during host check
+    Object.assign(db_, load()); // preserve unrelated site updates
     const from = trashLib.trashPath(TRASH_DIR, record);
     if (!fs.existsSync(path.join(from, 'docker-compose.yml'))) return res.status(410).json({ error: 'trash contents are missing - cannot restore' });
     const dir = appDir(APPS_DIR, record.id);
@@ -3962,16 +3904,11 @@ app.post('/api/trash/:id/restore', async (req, res) => {
     }
     let restarted = false, restartError = null;
     try {
-      if (meta.storageQuota) await quotas.verifyDatabases(meta.id, dir);
       if (meta.executor === 'repository-compose') {
         const ca = composeArgv(); const config = require('yaml').parse(fs.readFileSync(path.join(dir,'docker-compose.yml'),'utf8'));
         const roles = repositoryCompose.roles(config);
         await runOut(ca[0],[...ca.slice(1),'-p',meta.id,'up','-d','--no-deps','--no-build','--pull','never',...Object.keys(config.services).filter(n=>roles[n]!=='task')],{cwd:dir});
       } else await sh(`${COMPOSE_BIN} -p ${meta.id} up -d`, dir);
-      const image = await ensureBrowserVerifier(meta.id, dir);
-      const model = meta.executor === 'repository-compose' ? { config: require('yaml').parse(fs.readFileSync(path.join(dir,'docker-compose.yml'),'utf8')), services: meta.repositoryServices || meta.services } : null;
-      const report = await verifyPublishedApplication(meta, dir, meta.composeSource || path.join(dir,'code'), image, model, req.hostname);
-      if (!report.ok) { await sh(`${COMPOSE_BIN} -p ${meta.id} stop`,dir); throw new Error('Restore verification failed: '+report.errors.join('; ')); }
       restarted = true;
     }
     catch (e) { restartError = e.message; }

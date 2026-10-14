@@ -17,14 +17,16 @@ async function createApp(options = {}) {
     return;
   }
   if (typeof createBusyOps !== 'undefined' && createBusyOps > 0) { toast('Wait for repository listing and detection to finish.', false); return; }
+  const enforceStorage = document.getElementById('createEnforceStorage').checked;
   const storageGB = v('createStorageGB');
-  if (!/^(?:[1-9]\d*|0)(?:\.\d{1,3})?$/.test(storageGB) || Number(storageGB) < 0.1 || Number(storageGB) > 1000000) { toast('Enter a storage allowance from 0.1 to 1,000,000 GB (up to 3 decimal places).', false); return; }
+  if (enforceStorage && (!/^(?:[1-9]\d*|0)(?:\.\d{1,3})?$/.test(storageGB) || Number(storageGB) < 0.1 || Number(storageGB) > 1000000)) { toast('Enter a storage allowance from 0.1 to 1,000,000 GB (up to 3 decimal places).', false); return; }
   const typeEl = document.querySelector('input[name=apptype]:checked');
   const dbs = [...document.querySelectorAll('input[name=appdb]:checked')].map(e => e.value);
   const accessEl = document.querySelector('input[name=access]:checked');
   const access = accessEl ? accessEl.value : 'local';
   const body = {
-    name: v('name'), type: typeEl ? typeEl.value : 'static', dbs, storageGB,
+    name: v('name'), type: typeEl ? typeEl.value : 'static', dbs,
+    ...(enforceStorage ? { enforceStorage: true, storageGB } : {}),
     repoUrl: v('repo'), access,domain: access === 'domain' ? v('domain') : '',
     subdir: v('subdir'), standardDockerfile: approvedStandardDockerfile,
     packageManager: createDetectedManager,
@@ -42,11 +44,6 @@ async function createApp(options = {}) {
   }
   const br = v('branch');
   if (br) body.branch = br;
-  if((body.repoUrl||body.ghRepo)&&typeof prepareCreateSource==='function') {
-    if(!createSourceReady(body)&&!await prepareCreateSource({...body,prepareOnly:true}))return;
-    const choice=createSourceSelection();if(choice)body.deploymentEntrypoint=choice;
-    if(createPendingId)body.pendingId=createPendingId;
-  }
   const buildBtn = document.getElementById('createBuildBtn');
   const cancelBtn = document.getElementById('createCancelBtn');
   buildBtn.disabled = true;
@@ -58,7 +55,6 @@ async function createApp(options = {}) {
   } catch (e) { r = { error: e.message }; }
   if (session !== createModalSession) return;
   if (r.pendingId) createPendingId = r.pendingId;
-  if(r.needsEntrypoint&&r.plan&&typeof showCreateSource==='function')showCreateSource(r.plan);
   document.getElementById('out').textContent = r.error||'';
   if (r.field === 'name') { nameError.textContent = r.error; nameField.setAttribute?.('aria-invalid', 'true'); nameField.focus?.(); }
   if (r.needsDockerfile) document.getElementById('createDockerAction').style.display = 'flex';
@@ -67,7 +63,7 @@ async function createApp(options = {}) {
     document.getElementById('createModernBuildRow').style.display = 'flex';
     document.getElementById('createBuildNote').textContent = r.error;
   }
-  buildBtn.disabled = typeof createSourceNeedsChoice==='function'&&createSourceNeedsChoice();
+  buildBtn.disabled = false;
   cancelBtn.disabled = false;
   refresh();
   if (!r.error) {
@@ -106,7 +102,6 @@ async function detectType() {
       document.getElementById('branchDefault').textContent = '';
       createDetectRepo = '';
       createDetectedManager = 'npm';
-      if(typeof prepareCreateSource==='function')await prepareCreateSource();
       return;
     }
     repo = m[1] + '/' + m[2];
@@ -171,7 +166,6 @@ async function detectType() {
       hint.innerHTML = 'Choose a build folder: ' + fb + ' ' + sb + ' ' + bb;
     } else hint.style.display = 'none';
     sel.disabled = false;
-    if(typeof prepareCreateSource==='function')await prepareCreateSource();
   } catch {
     if (session !== createModalSession) return;
     if (request !== createDetectRequest) { setBuildBusy(false); return; }

@@ -31,10 +31,10 @@ async function loadCreateStorage() {
     const r = await (await fetch('/api/panel/storage')).json();
     if (session !== createModalSession) return;
     createStorageAvailable = r.ready && Number.isFinite(r.availableBytes) ? r.availableBytes : null;
-    state.textContent = r.ready ? `${storageSize(r.availableBytes)} available for new allowances, after existing allocations, Trash and host headroom.` : ((r.error || 'Host quota setup is not ready.') + ' The allowance will be recorded but NOT enforced until quota setup completes.');
+    state.textContent = r.ready ? `${storageSize(r.availableBytes)} available for optional allowances, after existing allocations, Trash and host headroom.` : ((r.error || 'Host quotas are unavailable.') + ' Leave the request unchecked to create without an allowance.');
     updateCreateStorageHint();
   } catch {
-    if (session === createModalSession) state.textContent = 'Host quota setup unavailable. The allowance will be recorded but NOT enforced until the Linux installer completes quota setup.';
+    if (session === createModalSession) state.textContent = 'Host quotas unavailable. Normal site creation does not need them.';
   }
 }
 function resetCreateForm() {
@@ -44,9 +44,9 @@ function resetCreateForm() {
   createBusyOps = 0;
   createStandardDockerfile = false;
   createPendingId = null;
-  if(typeof resetCreateSource==='function')resetCreateSource();
   createStorageAvailable = null;
   document.getElementById('createStorageGB').value = '5';
+  document.getElementById('createEnforceStorage').checked = false;
   document.getElementById('createStorageState').textContent = 'Checking host quota setup…';
   document.getElementById('createStorageHint').textContent = '';
   document.getElementById('createRepoSize').textContent = 'Repository size: choose a GitHub repository.';
@@ -104,14 +104,13 @@ function useCreateStandardDockerfile() {
 }
 function closeCreate(created = false) {
   const id = createPendingId;
-  const pending=typeof createSourceInFlight!=='undefined'?createSourceInFlight:null;
   document.getElementById('modal').classList.remove('open');
   resetCreateForm();
   if (!created && id) {
-    createCleanupPromise = Promise.resolve(pending).catch(()=>{}).then(()=>fetch(`/api/apps/pending/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true }))
+    createCleanupPromise = fetch(`/api/apps/pending/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true })
       .then(async response => { const result = await response.json(); if (!result.ok) toast('Unfinished site cleanup failed: ' + (result.error || 'retry cleanup for ' + id), false); })
       .catch(e => toast('Unfinished site cleanup failed: ' + e.message, false));
-  }else if(!created&&pending)createCleanupPromise=pending.catch(()=>{});
+  }
 }
 function toggleTheme() {
   const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';

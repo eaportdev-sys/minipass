@@ -21,7 +21,7 @@ async function main(){
     const setup=await fetch(base+'/api/panel/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:'synthetic-quota-fixture-only',acceptTerms:true})});assert.equal(setup.status,200);
     const headers={Cookie:setup.headers.get('set-cookie').split(';')[0],'Content-Type':'application/json'};
     const call=async(url,body)=>{const r=await fetch(base+url,{method:'POST',headers,body:JSON.stringify(body)});return {status:r.status,data:await r.json()};};
-    const body={name:'Quota source fixture',type:'static',repoUrl:repo,branch:'main',access:'local',storageGB:'0.1'};
+     const body={name:'Quota source fixture',type:'static',repoUrl:repo,branch:'main',access:'local',enforceStorage:true,storageGB:'0.1'};
     const prepared=await call('/api/apps',{...body,prepareOnly:true});assert.equal(prepared.status,200,JSON.stringify(prepared));id=prepared.data.pendingId;
     const dir=path.join(apps,id),staged=path.join(apps,'.drafts',id);
     assert(!fs.existsSync(dir)&&fs.existsSync(path.join(staged,'code','index.html')));

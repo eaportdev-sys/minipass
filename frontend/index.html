@@ -219,16 +219,16 @@
             <div class="sectionhead"><div><b>Deployment configuration</b></div><button onclick="prepareComposeInputs()">check configuration</button></div>
             <div id="deploymentPlan" aria-live="polite">Open a site to inspect its deployment instructions.</div>
             <details class="deployment-advanced" data-record="deployment-address"><summary>Change access / address</summary>
-            <label for="verificationUrl">Public website URL (optional)<input id="verificationUrl" type="url" placeholder="https://site.example.com"></label>
-            <div class="actions"><button onclick="saveVerificationUrl()">save public URL</button><span id="deployLocalChoices"><button onclick="saveVerificationUrl(true)">switch to local / LAN</button></span><button onclick="saveVerificationUrl(true, 'https')">enable local HTTPS</button></div>
+             <label for="siteAccessUrl">Public website URL (optional)<input id="siteAccessUrl" type="url" placeholder="https://site.example.com"></label>
+             <div class="actions"><button onclick="saveSiteAccess()">save public URL</button><span id="deployLocalChoices"><button onclick="saveSiteAccess(true)">switch to local / LAN</button></span><button onclick="saveSiteAccess(true, 'https')">enable local HTTPS</button></div>
             </details>
           </div>
           <div class="card deploy-manual-card">
-            <div class="sectionhead"><div><b>Deploy now</b><div class="meta">Build, initialize databases, run migrations and verify the site.</div></div><div class="deploy-now-btns"><button class="btn primary deploy-now-btn" onclick="deployCurrent()">deploy</button><button class="deploy-now-btn" onclick="deployLocal()">rebuild local files</button></div></div>
+             <div class="sectionhead"><div><b>Deploy now</b><div class="meta">Build the repository and start its services. Errors stay in the deploy log.</div></div><div class="deploy-now-btns"><button class="btn primary deploy-now-btn" onclick="deployCurrent()">deploy</button><button class="deploy-now-btn" onclick="deployLocal()">rebuild local files</button></div></div>
             <div class="deploy-safety-flow" aria-label="Deployment stages">
               <div><span>1</span><b>Build</b><small>Running containers stay online</small></div>
               <div><span>2</span><b>Swap</b><small>Only after a successful image build</small></div>
-              <div><span>3</span><b>Verify</b><small>Health gate with automatic rollback</small></div>
+               <div><span>3</span><b>Run</b><small>Check startup; restore old images on a crash</small></div>
             </div>
             <div id="deployProg" class="deploy-progress" style="display:none"><div class="deploy-progress-head"><span id="deployStage">deploying…</span><span><b id="deployPct"></b> <span id="deployTime"></span></span></div><div class="progress"><div id="deployBar"></div></div><pre id="deployTail"></pre></div>
           </div>
@@ -415,15 +415,9 @@
         <div id="ghRepoRow" style="display:none"><label for="ghrepo">GitHub repository</label><select id="ghrepo" onchange="detectType()"><option value="">GitHub repo…</option></select></div>
         <div class="create-source-options">
           <label for="branch">Branch <span id="branchDefault" class="meta"></span><input id="branch" list="createBranches" placeholder="default branch" onchange="detectType()"><datalist id="createBranches"></datalist></label>
-          <label for="subdir">Build folder<input id="subdir" placeholder="repo root" onchange="prepareCreateSource()"></label>
+           <label for="subdir">Build folder<input id="subdir" placeholder="repo root"></label>
         </div>
         <div class="meta" id="subdirHint" style="display:none"></div>
-        <div id="createDeployment" class="create-build-profile" style="display:none">
-          <label for="createEntrypoint">Deployment file<select id="createEntrypoint" onchange="createEntrypointChanged()"></select></label>
-          <div id="createSourceState" class="meta" role="status"></div>
-          <div id="createDeclaredServices" class="meta"></div>
-          <button onclick="prepareCreateSource()">inspect source again</button>
-        </div>
       </section>
       <section class="create-section">
         <h3>Runtime &amp; data</h3>
@@ -454,9 +448,10 @@
       </section>
     </div>
     <section class="create-section create-storage">
-      <h3>Storage allowance</h3>
+       <h3>Storage <span class="meta">optional</span></h3>
+       <label class="radiorow"><input id="createEnforceStorage" type="checkbox"> Request a host-enforced storage allowance</label>
       <div class="create-storage-row"><label for="createStorageGB">Limit (GB)<input id="createStorageGB" type="number" min="0.1" max="1000000" step="0.001" value="5" oninput="updateCreateStorageHint()"></label><div class="create-storage-presets"><button onclick="setCreateStorage(5)">5 GB</button><button onclick="setCreateStorage(20)">20 GB</button><button onclick="setCreateStorage(200)">200 GB</button></div></div>
-      <div class="meta">Site files and database data share this limit.</div>
+       <div class="meta">Off by default. Existing site and database storage is never migrated by this choice.</div>
       <div id="createStorageState" class="meta" role="status">Checking host quota setup…</div>
       <div id="createStorageHint" class="meta" aria-live="polite"></div>
     </section>
@@ -485,7 +480,6 @@
 <script src="env.js"></script>
 <script src="databases.js"></script>
 <script src="site-git.js"></script>
-<script src="create-source.js"></script>
 <script src="create.js"></script>
 <script src="accounts.js"></script>
 <script src="host.js"></script>

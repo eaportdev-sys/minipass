@@ -105,9 +105,9 @@ node server.js
 # open http://localhost:3001
 ```
 
-Windows can exercise the UI and read-only API. Creating new sites with enforced
-storage allowances requires the Linux host quota bridge; unsupported hosts fail
-closed rather than saving an unenforced limit. To test the API on a throwaway port:
+Windows can exercise the UI, site creation and configuration API; container builds
+and launches need Docker on Linux. Storage allowances are optional, off by default,
+and not a prerequisite for creating, editing or starting a site. To test the API on a throwaway port:
 
 ```powershell
 $env:PORT='31xx'
@@ -146,122 +146,52 @@ Site metadata lives on the `/srv/panel-data` volume — never inside the contain
 
 ### 1 · Create a site
 
-Websites → `+ Create` → name, type (or auto-detect), optional repo/branch/subfolder,
-optional database, and **storage allowance in GB** (5/20/200 presets or a manually
-typed amount, including decimals). GitHub detection shows an approximate source
-size for the selected branch; truncated trees are labeled as a lower bound. This
-excludes Git history, LFS downloads, dependencies, build output and database growth,
-so it is not a recommended quota or a predicted final disk requirement.
-The panel scaffolds `/srv/apps/<id>/` (`code/`, `.env`,
-`docker-compose.yml`) and opens **Deploy → Repository deployment plan**.
-Creation does not build or launch containers. A missing name is shown inline.
+Websites → `+ Create` → name, repository/branch, and an optional build folder.
+The panel reads the checkout, detects its runtime/services and prepares
+`/srv/apps/<id>/` (`code/`, `.env`, `docker-compose.yml`). Then choose **Deploy**.
+No deployment-plan approval or preview round trip is required.
 
-The plan inventories the whole source tree after creation, uploads, file edits,
-Git sync and deployment pulls. Deployment checks the actual pulled or detached
-source before Docker commands. File content, not a required filename, identifies
-Compose and Dockerfile candidates; literal deployment-command references are
-traced. Multiple entrypoints need a saved selection. Supported Dockerless sites
-can still use panel-provided build environments. Manifests show declared scripts;
-analysis never executes repository scripts or documentation.
+**Read → configure → build → run.** Repository Compose commands and ordered
+overlays take precedence. Otherwise use its Dockerfile, or a template for a
+detected Node, React/static or PHP application. Production-named files are
+preferred when several recipes exist; Setup provides an optional override.
+Incomplete discovery and documentation references are notes, not launch vetoes.
+Repository scripts are not executed merely to inspect them.
 
-Creation first inspects an unregistered checkout. Select the deployment file in
-the creation form; ambiguous files cannot register a site until one is chosen.
-The selected file and Local/LAN versus domain access are saved once, before
-database inputs are prepared. Cancel removes only that unregistered draft.
-Compose-defined services/databases replace the template runtime/database pills.
-Deploy keeps a compact access/source/database summary; diagnostic inventories,
-commands and reports are collapsed. Later source-file repairs live in Setup.
-Source previews live in `/srv/apps/.drafts/<id>`, separate from site allocation.
-Creation allocates the empty site directory first, then copies source into it so
-new file inodes inherit the enforced quota. Source-only previews made by older
-panels can be safely staged on retry; deployed directories and database data are
-never adopted or reassigned automatically. Capacity failures retain the draft,
-and Cancel removes only validated, unregistered source checkouts.
+Use repository `.env` values first; examples supply missing application keys.
+Generate managed ports and missing local database credentials without rewriting
+the source environment or replacing existing passwords/data. External connection
+values are preserved. External-provider credentials cannot be invented; actual
+Compose/build/runtime errors explain missing inputs in the deployment log.
+Node templates use the repository's launch script or `package.json.main`, with
+conventional `server.js`/`index.js` and built-output fallbacks. A dependency on a
+framework alone does not impose a different startup command or build-output gate.
 
-There is no 200-file/depth cutoff in instruction discovery. Git internals,
-generated dependencies/caches and binary files are disclosed exclusions. Text
-over 2 MiB, total text over 64 MiB, unreadable files, symlinks and unsupported text
-encodings are explicitly reported and block deployment rather than producing a
-pretend-complete report. UTF-8 is the supported source encoding.
+Compose starts declared dependencies and completion tasks in repository order.
+Failed builds leave old application containers untouched; startup crashes restore
+their old images when available. Existing database volumes and credentials are
+preserved. Schema migrations are not automatically reversed.
+Deployment success means the requested containers started steadily and declared
+tasks completed; it does **not** certify every page, asset or business feature.
+There is no Chromium download, browser approval stage, screenshot gate, or
+automatic stop because of a font/asset/public-URL check. Logs and Doctor remain
+available for diagnosis. Landing-route discovery runs after launch and does not
+hold the deployment open.
 
-**Repository Compose is executed as declared.** Compose resolves interpolation,
-ordered overlays, includes/extends inside the checkout and selected profiles.
-The panel builds the declared recipes, starts database dependencies, runs each
-completion-dependent task once per release, then starts API/web services in
-dependency order. A failed migration stops before the application swap. Builds
-never rewrite repository Dockerfiles or substitute guessed npm/migration commands.
+**Access:** published ports allocate in 8000–8999. A public domain is optional.
+Plain HTTP publishes directly; local HTTPS uses a proxy and per-site CA when
+needed. Trust that CA on devices accessing the site. Saved external origins are
+preserved and noted rather than rejected as launch prerequisites.
 
-For unambiguous repository-declared PostgreSQL/MySQL/MariaDB/MongoDB services
-and Redis services with a declared `--requirepass` input,
-missing referenced passwords are generated once into the private site `.env` and
-matching consumer database URLs/host/user/port inputs are linked through declared
-dependencies and shared networks. Create prepares these inputs without launching
-anything; Deploy rechecks them. Existing sites can use **check configuration**.
-Existing values, external connection URLs, and repository-provided defaults win.
-Matching running-database credentials can be recovered, but unknown retained data
-or lost initialized passwords require review—never silent password rotation.
-Multiple possible databases require an explicit dependency/connection. Derived
-origin hostname inputs come from the allocated local address or an explicitly
-configured, scheme-matching public URL/domain. No public domain is required for
-local deployment. Provisioning reports expose input names, never secret values.
-Automatic input generation currently needs direct service declarations (including
-ordinary ordered overlays); includes/extends/custom merge tags still execute via
-Compose but require explicit inputs instead of unsafe partial inference.
+Authentication, site isolation, safe file paths, secret redaction and database-data
+protection remain. Simplifying launch does not authorize mounting host secrets,
+erasing volumes or silently replacing database credentials/versions.
+The Database tab lists declared databases and completion tasks from the actual
+Compose project; ordinary deploys do not download database-admin images.
 
-**Local/LAN access:** with no public URL/domain, repository Compose sites default
-to their allocated local port. Declared HTTPS origins automatically use a local
-HTTPS publication proxy and a persistent per-site certificate authority, preserving
-the repository's CSP and secure cookies. Deploy shows the exact address and a CA
-download; install that CA as trusted on devices you use to access the site (e.g.
-Windows Trusted Root Certification Authorities). It is not a public certificate
-and browsers will warn until it is trusted. The disposable verifier trusts only
-that site's CA; public certificates still undergo normal validation. Plain-HTTP
-repositories stay HTTP. Local/LAN chosen at creation is not requested again in
-Deploy. Advanced **Change access / address** can change routing later; database
-values/data remain unchanged. A copied URL using another site's local port is
-rejected before build.
-If a site address changes, reselect local access/redeploy so its origin and
-certificate reflect the new address. Local certificate private keys stay in
-private files/container configuration; only the public CA is downloadable.
-
-Project names, image tags, networks and named volumes are site-isolated. Published
-ports allocate in 8000–8999 and remain stable across redeploys. A small publication
-proxy preserves response headers/CSP and adds a release identity; browser checks
-cannot accept another/old website at the public URL. Public-domain deployments
-need their real HTTPS route; local deployments do not need public DNS.
-Host privileges/devices, out-of-checkout mounts, external networks/volumes and
-custom storage drivers require explicit configuration/import rather than being
-silently applied. Existing database version/storage changes require a deliberate
-data migration; built database images require an explicit versioned-image upgrade
-path. Enforced site allowances also cover anonymous/image-declared data volumes;
-existing uncharged volumes require migration and are never erased. Database-admin
-images must be installed explicitly.
-
-The Database tab lists actual repository-managed databases (prepared until the
-first deploy, then their live state), not just panel-generated database services.
-Admin connections use the verified Compose database identity and its site-owned
-network. Same-type ambiguous database targets refuse an automatic admin link.
-Declared completion-dependent migrations show their last execution/exit code;
-unrelated guessed npm/ORM runners and generated migration overrides are disabled
-for repository Compose projects.
-
-Success requires healthy/steady services, exit-zero tasks and an isolated Chromium
-visit checking rendered content, stylesheet/script/image requests, uncaught browser
-errors and API requests. Unpublished HTTP APIs get direct source-route probes.
-Unavailable cross-origin fonts are visible warnings, not deployment blockers:
-the browser can render using fallback fonts. Same-origin font failures, missing
-CSS/JavaScript, failed API requests and rendering errors still fail verification.
-This does not repair the external font provider or relax CSP/CORS/security headers.
-Verification reports and browser screenshots persist in Deploy. Chromium is built
-into a cached helper image on first deployment (about 1 GB); the test container has
-no panel credentials, host mounts or Docker socket. Browser/application failure
-restores prior application/routing images and environment; database containers and
-data stay untouched. Schema migrations are **not** automatically reversed.
-
-No generic panel can infer arbitrary deployment prose as executable instructions.
-Ambiguous/dynamic references still require selection/review. Native host processes,
-Kubernetes deployment and authenticated business-flow tests are not implemented;
-these must not be represented as supported or as automatically verified.
+Storage enforcement is optional and unchecked by default. Explicit requests can
+use the Linux host quota bridge; existing enforced data layouts are retained.
+Normal create, edit and start requests do not require a quota-service approval.
 
 Jekyll repositories (`Gemfile` + `_config.yml` and Jekyll markers) are detected as
 **Static**, including those with a Webpack `package.json`. Their standard build
@@ -287,7 +217,7 @@ their volumes are not migrated automatically; they remain labeled as legacy with
 no enforced allowance. Renaming into Trash keeps the project assignment and
 budget until permanent cleanup removes all files/volumes and open inodes.
 
-Creation checks unallocated capacity after outstanding site/Trash allowances and
+An explicit storage-allowance request checks unallocated capacity after outstanding site/Trash allowances and
 a 2 GiB host reserve. Allowances are maximums and metadata reservations, not
 preallocated space; other host/Docker writes can still exhaust the filesystem.
 Only aggregate kernel quota/statfs/Docker metadata is measured, on demand; no

@@ -1,5 +1,5 @@
-// Read repository instructions. This module never executes them, creates build
-// files, or pretends the panel's service executor supports repository Compose.
+// Discover repository instructions. Findings are advisory: launch is never
+// conditional on a complete scan or approval of a source-analysis report.
 const fs = require('fs');
 const path = require('path');
 const { inventory, sourceFile, isDockerfile } = require('./repository-files');
@@ -41,7 +41,7 @@ function relativeReference(root, source, file) {
 function analyze(root, { selection = null, services = [], templatesDir, env = {} } = {}, options = {}) {
   const scan = inventory(root, options);
   const candidates = [], refs = [], manifests = [], blockers = [], warnings = [];
-  const issue = (code, message, file = null) => blockers.push({ code, message, file });
+  const issue = (code, message, file = null) => warnings.push({ code, message, file });
   for (const [file, text] of scan.texts) {
     if (!/^\s*\{/.test(text)) refs.push(...references(text, file));
     if (isDockerfile(text)) candidates.push({ kind: 'dockerfile', file, generated: !!(templatesDir && standardDockerfileType(path.join(root, path.posix.dirname(file)), templatesDir, path.posix.basename(file))) });
@@ -102,12 +102,17 @@ function analyze(root, { selection = null, services = [], templatesDir, env = {}
   if (selection) {
     selected = candidates.find(c => c.kind === selection.kind && c.file === selection.file && invocationKey(c) === invocationKey(selection));
     if (!selected) issue('STALE_SELECTION', 'The saved deployment entrypoint is missing or no longer recognizable.', selection.file);
-    else if (compose.length && selected.kind !== 'compose') issue('TOPOLOGY_NOT_FOLLOWED', 'Repository Compose declares a topology. Selecting a single Dockerfile does not implement those services or tasks.', selected.file);
     reason = 'Saved selection';
-  } else {
+  }
+  if (!selected) {
     const invocations = evidence.filter(e => e.kind === 'compose' && !e.documentation && e.files.length);
+    const buildFiles = [...new Set(evidence.filter(e => e.kind === 'dockerfile' && !e.documentation).flatMap(e => e.files))];
+    if (!invocations.length && buildFiles.length === 1) {
+      selected = candidates.find(c => c.kind === 'dockerfile' && c.file === buildFiles[0]);
+      reason = 'Referenced by repository deployment command';
+    }
     const groups = [...new Map(invocations.map(e => [invocationKey(e), e])).values()];
-    if (groups.length === 1 && (groups[0].files.length > 1 || groups[0].profiles.length)) {
+    if (!selected && groups.length === 1 && (groups[0].files.length > 1 || groups[0].profiles.length)) {
       selected = candidates.find(c => c.kind === 'compose' && c.files && invocationKey(c) === invocationKey(groups[0]));
       reason = 'Ordered Compose files/profiles declared by repository command';
     }
@@ -121,7 +126,19 @@ function analyze(root, { selection = null, services = [], templatesDir, env = {}
       // project entrypoints; each service still resolves/validates its own recipe.
       const roots = new Set(eligible.map(c => path.posix.dirname(c.file)));
       const configured = new Set(services.filter(s => s.enabled !== false).map(s => s.subdir || '.'));
-      if (compose.length || roots.size !== eligible.length || [...roots].some(r => !configured.has(r))) issue('ENTRYPOINT_CHOICE', 'Multiple deployment entrypoints were found. Select the intended file; development and production recipes are not interchangeable.');
+      if (compose.length || roots.size !== eligible.length || [...roots].some(r => !configured.has(r))) {
+        // Prefer conventional production recipes over development examples.
+        // An explicit repository command still wins above; Setup can override.
+        const score = c => {
+          const name = path.posix.basename(c.file).toLowerCase();
+          if (/(?:^|[._-])(?:prod|production)(?:[._-]|$)/.test(name)) return 0;
+          if (/^(?:compose|docker-compose)\.ya?ml$/.test(name) || name === 'dockerfile') return 1;
+          return /(?:^|[._-])(?:dev|development|test|example)(?:[._-]|$)/.test(name) ? 3 : 2;
+        };
+        selected = [...eligible].sort((a, b) => score(a) - score(b) || a.file.localeCompare(b.file))[0];
+        reason = 'Automatically detected deployment file';
+        issue('ALTERNATE_ENTRYPOINTS', `Using ${selected.file}; alternate deployment files are available in Setup.`);
+      }
       else reason = 'Separate recipes in configured service folders';
     } else reason = 'No container recipe declared; use supported manifest-driven build environment';
   }
@@ -149,7 +166,7 @@ function analyze(root, { selection = null, services = [], templatesDir, env = {}
         if (!candidates.some(c => c.kind === 'dockerfile' && c.file === recipe)) issue('MISSING_RECIPE', `Service ${s.name} references an unreadable or unrecognized build recipe.`, recipe);
       }
     }
-    warnings.push({ file: t.file, message: 'Compose will resolve the selected model before building. Its commands, derived environment and dependency conditions are executed as declared; browser/API verification must pass before success.' });
+    warnings.push({ file: t.file, message: 'Compose runs the repository services, commands and dependency conditions as declared.' });
   } else if (!compose.length) {
     for (const s of services.filter(s => s.enabled !== false)) {
       const context = path.join(root, s.subdir || '');
@@ -167,7 +184,7 @@ function analyze(root, { selection = null, services = [], templatesDir, env = {}
       generated = !!(recipe && templatesDir && standardDockerfileType(path.join(root, s.subdir || ''), templatesDir, recipe)); } catch {}
     return { name: s.name, folder: s.subdir || '.', type: s.type, recipe, generated, port: s.port || null, hostPort: s.hostPort || null };
   });
-  return { version: 1, analyzedAt: new Date().toISOString(), fingerprint: scan.fingerprint, ready: blockers.length === 0,
+  return { version: 1, advisory: true, analyzedAt: new Date().toISOString(), fingerprint: scan.fingerprint, ready: true,
     scan: { complete: scan.complete, files: scan.files.length, textFiles: scan.texts.size, bytes: scan.bytes, skipped: scan.skipped, issues: scan.issues },
     selected: selected ? { kind: selected.kind, file: selected.file, ...(selected.files ? { files: selected.files, profiles: selected.profiles || [] } : {}) } : null, reason, selection: selection || null,
     candidates: candidates.map(c => ({ kind: c.kind, file: c.file, ...(c.files ? { files: c.files, profiles: c.profiles || [] } : {}), generated: !!c.generated, complete: c.topology ? c.topology.complete : true })),
