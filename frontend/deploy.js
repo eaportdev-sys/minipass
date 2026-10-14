@@ -1,5 +1,5 @@
 function deploySourceName(source) {
-  return ({ manual: 'Manual', local: 'Local files', webhook: 'GitHub webhook', poll: 'GitHub poll', 'local-push': 'Local push' })[source] || source || 'Unknown';
+  return ({ create: 'Initial launch', manual: 'Manual', local: 'Local files', webhook: 'GitHub webhook', poll: 'GitHub poll', 'local-push': 'Local push' })[source] || source || 'Unknown';
 }
 function renderDeployMarkup(box, html) {
   if (box.dataset.rendered === html && box.innerHTML) return;

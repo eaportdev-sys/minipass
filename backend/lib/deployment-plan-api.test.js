@@ -95,7 +95,7 @@ async function main() {
       assert.equal(r.status, 400); assert.equal(r.data.field, 'name');
       assert.deepEqual(fs.readdirSync(apps), before, 'name validation creates nothing');
     }
-    const created = await call('/api/apps', 'POST', { name: 'Manual creation fixture', type: 'static', storageGB: '1' });
+    const created = await call('/api/apps', 'POST', { name: 'Initial launch fixture', type: 'static', storageGB: '1' });
     assert.equal(created.status, 200);
     assert(created.data.plan && created.data.plan.scan.complete);
     assert.equal(quotaAttempts.length,1,'normal creation always allocates its enforced allowance');
@@ -106,7 +106,14 @@ async function main() {
     assert(!(await call('/api/apps')).data.some(a=>a.name==='Unavailable quota fixture'),'a site is not registered with a fake unenforced limit');
     quotaUnavailable=false;
     if(refused.data.pendingId)await call('/api/apps/pending/'+refused.data.pendingId,'DELETE');
-    assert(!created.data.lastDeploy, 'creation does not deploy');
+    assert(created.data.deploying, 'normal Create starts installing/building/launching without a second deploy request');
+    let initialStatus;
+    for(let i=0;i<100;i++){initialStatus=(await call('/api/apps/'+created.data.id+'/status')).data;if(initialStatus.lastDeploy&&!initialStatus.deploying)break;await new Promise(r=>setTimeout(r,100));}
+    assert.equal(initialStatus.lastDeploy?.source,'create');assert.equal(initialStatus.lastDeploy?.status,'error','Dockerless Windows reports a real launch failure, not a fake running state');
+    const initialEvents=(await call('/api/apps/'+created.data.id+'/events')).data.events;
+    assert(initialEvents.some(e=>e.area==='create'));assert(initialEvents.some(e=>e.level==='error'&&e.area==='deploy-create'));
+    const initialBuild=await (await fetch(base+'/api/apps/'+created.data.id+'/build-log',{headers:{Cookie:cookie}})).text();
+    assert(initialBuild.includes('--- ERROR'),'preflight failure is also retained in the build log, not just its popup');
     let plan = (await call('/api/apps/test-upload/deployment-plan')).data;
     assert(plan.ready);
     const oldFingerprint = plan.fingerprint;
@@ -185,7 +192,7 @@ async function main() {
     const declared=`services:\n  warehouse:\n    image: postgres:17-alpine\n    environment:\n      POSTGRES_USER: service_user\n      POSTGRES_DB: records\n      POSTGRES_PASSWORD: \${SQL_PASSWORD:?}\n  api:\n    image: node:24\n    depends_on: [warehouse]\n    environment:\n      DATABASE_URL: \${API_CONNECTION:?}\n      APP_ORIGIN: https://\${LOCAL_HOST:?}\n`;
     fs.writeFileSync(path.join(declaredRepo,'production.recipe'),declared);fs.writeFileSync(path.join(declaredRepo,'development.recipe'),declared.replace('postgres:17-alpine','postgres:16-alpine'));
     git(declaredRepo,'init','-b','main');git(declaredRepo,'config','user.name','Fixture');git(declaredRepo,'config','user.email','fixture@example.test');git(declaredRepo,'add','.');git(declaredRepo,'commit','-m','declared deployment files');
-    const createBody={name:'Creation choice fixture',type:'node',repoUrl:declaredRepo,branch:'main',access:'local',domain:'ignored.example.test',storageGB:'1'};
+    const createBody={name:'Creation choice fixture',type:'node',repoUrl:declaredRepo,branch:'main',access:'local',domain:'ignored.example.test',storageGB:'1',launch:false};
     const draft=await call('/api/apps','POST',{...createBody,prepareOnly:true});assert.equal(draft.status,200,JSON.stringify(draft));assert(draft.data.prepared&&!draft.data.needsEntrypoint);
     const draftId=draft.data.pendingId,draftDir=path.join(apps,draftId),stagingDir=path.join(apps,'.drafts',draftId);
     assert(!fs.existsSync(draftDir)&&fs.existsSync(path.join(stagingDir,'code')),'inspection stays outside the future quota-managed site directory');
@@ -220,7 +227,7 @@ async function main() {
     put('packages/worker/.env','REPOSITORY_SETTING=kept-from-source\n');
     put('packages/worker/.env.example','DATABASE_URL=\nSESSION_SECRET=change-me\n');
     git(workspace,'init','-b','main');git(workspace,'config','user.name','Fixture');git(workspace,'config','user.email','fixture@example.test');git(workspace,'add','.');git(workspace,'commit','-m','generic workspace services');
-    const detected=await call('/api/apps','POST',{name:'Workspace detection fixture',type:'node',repoUrl:workspace,branch:'main',access:'local',storageGB:'1'});
+    const detected=await call('/api/apps','POST',{name:'Workspace detection fixture',type:'node',repoUrl:workspace,branch:'main',access:'local',storageGB:'1',launch:false});
     assert.equal(detected.status,200,JSON.stringify(detected));
     const serviceResponse=await call('/api/apps/'+detected.data.id+'/services');
     const detectedServices=serviceResponse.data.services||serviceResponse.data;
@@ -231,7 +238,7 @@ async function main() {
     assert.equal(detectedEnv.REPOSITORY_SETTING,'kept-from-source');
     assert(normDetectedDbs(detected.data).includes('postgres'),'a runnable backend with a PostgreSQL dependency gets its managed database wiring');
     for(const service of detectedServices)assert(fs.existsSync(path.join(detectedDir,'code',service.subdir,'Dockerfile')),'each detected runnable context has a build recipe');
-    const explicit=await call('/api/apps','POST',{name:'Explicit workspace context',type:'react',repoUrl:workspace,branch:'main',subdir:'packages/worker',access:'local',storageGB:'1'});
+    const explicit=await call('/api/apps','POST',{name:'Explicit workspace context',type:'react',repoUrl:workspace,branch:'main',subdir:'packages/worker',access:'local',storageGB:'1',launch:false});
     assert.equal(explicit.status,200,JSON.stringify(explicit));
     const explicitServices=(await call('/api/apps/'+explicit.data.id+'/services')).data.services;
     assert.equal(explicitServices.length,1,'an explicitly selected repository context does not opt into sibling services');

@@ -36,6 +36,8 @@ function openSite(id, tab = 'overview', remember = true) {
   document.getElementById('remediateCard').style.display = 'none';
   document.getElementById('remediateBox').innerHTML = '';
   document.getElementById('deployHist').innerHTML = '';
+  siteEventSeq++;
+  document.getElementById('siteEvents').textContent = '';
   deployLogSeq++;
   document.getElementById('deployFullLog').textContent = '';
   document.getElementById('deployFullLog').style.display = 'none';

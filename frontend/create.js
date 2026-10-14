@@ -65,6 +65,7 @@ async function createApp(options = {}) {
   cancelBtn.disabled = false;
   refresh();
   if (!r.error) {
+    if (r.deploying) toast('Repository read; installing/building and launching. Progress and errors are saved in the site’s Deploy and Logs tabs.');
     if (r.storageWarning) toast('Site created, but the storage allowance is NOT enforced on this host: ' + r.storageWarning, false);
     if (Array.isArray(r.envNeeds) && r.envNeeds.length) toast(`Site created - code references unset variables (${r.envNeeds.join(', ')}) - add values in Environment before deploying`, false);
     closeCreate(true);

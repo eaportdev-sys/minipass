@@ -116,6 +116,7 @@ fs.mkdirSync(APPS_DIR, { recursive: true });
 try { fs.mkdirSync(TRASH_DIR, { recursive: true }); } catch {}
 fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
 const store = new PanelStore({ file: process.env.PANEL_DB_FILE || path.join(path.dirname(DATA_FILE), 'panel.sqlite'), legacyFile: DATA_FILE, authFile: path.join(path.dirname(DATA_FILE), 'panel-auth.json') });
+panelLog.attachStore(store);
 const accounts = new PanelAccounts(store);
 const deletions = deletionQueue();
 const app = express();

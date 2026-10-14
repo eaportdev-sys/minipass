@@ -60,7 +60,7 @@ function analyze(root, { selection = null, services = [], templatesDir, env = {}
             manifests.push({ file, kind: 'javascript', manager: detectPackageManager({ pkg: json, files: scan.files.filter(f => path.posix.dirname(f) === path.posix.dirname(file)) }).manager,
               commands: Object.entries(json.scripts).filter(([, v]) => typeof v === 'string').map(([name, command]) => ({ name, command: preview(command) })) });
             // JSON escapes obscure literal shell -f references; inspect scripts as strings.
-            for (const command of Object.values(json.scripts)) if (typeof command === 'string') refs.push(...references(command, file));
+             for (const [name, command] of Object.entries(json.scripts)) if (typeof command === 'string') refs.push(...references(command, file).map(r => ({ ...r, commandName: name })));
           }
           if (json.require && (json.require.php || Object.keys(json.require).some(k => k.includes('/')))) {
             manifests.push({ file, kind: 'php', manager: 'composer', commands: Object.entries(json.scripts || {}).map(([name, command]) => ({ name, command: preview(command) })) });
@@ -72,7 +72,7 @@ function analyze(root, { selection = null, services = [], templatesDir, env = {}
   const evidence = [];
   for (const reference of refs) {
     const targets = reference.files.map(f => relativeReference(root, reference.source, f));
-    evidence.push({ source: reference.source, kind: reference.kind, files: targets.filter(Boolean), profiles: reference.profiles, documentation: reference.documentation });
+     evidence.push({ source: reference.source, kind: reference.kind, files: targets.filter(Boolean), profiles: reference.profiles, documentation: reference.documentation, ...(reference.commandName ? { commandName: reference.commandName } : {}) });
     for (let i = 0; i < targets.length; i++) {
       if (!targets[i]) {
         const message = 'A deployment file reference is missing, dynamic, or outside the source tree. Select and review the entrypoint.';
@@ -89,7 +89,7 @@ function analyze(root, { selection = null, services = [], templatesDir, env = {}
   for (const e of evidence.filter(e => e.kind === 'compose' && (e.files.length > 1 || e.profiles.length))) {
     if (!e.files.length || e.files.some(f => !candidates.some(c => c.kind === 'compose' && c.file === f))) continue;
     const first = candidates.find(c => c.kind === 'compose' && c.file === e.files[0]);
-    const group = { kind: 'compose', file: e.files[0], files: e.files, profiles: e.profiles, topology: first.topology };
+     const group = { kind: 'compose', file: e.files[0], files: e.files, profiles: e.profiles, topology: first.topology };
     if (!candidates.some(c => c.files && invocationKey(c) === invocationKey(group))) candidates.push(group);
   }
   if (!scan.complete) issue('INCOMPLETE_SCAN', 'Some source files were not analyzed. Review the listed exclusions/errors before deploying.');
@@ -98,23 +98,43 @@ function analyze(root, { selection = null, services = [], templatesDir, env = {}
   const authored = docker.filter(c => !c.generated);
   const folders = new Set(services.filter(s => s.enabled !== false).map(s => s.subdir || '.'));
   const eligible = compose.length ? compose : authored.length ? authored : docker.filter(c => !services.length || folders.has(path.posix.dirname(c.file)));
+  const invocations = evidence.filter(e => e.kind === 'compose' && !e.documentation && e.files.length);
+  const scoreInvocation = e => {
+    const text = [e.commandName || '', ...e.files].join(' ').toLowerCase();
+    if (/(?:^|[\s:._/-])(?:prod|production|release|deploy)(?=[\s:._/-]|$)/.test(text)) return 0;
+    if (/(?:^|[\s:._/-])(?:test|testing|ci)(?=[\s:._/-]|$)/.test(text)) return 3;
+    if (/(?:^|[\s:._/-])(?:dev|development|debug)(?=[\s:._/-]|$)/.test(text)) return 2;
+    return 1;
+  };
+  const declaredGroups = [...new Map(invocations.map(e => [invocationKey(e), e])).values()]
+    .map(e => ({ evidence: e, candidate: candidates.find(c => c.kind === 'compose' && invocationKey(c) === invocationKey(e)) }))
+    .filter(e => e.candidate).sort((a, b) => scoreInvocation(a.evidence) - scoreInvocation(b.evidence) || invocationKey(a.evidence).localeCompare(invocationKey(b.evidence)));
   let selected = null, reason = null;
   if (selection) {
     selected = candidates.find(c => c.kind === selection.kind && c.file === selection.file && invocationKey(c) === invocationKey(selection));
     if (!selected) issue('STALE_SELECTION', 'The saved deployment entrypoint is missing or no longer recognizable.', selection.file);
     reason = 'Saved selection';
+    // Older auto-detection saved a production override by itself. When it
+    // cannot define a runtime and the repository declares exactly one ordered
+    // launch command using it, restore that complete invocation, not a guessed
+    // merge. Explicit runnable standalone recipes remain unchanged.
+    if (selected?.kind === 'compose' && !selected.files && selected.topology?.services.some(s => !s.image && !s.build) && !(selected.topology.references || []).length) {
+      const parents = declaredGroups.filter(e => e.candidate.files?.includes(selected.file));
+      if (parents.length === 1) {
+        selected = parents[0].candidate;
+        reason = 'Repository-declared base and overlay for the selected production override';
+      }
+    }
   }
   if (!selected) {
-    const invocations = evidence.filter(e => e.kind === 'compose' && !e.documentation && e.files.length);
-    const buildFiles = [...new Set(evidence.filter(e => e.kind === 'dockerfile' && !e.documentation).flatMap(e => e.files))];
+     const buildFiles = [...new Set(evidence.filter(e => e.kind === 'dockerfile' && !e.documentation).flatMap(e => e.files))];
     if (!invocations.length && buildFiles.length === 1) {
       selected = candidates.find(c => c.kind === 'dockerfile' && c.file === buildFiles[0]);
       reason = 'Referenced by repository deployment command';
     }
-    const groups = [...new Map(invocations.map(e => [invocationKey(e), e])).values()];
-    if (!selected && groups.length === 1 && (groups[0].files.length > 1 || groups[0].profiles.length)) {
-      selected = candidates.find(c => c.kind === 'compose' && c.files && invocationKey(c) === invocationKey(groups[0]));
-      reason = 'Ordered Compose files/profiles declared by repository command';
+     if (!selected && declaredGroups.length && (declaredGroups[0].candidate.files?.length > 1 || declaredGroups[0].candidate.profiles?.length)) {
+       selected = declaredGroups[0].candidate;
+       reason = 'Ordered Compose files/profiles declared by repository command';
     }
     const explicit = [...new Set(evidence.filter(e => !e.documentation).flatMap(e => e.files).filter(f => eligible.some(c => c.file === f)))];
     if (selected) { /* a complete declared invocation already wins */ }

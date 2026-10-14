@@ -325,6 +325,7 @@
         </div>
       </div>
       <div id="tab-logs" class="sitetab" style="display:none">
+        <div class="card"><div class="sectionhead"><div><b>Site history — errors &amp; warnings</b><div class="meta">Creation warnings, chosen launch instructions and deployment results are saved here across retries and panel restarts. Popups are notifications, not the only record.</div></div><div class="actions"><button onclick="loadSiteEvents()">refresh</button><button onclick="copySiteEvents()">copy history</button></div></div><div id="siteEvents" class="site-events" aria-live="polite"></div></div>
         <div class="card"><div class="logs-toolbar"><select id="logSvc" aria-label="Log service"></select><button onclick="showLogs()">runtime logs</button><button onclick="showBuildLog()">build log</button><button onclick="showBuildLog(true)">full</button><button onclick="copyLogs()" title="Copy the displayed log text">copy logs</button></div><pre id="logs"></pre></div>
       </div>
       <div id="tab-terminal" class="sitetab" style="display:none">
@@ -478,7 +479,7 @@
     </div>
     <pre id="out" class="compact-output"></pre>
   </div>
-  <footer class="create-footer"><span class="meta">Credentials are prepared automatically. Deployment starts only when you choose Deploy.</span><div class="modalbtns"><button id="createCancelBtn" onclick="closeCreate()">Cancel</button><button id="createBuildBtn" class="btn primary" onclick="createApp()">Create website</button></div></footer>
+  <footer class="create-footer"><span class="meta">Create reads the repository, prepares its configuration, installs/builds and launches it. Progress, warnings and failures stay in the site’s Deploy and Logs tabs.</span><div class="modalbtns"><button id="createCancelBtn" onclick="closeCreate()">Cancel</button><button id="createBuildBtn" class="btn primary" onclick="createApp()">Create &amp; launch</button></div></footer>
 </div></div>
 <div id="toasts"></div>
 <div id="confirmModal" class="modal"><div class="modalbox">
@@ -510,4 +511,5 @@
 <script src="poll.js"></script>
 <script src="auth.js"></script>
 <script src="audit.js"></script>
+<script src="site-events.js"></script>
 </body></html>

@@ -1,6 +1,6 @@
 // deployment: extracted from the original backend without changing route semantics.
 module.exports = function register(ctx) {
-  const { APPS_DIR, AUTO_DEPLOY, app, appDir, deployLocks, deployOps, fs, path, pushEvents } = ctx;
+  const { APPS_DIR, AUTO_DEPLOY, app, appDir, deployLocks, deployOps, fs, path, pushEvents, store } = ctx;
   const appContainers = (...args) => ctx.appContainers(...args);
   const deploy = (...args) => ctx.deploy(...args);
   const load = (...args) => ctx.load(...args);
@@ -15,6 +15,12 @@ app.get('/api/apps/:id/build-log', (req, res) => {
     const slice = lines.slice(-tail).join('\n') || '(empty build log)';
     res.type('text/plain').send(lines.length > tail ? `… showing last ${tail} of ${lines.length} lines (add ?tail=500 for all)\n\n${slice}` : slice);
   } catch { res.type('text/plain').send('(no builds recorded yet)'); }
+});
+
+app.get('/api/apps/:id/events', (req, res) => {
+  const meta = load().apps.find(a => a.id === req.params.id);
+  if (!meta) return res.status(404).json({ error: 'unknown app' });
+  res.json({ events: store.siteEvents(meta.id, req.query.limit) });
 });
 
 app.get('/api/apps/:id/status', async (req, res) => {

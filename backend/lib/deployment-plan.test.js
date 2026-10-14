@@ -81,6 +81,16 @@ try {
   put('overlays', 'release.sh', 'docker compose -f base -f prod up\n');
   assert.deepEqual(analyze(overlay).selected.files, ['base', 'prod'], 'an ordered multi-file invocation is selected as one deployment path');
   assert(!analyze(overlay).blockers.some(b => b.code === 'COMPOSE_OVERLAY'));
+  const variants = put('variants', 'docker-compose.yml', 'services:\n  api:\n    build: .\n    depends_on: [database]\n  database:\n    image: mongo:7\n');
+  put('variants', 'docker-compose.prod.yml', 'services:\n  api:\n    command: yarn start\n');
+  put('variants', 'docker-compose.dev.yml', 'services:\n  api:\n    command: yarn dev\n');
+  put('variants', 'docker-compose.test.yml', 'services:\n  api:\n    command: yarn test\n');
+  put('variants', 'Dockerfile', recipe);
+  put('variants', 'package.json', {name:'generic-api',scripts:{'docker:dev':'docker-compose -f docker-compose.yml -f docker-compose.dev.yml up','docker:prod':'docker-compose -f docker-compose.yml -f docker-compose.prod.yml up','docker:test':'docker-compose -f docker-compose.yml -f docker-compose.test.yml up --abort-on-container-exit'}});
+  plan = analyze(variants);
+  assert.deepEqual(plan.selected.files,['docker-compose.yml','docker-compose.prod.yml'],'production selects the complete repository-declared invocation, not an override lacking build/image');
+  assert.deepEqual(analyze(variants,{selection:{kind:'compose',file:'docker-compose.prod.yml'}}).selected.files,plan.selected.files,'repair older saved standalone override using the repository declared base');
+  assert.deepEqual(analyze(variants,{selection:{kind:'compose',file:'docker-compose.yml',files:['docker-compose.yml','docker-compose.dev.yml']}}).selected.files,['docker-compose.yml','docker-compose.dev.yml'],'an explicit complete development invocation is preserved');
   const broken = put('broken', 'odd.entry', 'services:\n  web:\n    image: a\n    image: b\n');
    assert(analyze(broken).warnings.some(b => b.code === 'INVALID_COMPOSE'));
 

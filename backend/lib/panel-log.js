@@ -5,6 +5,17 @@ const fs = require('fs');
 const path = require('path');
 const MAX_BYTES = 512 * 1024;
 const MAX_READ = 500;
+let eventStore = null;
+function attachStore(store) {
+  if (!store.db.prepare("SELECT value FROM settings WHERE key='site_events_imported'").get()) {
+    const events = readErrors(store.load().apps, MAX_READ).reverse();
+    store.transaction(() => {
+      for (const event of events) store.siteEvent(event);
+      store.db.prepare('INSERT INTO settings VALUES(?,?)').run('site_events_imported', new Date().toISOString());
+    });
+  }
+  eventStore = store;
+}
 function logPath() {
   try { return path.join(path.dirname(process.env.DATA_FILE || path.join(__dirname, '../data.json')), 'panel-errors.log'); }
   catch { return path.join(__dirname, '../panel-errors.log'); }
@@ -14,12 +25,18 @@ function redact(text) {
     .replace(/x-access-token:[^@\s]+@/g, 'x-access-token:***@')
     .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)([^\s/@:]+):[^\s/@]+@/gi, '$1$2:***@')
     .replace(/(bearer\s+)[A-Za-z0-9\-._~+/=]{8,}/gi, '$1***')
+    .replace(/(\b(?:[A-Z][A-Z0-9_]*_)?(?:PASS|PWD|API_KEY|ACCESS_KEY|PRIVATE_KEY)\s*=\s*)(["']?)([^\s"';,]+)/gi, '$1$2***')
     .replace(/((?<!access-)(?:password|passwd|secret|token)[-_a-z]*["'\s:=]+)(["']?)([^\s"';,]{4,})/gi, (m, k, q) => k + q + '***');
 }
 function logEvent({ at = new Date().toISOString(), level = 'error', area = 'panel', site = null, message = '' } = {}) {
+  const event = { at, level, area, site: site || null, message: redact(message).slice(0, 8000) };
+  if (eventStore) {
+    try { eventStore.siteEvent(event); }
+    catch (e) { console.error('Persistent site event could not be recorded:', e.message); }
+  }
   try {
     const file = logPath();
-    const entry = JSON.stringify({ at, level, area, site: site || null, message: redact(message).slice(0, 2000) }) + '\n';
+    const entry = JSON.stringify(event) + '\n';
     fs.appendFileSync(file, entry);
     try {
       if (fs.statSync(file).size > MAX_BYTES) {
@@ -70,4 +87,4 @@ function readErrors(apps = [], limit = 100) {
   }
   return events.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, n);
 }
-module.exports = { logEvent, readEvents, readErrors, deploymentEvent, redact, logPath };
+module.exports = { logEvent, readEvents, readErrors, deploymentEvent, redact, logPath, attachStore };

@@ -302,5 +302,5 @@ function showSiteTab(t, remember = true) {
   if (t === 'environment') loadEnv();
   if (t === 'deploy') loadDeploymentPlan();
   if (t === 'files') listFiles('');
-  if (t === 'logs') showLogs();
+  if (t === 'logs') { loadSiteEvents(); showLogs(); }
 }

@@ -35,6 +35,8 @@ class PanelStore {
       CREATE TABLE IF NOT EXISTS operators(id TEXT PRIMARY KEY,username TEXT NOT NULL UNIQUE COLLATE NOCASE,role TEXT NOT NULL CHECK(role IN ('admin','operator')),password_hash TEXT NOT NULL,salt TEXT NOT NULL,disabled INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,terms_accepted_at TEXT);
       CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES operators(id),created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS audit_events(id INTEGER PRIMARY KEY AUTOINCREMENT,occurred_at TEXT NOT NULL,actor_id TEXT,actor_username TEXT NOT NULL,action TEXT NOT NULL,site_id TEXT,site_name TEXT,outcome TEXT NOT NULL,request_id TEXT,ip_address TEXT,details TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS site_events(id INTEGER PRIMARY KEY AUTOINCREMENT,occurred_at TEXT NOT NULL,site_id TEXT,level TEXT NOT NULL,area TEXT NOT NULL,message TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS site_event_time ON site_events(site_id,id);
       CREATE INDEX IF NOT EXISTS audit_time ON audit_events(occurred_at);
       CREATE INDEX IF NOT EXISTS audit_site ON audit_events(site_id,occurred_at);
       CREATE INDEX IF NOT EXISTS audit_actor ON audit_events(actor_id,occurred_at);
@@ -51,6 +53,14 @@ class PanelStore {
   }
   actor() { return this.context.getStore() || { username: 'system:background', requestId: null, ip: null }; }
   withActor(actor, action) { return this.context.run(actor, action); }
+  siteEvent({ at = new Date().toISOString(), site = null, level = 'error', area = 'panel', message = '' }) {
+    this.db.prepare('INSERT INTO site_events(occurred_at,site_id,level,area,message) VALUES(?,?,?,?,?)')
+      .run(at, site || null, level, area, redact(message).slice(0, 8000));
+  }
+  siteEvents(id, limit = 100) {
+    return this.db.prepare('SELECT occurred_at AS at,site_id AS site,level,area,message FROM site_events WHERE site_id=? ORDER BY id DESC LIMIT ?')
+      .all(id, Math.min(200, Math.max(1, parseInt(limit, 10) || 100)));
+  }
   audit(action, site = null, outcome = 'success', details = {}, actor = this.actor()) {
     this.db.prepare('INSERT INTO audit_events(occurred_at,actor_id,actor_username,action,site_id,site_name,outcome,request_id,ip_address,details) VALUES(?,?,?,?,?,?,?,?,?,?)')
       .run(new Date().toISOString(), actor.id || null, actor.username || 'system:background', action, site && site.id || null, site && (site.name || site.id) || null, outcome, actor.requestId || null, actor.ip || null, redact(json(details)).slice(0, 4000));

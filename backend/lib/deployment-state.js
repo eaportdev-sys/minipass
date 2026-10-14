@@ -21,8 +21,11 @@ async function recordDeploy(id, rec) {
   if (rec.status === 'error') {
     rec.error = panelLog.redact(rec.error || 'Deployment failed').slice(0, 2000);
     panelLog.logEvent(panelLog.deploymentEvent(id, rec));
+    try { fs.appendFileSync(path.join(appDir(APPS_DIR, id), 'deploy.log'), `\n--- ERROR ${rec.at || new Date().toISOString()} ---\n${rec.error}\n`); }
+    catch (e) { console.error('Deployment error log could not be written:', e.message); }
     if (op) op.failureRecorded = true;
   }
+  else if (rec.status === 'ok') panelLog.logEvent({ at: rec.at, level: 'info', area: 'deploy-' + (rec.source || op?.source || 'manual'), site: id, message: 'Deployment completed; declared runtime services passed the stability check.' });
   try {
     const db2 = load();
     const m = db2.apps.find(a => a.id === id);

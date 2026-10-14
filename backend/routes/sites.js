@@ -6,6 +6,7 @@ module.exports = function register(ctx) {
   const cleanDomain = (...args) => ctx.cleanDomain(...args);
   const configureDetectedServices = (...args) => ctx.configureDetectedServices(...args);
   const detectRepo = (...args) => ctx.detectRepo(...args);
+  const deploy = (...args) => ctx.deploy(...args);
   const ensureDatabaseAliases = (...args) => ctx.ensureDatabaseAliases(...args);
   const envSetManaged = (...args) => ctx.envSetManaged(...args);
   const lifecycleError = (...args) => ctx.lifecycleError(...args);
@@ -179,13 +180,12 @@ app.post('/api/apps', async (req, res) => {
     // build is manual and automation stays off until explicitly enabled.
     const webhookNote = ghLink ? 'github linked - automation disabled' : 'no github automation';
     if (detectedServices.length) panelLog.logEvent({ level: 'info', area: 'create', site: id, message: 'services detected: ' + detectedServices.join(', ') });
-    // First build is manual. AUTO_DEPLOY is intentionally false for now, so a
-    // create/link flow cannot surprise-run a half-reviewed repository.
     // Creation-time env report: code-referenced vars missing from the generated
     // .env, so the operator knows before the first deploy instead of via a
     // crash loop. Read-only, capped, never fails the create.
     let envNeeds = [];
-    try { if (!created.hasDeclaredCompose) envNeeds = missingEnvVars(created.dir).unset.slice(0, 12); } catch {}
+    try { envNeeds = missingEnvVars(created.dir).unset.slice(0, 12); } catch {}
+    if (envNeeds.length) panelLog.logEvent({ level: 'warn', area: 'create', site: id, message: `Source references unset variables (${envNeeds.join(', ')}). Set required values in Environment; external credentials are not invented.` });
     if(created.hasDeclaredCompose) try {
       const selected=refreshDeploymentPlan(meta,created.dir).selected;
       if(selected&&selected.kind==='compose') {
@@ -196,7 +196,15 @@ app.post('/api/apps', async (req, res) => {
       }
     }catch(e){panelLog.logEvent({level:'warn',area:'create',site:id,message:'Repository input initialization needs review: '+e.message});}
     const plan = refreshDeploymentPlan(meta, created.dir);
-    res.json({ ...pubApp(meta), plan, localUrl: meta.localUrl || `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote, storageEnforced: true, ...(envNeeds.length ? { envNeeds } : {}) });
+    panelLog.logEvent({ level: 'info', area: 'create', site: id, message: 'Site created with its enforced storage allowance and repository configuration.' });
+    // Initial launch is the normal Create workflow, independent of later
+    // GitHub/push automation. Return promptly; progress and failures persist in
+    // site events, build output and deployment history. Explicit save-only API
+    // fixtures/imports may use launch:false; the create UI never sends it.
+    const launching = req.body.launch !== false;
+    if (launching) deploy(id, { source: 'create', skipSync: true, originHost: req.hostname })
+      .catch(e => console.error(id, 'initial launch failed:', redactUrl(e.message)));
+    res.json({ ...pubApp(meta), plan, deploying: launching, localUrl: meta.localUrl || `http://localhost:${hostPort}`, webhook: `/webhook/${id}?token=${token}`, webhookNote, storageEnforced: true, ...(envNeeds.length ? { envNeeds } : {}) });
   } catch (e) {
     const error = redactUrl(e.message);
     try { panelLog.logEvent({ level: 'error', area: 'create', site: creatingId, message: error }); } catch {}

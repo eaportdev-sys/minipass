@@ -6,10 +6,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "pretest": "node lib/panel-store.test.js && node ../frontend/audit.test.js && node lib/panel-image.test.js && node lib/node-start.test.js && node lib/cleanup.test.js && node lib/deployment-plan.test.js && node lib/repository-compose.test.js && node lib/compose-inputs.test.js && node lib/local-access.test.js && node lib/db-tools.test.js && node ../frontend/deployment-plan.test.js && node ../frontend/databases.test.js",
+    "pretest": "node lib/panel-store.test.js && node ../frontend/audit.test.js && node ../frontend/site-events.test.js && node lib/panel-image.test.js && node lib/node-start.test.js && node lib/cleanup.test.js && node lib/deployment-plan.test.js && node lib/repository-compose.test.js && node lib/compose-inputs.test.js && node lib/local-access.test.js && node lib/db-tools.test.js && node ../frontend/deployment-plan.test.js && node ../frontend/databases.test.js",
     "test:compose-live": "node lib/compose-live.test.js",
     "test:compose-inputs-live": "node lib/compose-inputs-api.test.js",
     "test:create-quota-live": "node lib/create-quota-live.test.js",
+    "test:create-launch-live": "node lib/create-launch-live.test.js",
     "test:workflow-api": "node lib/deployment-plan-api.test.js",
     "test:cleanup-api": "node lib/cleanup-api.test.js",
     "test:audit-api": "node lib/audit-api.test.js",

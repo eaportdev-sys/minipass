@@ -56,10 +56,15 @@ async function main() {
     const session = accounts.login('alice', 'alice-long-test-password'); accounts.disable(alice.id, true); assert(!accounts.session(session.token));
     assert.throws(() => accounts.disable(admin.user.id, true), /one enabled administrator/);
     const count = store.db.prepare('SELECT count(*) AS n FROM audit_events').get().n;
+    store.siteEvent({site:'alpha',level:'warn',area:'create',message:'Source references unset variables (DB_PASS)'});
+    store.siteEvent({site:'alpha',level:'error',area:'deploy-create',message:'Compose service has neither an image nor a build context specified. DB_PASS=private-value'});
     store.close(); store = new PanelStore({ file, legacyFile: legacy, authFile: auth });
+    assert.equal(store.siteEvents('alpha').length,2,'site warnings and launch failures survive panel restarts independently of transient popups/build output');
+    assert(store.siteEvents('alpha')[0].message.includes('build context')&&!store.siteEvents('alpha')[0].message.includes('private-value'));
+    assert.equal(store.siteEvents('beta').length,0,'site event queries do not mix unrelated sites');
     assert.equal(store.db.prepare('SELECT count(*) AS n FROM audit_events').get().n, count, 'restart does not reimport legacy JSON or duplicate historical events');
     assert.equal(store.load().apps.length, 1); assert.equal(fs.readFileSync(legacy, 'utf8'), original);
-    console.log('SQLite: preserved migration backups, independent/stale-safe records, named identities, queued deletion attribution, durable append-only audit and private/read-only SQL: OK');
+    console.log('SQLite: preserved migration backups, independent/stale-safe records, named identities, queued deletion attribution, durable audit/site logs and private/read-only SQL: OK');
   } finally { if (store) store.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

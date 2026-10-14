@@ -122,7 +122,7 @@ async function deployNow(id, opts = {}) {
   // defensive invariant against any future call that bypasses the queue.
   if (deployLocks.has(id)) throw new Error('internal deploy queue violation');
   deployLocks.add(id);
-  const opSource = ['webhook', 'poll', 'local-push', 'manual', 'local'].includes(opts.source) ? opts.source : 'manual';
+  const opSource = ['create', 'webhook', 'poll', 'local-push', 'manual', 'local'].includes(opts.source) ? opts.source : 'manual';
   deployOps.set(id, { source: opSource, startedAt: Date.now() });
   pushEvents.delete(id);
   let localStage = null;
@@ -135,6 +135,7 @@ async function deployNow(id, opts = {}) {
   // One log per attempt. Clear before any preflight/pre-build output, not just
   // before Docker build (which used to erase successful pre-build evidence).
   fs.writeFileSync(buildLog, `--- deploy ${opSource} started ${new Date().toISOString()} ---\n`);
+  panelLog.logEvent({ level: 'info', area: 'deploy-' + opSource, site: id, message: 'Deployment started: inspecting repository instructions, preparing declared inputs, installing/building and starting services.' });
   let buildCodeDir = codeDir;
   let composeCmd = meta.storageQuota ? `${COMPOSE_BIN} -p ${id}` : COMPOSE_BIN;
   let sourceSha = null;
@@ -190,6 +191,14 @@ async function deployNow(id, opts = {}) {
   // Read the actual checkout to choose its executor. Analysis is advice, not
   // permission to launch: Docker/Compose report real build and runtime failures.
   const sourcePlan = refreshDeploymentPlan(meta, dir, buildCodeDir);
+  try {
+    const unset = missingEnvVars(dir).unset;
+    if (unset.length) {
+      const message = `Source references unset variables (${unset.slice(0, 12).join(', ')}${unset.length > 12 ? ', …' : ''}). Set required values in Environment; external credentials are not invented.`;
+      fs.appendFileSync(buildLog, '--- configuration warning: ' + message + ' ---\n');
+      panelLog.logEvent({ level: 'warn', area: 'configuration', site: id, message });
+    }
+  } catch {}
   if (sourcePlan.selected && sourcePlan.selected.kind === 'compose') {
     deployOps.get(id).executor = 'repository-compose';
     const result = await deployRepositoryCompose(meta, dir, buildCodeDir, sourcePlan, opts, sourceSha);
@@ -547,6 +556,9 @@ function deploymentRunners(id, dir) {
 async function deployRepositoryCompose(meta, dir, root, plan, opts, sourceSha) {
   const io = deploymentRunners(meta.id, dir);
   const entrypoint = { ...plan.selected };
+  const launchPath = (entrypoint.files || [entrypoint.file]).join(' + ');
+  fs.appendFileSync(path.join(dir, 'deploy.log'), '--- repository launch path: ' + launchPath + ' ---\n');
+  panelLog.logEvent({ level: 'info', area: 'launch-path', site: meta.id, message: 'Following repository Compose invocation: ' + launchPath });
   const containers=await repositoryCompose.inspectProject({id:meta.id,docker:DOCKER_BIN,run:io.run});
   if(!localAccess.isLocal(meta))localAccess.validateTarget(meta.publicUrl,meta,load().apps);
   const declared=composeInputs.declarations(root,entrypoint).services;

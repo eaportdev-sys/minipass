@@ -76,6 +76,16 @@ that override while keeping uid 0 to verify actual `EDQUOT` enforcement.
 
 ## Verification
 
+Normal Create reads source instructions, keeps declared base/production Compose
+files together, prepares configuration and starts installing/building/launching.
+`launch:false` is an explicit save-only API option for imports/isolated fixtures;
+the create UI does not use it. Later GitHub/push automation remains opt-in.
+
+`site_events` stores per-site creation/configuration warnings, launch paths and
+results; `/api/apps/:id/events` serves the site's Logs history. Existing retained
+panel/deploy errors import once, without inventing past popup records. Actual
+deployment errors also append to build output, including pre-build failures.
+
 `npm test`, `npm run test:workflow-api`, `npm run test:cleanup-api`, and
 `npm run test:audit-api` use isolated metadata. Lifecycle I/O in the audit API test
 is synthetic; real Docker/Compose and quota tests remain explicit Linux-only tests.

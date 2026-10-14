@@ -8,6 +8,8 @@ assert(log.redact('see x-access-token:abc123@github.com/x').includes('x-access-t
 assert(!log.redact('see x-access-token:abc123@github.com/x').includes('abc123'));
 assert(log.redact('DB_PASSWORD=hunter2 ok').includes('***') && !log.redact('DB_PASSWORD=hunter2 ok').includes('hunter2'));
 assert(log.redact('plain message').includes('plain message'));
+assert(!log.redact('DB_PASS=private-value API_KEY=provider-key').includes('private-value'));
+assert(!log.redact('DB_PASS=private-value API_KEY=provider-key').includes('provider-key'));
 log.logEvent({ level: 'warn', area: 'create', site: 'demo', message: 'quota not enforced' });
 log.logEvent({ area: 'trash', site: 'demo', message: 'cleanup failed' });
 fs.appendFileSync(log.logPath(), 'not-json\n');

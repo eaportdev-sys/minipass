@@ -64,7 +64,7 @@ http.createServer((req,res)=>{const f=handlers.get(req.url);if(!f){res.statusCod
     const setup=await fetch(base+'/api/panel/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:'fixture-password-only',acceptTerms:true})});assert.equal(setup.status,200);
     const headers={Cookie:setup.headers.get('set-cookie').split(';')[0],'Content-Type':'application/json'};
     const call=async(url,method='GET',body)=>new Promise((resolve,reject)=>{const payload=body===undefined?null:JSON.stringify(body);const request=require('http').request(base+url,{method,headers:{...headers,...(payload?{'Content-Length':Buffer.byteLength(payload)}:{})},timeout:600000},res=>{let text='';res.on('data',d=>{text+=d});res.on('end',()=>{try{resolve({status:res.statusCode,body:JSON.parse(text)})}catch(e){reject(e)}})});request.on('error',reject);request.on('timeout',()=>request.destroy(Error('fixture timeout')));request.end(payload);});
-    const createBody={name:'Fresh database fixture',type:'node',repoUrl:repo,branch:'main',storageGB:'1',access:'local'};
+    const createBody={name:'Fresh database fixture',type:'node',repoUrl:repo,branch:'main',storageGB:'1',access:'local',launch:false};
      const inspected=await call('/api/apps','POST',{...createBody,prepareOnly:true});assert.equal(inspected.status,200);assert(!inspected.body.needsEntrypoint);
     const selected={kind:'compose',file:'deploy.definition'};
     const chosen=await call('/api/apps','POST',{...createBody,prepareOnly:true,pendingId:inspected.body.pendingId,deploymentEntrypoint:selected});assert.equal(chosen.status,200);assert.equal(chosen.body.repositoryDatabases[0].type,'postgres');

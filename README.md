@@ -173,6 +173,16 @@ overlays take precedence. Otherwise use its Dockerfile, or a template for a
 detected Node, React/static or PHP application. Production-named files are
 preferred when several recipes exist; Setup provides an optional override.
 Incomplete discovery and documentation references are notes, not launch vetoes.
+Create immediately starts the initial install/build/launch after repository
+inspection and mandatory quota allocation. No second Deploy click is required.
+When a repository declares development, production and test Compose invocations,
+the production invocation retains its ordered base and override files instead of
+trying to launch a production override by itself. Subsequent GitHub automation
+remains a separate opt-in choice.
+
+The site's **Logs → Site history** retains creation warnings, launch paths and
+deployment errors in SQLite across retries and panel restarts. Build output also
+includes early/preflight failures. Popups notify you; they are not the only record.
 Repository scripts are not executed merely to inspect them.
 
 Use repository `.env` values first; examples supply missing application keys.

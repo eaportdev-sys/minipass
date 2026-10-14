@@ -21,7 +21,7 @@ async function main(){
     const setup=await fetch(base+'/api/panel/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:'synthetic-quota-fixture-only',acceptTerms:true})});assert.equal(setup.status,200);
     const headers={Cookie:setup.headers.get('set-cookie').split(';')[0],'Content-Type':'application/json'};
     const call=async(url,body)=>{const r=await fetch(base+url,{method:'POST',headers,body:JSON.stringify(body)});return {status:r.status,data:await r.json()};};
-     const body={name:'Quota source fixture',type:'static',repoUrl:repo,branch:'main',access:'local',enforceStorage:true,storageGB:'0.1'};
+     const body={name:'Quota source fixture',type:'static',repoUrl:repo,branch:'main',access:'local',enforceStorage:true,storageGB:'0.1',launch:false};
     const prepared=await call('/api/apps',{...body,prepareOnly:true});assert.equal(prepared.status,200,JSON.stringify(prepared));id=prepared.data.pendingId;
     const dir=path.join(apps,id),staged=path.join(apps,'.drafts',id);
     assert(!fs.existsSync(dir)&&fs.existsSync(path.join(staged,'code','index.html')));
@@ -37,7 +37,7 @@ async function main(){
       dir,path.join(dir,'code'),path.join(dir,'code','nested','source.bin')],{encoding:'utf8'});
     assert.deepEqual(JSON.parse(getProjects),[usage.projectId,usage.projectId,usage.projectId],'source descendants must inherit the actual kernel project quota, not remain uncharged');
     assert(!fs.existsSync(staged));assert(fs.readFileSync(path.join(dir,'code','nested','source.bin')).equals(Buffer.alloc(1024*1024,65)));
-    assert(!created.data.lastDeploy,'registration is not an automatic deployment');
+    assert(!created.data.lastDeploy&&!created.data.deploying,'this explicit save-only quota fixture does not launch containers');
     console.log('LIVE PASS: reproduced the exact enforced-host refusal, recovered a legacy source-only draft, created the site, verified source-file kernel project IDs and shared hard-limit accounting; no migration/container deployment');
   }finally{
     if(child&&child.exitCode===null)child.kill();if(exit)await exit;

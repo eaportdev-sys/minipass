@@ -1,4 +1,5 @@
 let siteListPoll = false;
+let lastInitialLaunchShown = null;
 async function pollSiteList() {
   if (siteListPoll || document.hidden) return;
   const view = document.getElementById('view-websites');
@@ -15,15 +16,21 @@ setInterval(async () => {
   if (!currentApp) return;
   let st;
   try { st = await (await fetch(`/api/apps/${currentApp}/status`)).json(); } catch { return; }
-  const op = st.deployOp && st.deployOp.source !== 'manual' ? st.deployOp : null;
+  const op = st.deployOp && ['webhook', 'poll', 'local-push'].includes(st.deployOp.source) ? st.deployOp : null;
   const slot = !op ? null : (op.source === 'local-push' ? 'local' : 'hook');
   const recv = !op && st.pushEvent && (Date.now() - st.pushEvent.at) < 120000;
   updatePowerStates(st);
+  if (st.deploying && document.getElementById('tab-logs').style.display !== 'none') loadSiteEvents();
+  if (!st.deploying && st.lastDeploy?.source === 'create' && lastInitialLaunchShown !== `${currentApp}:${st.lastDeploy.at}`) {
+    lastInitialLaunchShown = `${currentApp}:${st.lastDeploy.at}`;
+    loadDeployStatus();
+    if (document.getElementById('tab-logs').style.display !== 'none') loadSiteEvents();
+  }
   if (st.app) renderRouteChoices(st.app);
   // Server-side manual builds (create's background build, list-view redeploys)
   // have no browser-side tracker, unlike runDeploy. Surface them in the main
   // progress box so an opened site shows elapsed time instead of a bare pulse.
-  const mop = st.deployOp && (st.deployOp.source === 'manual' || st.deployOp.source === 'local') && manualDeployActive !== currentApp ? st.deployOp : null;
+  const mop = st.deployOp && ['create', 'manual', 'local'].includes(st.deployOp.source) && manualDeployActive !== currentApp ? st.deployOp : null;
   if (mop) {
     manualOpShown = { app: currentApp, startedAt: mop.startedAt };
     const box = document.getElementById('deployProg');
@@ -57,6 +64,7 @@ setInterval(async () => {
       setTimeout(() => { box.style.display = 'none'; }, 15000);
     }
     refreshSiteData();
+    if (document.getElementById('tab-logs').style.display !== 'none') loadSiteEvents();
   }
   for (const p of ['hook', 'local']) {
     const box = document.getElementById(p + 'Prog');
@@ -103,4 +111,4 @@ setInterval(async () => {
   document.getElementById(slot + 'Bar').style.width = pctv.toFixed(0) + '%';
   document.getElementById(slot + 'Pct').textContent = pctv.toFixed(0) + '%';
   document.getElementById(slot + 'Stage').textContent = `deploying via ${op.source}…`;
-}, 3000);
+}, 3000);
