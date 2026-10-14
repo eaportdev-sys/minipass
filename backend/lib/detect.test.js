@@ -150,4 +150,12 @@ assert(!hasRunnableEntry(['package.json'], { scripts: { dev: 'vite' } }, 'react'
 assert(hasRunnableEntry(['index.php'], null, 'php').runnable);
 assert(!hasRunnableEntry(['README.md'], null, 'php').runnable);
 
+// An empty/unreadable package.json carries no runtime signal: index.html reads
+// static (not node), a bare server entry reads node, samples read nothing.
+const emptyStatic = decideType(['README.md', 'index.html', 'package.json', 'script.js'], null);
+assert.equal(emptyStatic.type, 'static', JSON.stringify(emptyStatic));
+const emptyServer = decideType(['server.js', 'package.json'], null);
+assert.equal(emptyServer.type, 'node', JSON.stringify(emptyServer));
+assert.equal(emptyServer.detected, 'server-entry', JSON.stringify(emptyServer));
+
 console.log('frontend/backend folder classification: OK');

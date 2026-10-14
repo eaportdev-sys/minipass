@@ -27,7 +27,7 @@ function decideType(paths, pkg) {
   if (root('composer.json') && (root('artisan') || deps['laravel-vite-plugin'])) {
     return { type: 'php', detected: 'php', dbs, reason: 'composer.json + Laravel console (artisan) - root package.json is the Vite asset pipeline' };
   }
-  if (pkgPath) {
+  if (pkgPath && pkg && typeof pkg === 'object') {
     const scripts = (pkg && pkg.scripts) || {};
     // A declared production start script IS the runtime. This is the generic
     // rule, so present and future server frameworks need no per-framework
@@ -57,6 +57,11 @@ function decideType(paths, pkg) {
   }
   if (root('index.html') || root('index.htm')) {
     return { type: 'static', detected: 'static', dbs, reason: 'index.html at root' };
+  }
+  // A server entry with no manifest still runs on the Node template
+  // (npm start falls back to node server.js/index.js).
+  if (root('server.js') || root('index.js') || root('server.cjs') || root('index.cjs') || root('server.mjs') || root('index.mjs')) {
+    return { type: 'node', detected: 'server-entry', dbs, reason: 'server.js/index.js at root with no package.json' };
   }
   if (root('requirements.txt') || root('pyproject.toml') || root('setup.py') || any(/\.py$/)) {
     return { type: null, detected: 'python', dbs, reason: 'python apps have no template yet - pick manually' };
