@@ -69,6 +69,10 @@ Bulk Empty Trash still performs one shared cache cleanup, not one per site.
 **Every new site receives an enforced storage allowance** after its capacity check.
 There is no opt-out flag and no successful creation with a fake unenforced limit.
 An unready host quota bridge needs repair; it is not permission to disable quotas.
+Limits apply to the panel and ordinary application/database containers, including
+uid 0. A privileged host administrator with `CAP_SYS_RESOURCE` can override kernel
+quotas, just as they can change the filesystem itself; the live smoke test drops
+that override while keeping uid 0 to verify actual `EDQUOT` enforcement.
 
 ## Verification
 

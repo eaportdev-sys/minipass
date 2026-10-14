@@ -5,7 +5,6 @@ Requires active quotas, 0.1 GB unallocated capacity and cached redis:7-alpine.
 Proves root/database-container writes fail at the SAME project quota, verifies
 Trash retention, then destroys only this temporary site and releases its budget.
 """
-import errno
 import http.client
 import json
 import os
@@ -57,15 +56,15 @@ def main():
         assert result.returncode != 0 and 'quota' in result.stderr.lower(), 'Database-container writes must fail specifically with a quota error: ' + result.stderr
         before = request('GET', '/sites/' + name)
         assert before['enforced'] and before['usedBytes'] <= 100000000 + 4096
-        # Ordinary root writes must fail too, not bypass a database-only limit.
-        hit = False
-        try:
-            with (directory / 'synthetic-root').open('wb', buffering=0) as stream:
-                for _ in range(200):
-                    stream.write(block)
-        except OSError as error:
-            hit = error.errno == errno.EDQUOT
-        assert hit, 'Root-owned site file writes must hit EDQUOT'
+        # The panel and ordinary app containers run as root WITHOUT
+        # CAP_SYS_RESOURCE. Host administrators have that explicit quota-override
+        # capability; testing with sudo's full capabilities would bypass the
+        # very limit being tested. Keep uid 0, drop only that override in the
+        # isolated writer, and require the kernel's exact EDQUOT error.
+        root_probe = subprocess.run(['setpriv', '--bounding-set=-sys_resource', 'python3', '-c',
+            "import errno,sys\ntry:\n with open(sys.argv[1], 'wb', buffering=0) as stream:\n  for _ in range(200): stream.write(bytes(1024*1024))\nexcept OSError as error:\n if error.errno != errno.EDQUOT: raise\nelse: raise AssertionError('root-owned writes did not hit EDQUOT')",
+            str(directory / 'synthetic-root')], text=True, capture_output=True, timeout=60)
+        assert root_probe.returncode == 0, 'Root-owned site file writes must hit EDQUOT: ' + root_probe.stderr
         directory.rename(trashed)
         held = request('GET', '/sites/' + name)
         assert held['usedBytes'] >= before['usedBytes'] and held['enforced']
