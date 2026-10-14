@@ -50,6 +50,14 @@ function decideType(paths, pkg) {
       if (!scripts.build) return { type: null, detected: 'vite', dbs, reason: 'vite project without a build script - add "build" emitting dist/ or build/, or pick manually' };
       return { type: 'react', detected: 'vite', dbs, reason: 'vite project (built + served as static)' };
     }
+    // Tooling-only manifests (grunt/gulp, no start, no entry, no server file)
+    // describe how to build the page, not a server: with an index.html the
+    // site is static. An empty package.json carries no signal at all.
+    const mainFile = pkg && typeof pkg.main === 'string' ? pkg.main.replace(/\\/g, '/').replace(/^\.\//, '') : null;
+    const hasServerFile = list.some(p => /^(server|index)\.(js|cjs|mjs)$/.test(p));
+    if (!scripts.start && !(mainFile && /\.(?:js|cjs|mjs)$/.test(mainFile) && list.includes(mainFile)) && !hasServerFile && root('index.html')) {
+      return { type: 'static', detected: 'static', dbs, reason: 'index.html at root; package.json is build tooling only (no start, entry, or server file)' };
+    }
     return { type: 'node', detected: 'node', dbs, reason: `${pkgPath} with no frontend markers` };
   }
   if (root('composer.json') || shallowest(/(^|\/)index\.php$/) || any(/\.php$/)) {

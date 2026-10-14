@@ -150,8 +150,10 @@ assert(!hasRunnableEntry(['package.json'], { scripts: { dev: 'vite' } }, 'react'
 assert(hasRunnableEntry(['index.php'], null, 'php').runnable);
 assert(!hasRunnableEntry(['README.md'], null, 'php').runnable);
 
-// An empty/unreadable package.json carries no runtime signal: index.html reads
-// static (not node), a bare server entry reads node, samples read nothing.
+// Tooling-only manifests (grunt, no start/entry/server) with an index.html read
+// static, not node.
+const hover = decideType(['index.html', 'package.json', 'css/hover.css'], { devDependencies: { grunt: '~0.4.1' } });
+assert.equal(hover.type, 'static', JSON.stringify(hover));
 const emptyStatic = decideType(['README.md', 'index.html', 'package.json', 'script.js'], null);
 assert.equal(emptyStatic.type, 'static', JSON.stringify(emptyStatic));
 const emptyServer = decideType(['server.js', 'package.json'], null);
