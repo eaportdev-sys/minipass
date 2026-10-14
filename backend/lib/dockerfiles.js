@@ -201,9 +201,64 @@ function legacyMatch(type, current) {
   return (LEGACY[type] || []).some(old => typeof old === 'function' ? old(n) : n === normalized(old));
 }
 
-function refreshStandardDockerfile(ctxDir, type, templatesDir) {
+// A repository Dockerfile that runs infrastructure (redis, a database) is a
+// supporting service, never the website itself. Building it as the app gives
+// a container with no HTTP server and no landing page. These files are left
+// untouched on disk; the panel builds the detected type template instead
+// (seeded as Dockerfile.minipass) and says so in the deploy log.
+const BYPASS_DOCKERFILE = 'Dockerfile.minipass';
+const INFRA_IMAGES = new Set(['redis', 'mysql', 'mariadb', 'postgres', 'mongo', 'memcached', 'elasticsearch', 'rabbitmq', 'cassandra', 'couchdb', 'neo4j', 'influxdb']);
+const INFRA_PORTS = new Set([6379, 6380, 3306, 5432, 27017, 11211, 9200, 9300, 5672, 15672]);
+function infraImageName(ref) {
+  const base = String(ref || '').trim().split('@')[0].split(':')[0].split('/');
+  return base[base.length - 1].toLowerCase();
+}
+function exposedPorts(text) {
+  const ports = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const m = line.match(/^\s*EXPOSE\s+(.+)$/i);
+    if (!m) continue;
+    for (const tok of m[1].split(/\s+/)) {
+      const p = parseInt(String(tok).split('/')[0], 10);
+      if (Number.isInteger(p) && p > 0 && p < 65536) ports.push(p);
+    }
+  }
+  return ports;
+}
+function finalFromImage(text) {
+  let image = null;
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const m = line.match(/^\s*FROM\s+(?:--\S+\s+)*(\S+)/i);
+    if (m) image = m[1];
+  }
+  return image;
+}
+// Content check (no filesystem): a Dockerfile whose final image is
+// infrastructure, or whose every exposed port is infrastructure, cannot serve
+// the site. Files with no EXPOSE and a generic base image are NOT infra.
+function isInfraDockerfileText(text) {
+  const body = String(text || '');
+  if (!isDockerfile(body)) return false;
+  const from = finalFromImage(body);
+  if (from && INFRA_IMAGES.has(infraImageName(from))) return true;
+  const ports = exposedPorts(body);
+  if (ports.length && ports.every(p => INFRA_PORTS.has(p))) return true;
+  return false;
+}
+function isInfraDockerfile(ctxDir, filename) {
+  try {
+    const file = sourceFile(ctxDir, filename || 'Dockerfile');
+    if (!file) return false;
+    return isInfraDockerfileText((readSource(file).text || ''));
+  } catch { return false; }
+}
+function nonInfraDockerfiles(ctxDir) {
+  return findDockerfiles(ctxDir).filter(f => !isInfraDockerfile(ctxDir, f));
+}
+
+function refreshStandardDockerfile(ctxDir, type, templatesDir, filename) {
   if (!LEGACY[type]) return 'unchanged';
-  const file = path.join(ctxDir, 'Dockerfile');
+  const file = path.join(ctxDir, filename || 'Dockerfile');
   let current;
   try { current = fs.readFileSync(file, 'utf8'); }
   catch (e) { if (e.code === 'ENOENT') return 'missing'; throw e; }
@@ -272,10 +327,17 @@ function resolveServiceDockerfile(ctxDir, selected, type, templatesDir) {
     try { if (target) st = fs.lstatSync(target); } catch {}
     if (!st || !st.isFile()) throw new Error(`selected Dockerfile '${selected}' not found in this service folder (found: ${list})`);
     if (!isDockerfile(readSource(target).text)) throw new Error(`selected file '${selected}' does not contain Dockerfile instructions`);
+    if (isInfraDockerfile(ctxDir, path.basename(selected))) {
+      const ports = exposedPorts(readSource(target).text || '').join('/') || 'infrastructure ports';
+      throw new Error(`selected Dockerfile '${selected}' runs infrastructure (${ports}) - it cannot serve the site. Use the ${type || 'detected'} template instead`);
+    }
     return { file: path.basename(selected), source: 'selected' };
   }
-  const exact = cands.find(f => /^dockerfile$/i.test(f));
-  const variants = cands.filter(f => !/^dockerfile$/i.test(f));
+  // Infrastructure recipes (FROM redis, EXPOSE 6379, ...) are supporting
+  // services, never the website. Skip them so the type template is used.
+  const usable = cands.filter(f => !isInfraDockerfile(ctxDir, f));
+  const exact = usable.find(f => /^dockerfile$/i.test(f));
+  const variants = usable.filter(f => !/^dockerfile$/i.test(f));
   if (exact) {
     if (type && templatesDir && variants.length) {
       try {
@@ -292,4 +354,4 @@ function resolveServiceDockerfile(ctxDir, selected, type, templatesDir) {
   return null;
 }
 
-module.exports = { refreshStandardDockerfile, standardDockerfileType, findDockerfiles, validDockerfileName, resolveServiceDockerfile };
+module.exports = { refreshStandardDockerfile, standardDockerfileType, findDockerfiles, validDockerfileName, resolveServiceDockerfile, isInfraDockerfile, isInfraDockerfileText, nonInfraDockerfiles, exposedPorts, INFRA_PORTS, BYPASS_DOCKERFILE };

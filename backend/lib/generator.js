@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const { execSync,execFileSync } = require('child_process');
 const { appGitEnv } = require('./ssh');
 const { readBuildProfile, prepareStaticBuild } = require('./build-profile');
-const { resolveServiceDockerfile, findDockerfiles, standardDockerfileType } = require('./dockerfiles');
+const { resolveServiceDockerfile, findDockerfiles, standardDockerfileType, isInfraDockerfile, BYPASS_DOCKERFILE } = require('./dockerfiles');
 const { sourceFile, readSource } = require('./repository-files');
 
 const DB_IMAGES = {
@@ -29,6 +29,22 @@ function normDbs(db) {
 // Variant selection (Dockerfile.web etc.) lives in resolveServiceDockerfile:
 // this seeder only ever writes the exact Dockerfile name.
 function ensureDockerfile(ctxDir, type, templatesDir, options = {}) {
+  // Infrastructure-only recipes (FROM redis, EXPOSE 6379, ...) are supporting
+  // services, never the website. Seed the type template as a bypass variant so
+  // automatic resolution uses it; the repository files stay untouched.
+  try {
+    const have = findDockerfiles(ctxDir);
+    if (have.length && have.every(f => isInfraDockerfile(ctxDir, f))) {
+      const tpl = path.join(templatesDir, type, 'Dockerfile');
+      const dst = path.join(ctxDir, BYPASS_DOCKERFILE);
+      if (fs.existsSync(tpl) && !fs.existsSync(dst)) fs.copyFileSync(tpl, dst);
+      if ((type === 'react' || type === 'static')) {
+        const nginx = path.join(ctxDir, 'nginx.conf');
+        if (!fs.existsSync(nginx)) fs.writeFileSync(nginx, nginxConf(null));
+      }
+      if (fs.existsSync(dst)) return 'seeded-bypass';
+    }
+  } catch {}
   if (findDockerfiles(ctxDir).length) return 'present';
   if (type === 'static' && readBuildProfile(ctxDir).kind === 'jekyll') {
     const result = prepareStaticBuild(ctxDir, templatesDir, options);
@@ -330,7 +346,18 @@ function createApp({ appsDir, templatesDir, name, type, repoUrl, db = 'none', po
     } else if (!hasDeclaredCompose && findDockerfiles(buildDir).length < 2) {
       const resolved = resolveServiceDockerfile(buildDir, null, type, templatesDir);
       if (resolved) createDockerfile = resolved.file;
-      else ensureDockerfile(buildDir, type, templatesDir, { modernize: modernizeBuild });
+      else {
+        ensureDockerfile(buildDir, type, templatesDir, { modernize: modernizeBuild });
+        const after = resolveServiceDockerfile(buildDir, null, type, templatesDir);
+        if (after) createDockerfile = after.file;
+      }
+    }
+    // A repository infrastructure recipe is never the website: normalize to the
+    // resolved template instead of building redis/a database as the app.
+    if (!hasDeclaredCompose && isInfraDockerfile(buildDir, createDockerfile)) {
+      ensureDockerfile(buildDir, type, templatesDir, { modernize: modernizeBuild });
+      const after = resolveServiceDockerfile(buildDir, null, type, templatesDir);
+      if (after) createDockerfile = after.file;
     }
   }
   const declaredPort = Number(repoEnv.PORT);

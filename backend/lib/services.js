@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { serviceBlock, ensureDockerfile, nginxConf, inferPort, TYPE_PORT } = require('./generator');
-const { findDockerfiles, resolveServiceDockerfile, validDockerfileName } = require('./dockerfiles');
+const { findDockerfiles, resolveServiceDockerfile, validDockerfileName, isInfraDockerfile, nonInfraDockerfiles, INFRA_PORTS, BYPASS_DOCKERFILE } = require('./dockerfiles');
 const { decideType } = require('./detect');
 const { readBuildProfile } = require('./build-profile');
 
@@ -158,8 +158,15 @@ function renderProject({ dir, templatesDir, meta }) {
     let pinned = false;
     if (s.dockerfile && validDockerfileName(s.dockerfile)) {
       try {
-        if (findDockerfiles(ctxDir).includes(s.dockerfile)) { dockerfile = s.dockerfile; pinned = true; }
+        // A stored pin to an infrastructure recipe heals automatically: the
+        // pin is dropped so the template bypass takes over below.
+        if (findDockerfiles(ctxDir).includes(s.dockerfile) && !isInfraDockerfile(ctxDir, s.dockerfile)) { dockerfile = s.dockerfile; pinned = true; }
       } catch {}
+    }
+    // Usable recipe first: seeds the template bypass for infrastructure-only
+    // contexts (repository files stay untouched).
+    if (!nonInfraDockerfiles(ctxDir).length) {
+      ensureDockerfile(ctxDir, s.type, templatesDir, { modernize: !!((s.buildOptions || (s.name === 'app' && meta.buildOptions) || {}).modernize) });
     }
     if (!pinned) {
       try {
@@ -167,8 +174,12 @@ function renderProject({ dir, templatesDir, meta }) {
         if (r) dockerfile = r.file;
       } catch {}
     }
-    if (!findDockerfiles(ctxDir).length) {
-      ensureDockerfile(ctxDir, s.type, templatesDir, { modernize: !!((s.buildOptions || (s.name === 'app' && meta.buildOptions) || {}).modernize) });
+    // An infrastructure-derived container port (6379, ...) belongs to the
+    // sidecar, not the site: reset to the template port when bypassing.
+    if (dockerfile === BYPASS_DOCKERFILE && INFRA_PORTS.has(parseInt(s.port, 10))) {
+      const exposed = inferPort(ctxDir, 0, dockerfile) || TYPE_PORT[s.type] || 3000;
+      s.port = exposed;
+      if (s.name === 'app') { setEnv('PORT', String(exposed)); managed.add('PORT'); }
     }
     if (s.type === 'static' || s.type === 'react') {
       try {

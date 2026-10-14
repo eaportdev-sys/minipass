@@ -400,6 +400,28 @@ try {
   fs.writeFileSync(path.join(phpLegacy,'Dockerfile'),oldPhp+'\nRUN echo custom\n');
   assert.equal(refreshStandardDockerfile(phpLegacy,'php',templates),'custom','customized PHP recipes with a marker are never overwritten');
 
+  // Test 9: infrastructure Dockerfiles are supporting services, never the site
+  const { isInfraDockerfile, isInfraDockerfileText, nonInfraDockerfiles } = require('./dockerfiles');
+  assert(isInfraDockerfileText('FROM redis:latest\nLABEL x="y"\n\nEXPOSE 6379'), 'FROM redis is infra');
+  assert(isInfraDockerfileText('FROM postgres:16-alpine\nEXPOSE 5432'), 'FROM postgres is infra');
+  assert(isInfraDockerfileText('FROM node:22\nEXPOSE 6379'), 'node base exposing only an infra port is infra');
+  assert(!isInfraDockerfileText('FROM node:22\n'), 'node base with no EXPOSE is not infra');
+  assert(!isInfraDockerfileText('FROM node:22\nEXPOSE 3000'), 'node base on a web port is not infra');
+  assert(!isInfraDockerfileText('FROM nginx:alpine\nEXPOSE 80'), 'nginx on 80 is not infra');
+  assert(!isInfraDockerfileText('not a dockerfile'), 'non-dockerfile text is not infra');
+  const infraDir = path.join(tmp, 'node', 'infra-only');
+  fs.mkdirSync(infraDir, { recursive: true });
+  fs.writeFileSync(path.join(infraDir, 'package.json'), JSON.stringify({ scripts: { start: 'node server.js' } }));
+  fs.writeFileSync(path.join(infraDir, 'server.js'), 'require("express")().listen(3000)');
+  fs.writeFileSync(path.join(infraDir, 'Dockerfile'), 'FROM redis:latest\nEXPOSE 6379\n');
+  assert(isInfraDockerfile(infraDir, 'Dockerfile'), 'infra Dockerfile detected on disk');
+  assert.deepEqual(nonInfraDockerfiles(infraDir), [], 'no usable recipe while infra-only');
+  assert.equal(resolveServiceDockerfile(infraDir, null, 'node', templates), null, 'auto resolution skips infra');
+  assert.throws(() => resolveServiceDockerfile(infraDir, 'Dockerfile', 'node', templates), /infrastructure.*cannot serve the site/, 'explicit infra selection fails loud');
+  assert.equal(ensureDockerfile(infraDir, 'node', templates), 'seeded-bypass', 'template bypass seeded beside the repo file');
+  assert.equal(fs.readFileSync(path.join(infraDir, 'Dockerfile'), 'utf8'), 'FROM redis:latest\nEXPOSE 6379\n', 'repository infra file untouched');
+  assert.deepEqual(resolveServiceDockerfile(infraDir, null, 'node', templates), { file: 'Dockerfile.minipass', source: 'auto' }, 'lone bypass variant resolves automatically');
+
   console.log('native npm toolchain and exact-match standard Dockerfile upgrades: OK');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });

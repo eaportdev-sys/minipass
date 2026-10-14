@@ -1,6 +1,6 @@
 // deployment-executor: extracted from the original backend without changing route semantics.
 module.exports = function createHelpers(ctx) {
-  const { APPS_DIR, COMPOSE_BIN, DOCKER_BIN, LEGACY_PANEL_PHP_DOCKERFILE, TEMPLATES_DIR, appDir, appGitEnv, composeInputs, crypto, deployChildren, deployLocks, deployOps, deploymentPlan, dockerfileProtection, ensureDockerfile, exec, execSync, failureSummary, fs, gh, importProtection, localAccess, missingEnvVars, nginxConf, normDbs, panelLog, path, portsLib, prebuild, publication, pushEvents, readBuildProfile, redactUrl, refreshStandardDockerfile, repositoryCompose, resolveServiceDockerfile, runLogged, standardDockerfileType, svc, trashLib } = ctx;
+  const { APPS_DIR, COMPOSE_BIN, DOCKER_BIN, LEGACY_PANEL_PHP_DOCKERFILE, TEMPLATES_DIR, appDir, appGitEnv, composeInputs, crypto, deployChildren, deployLocks, deployOps, deploymentPlan, dockerfileProtection, ensureDockerfile, exec, execSync, failureSummary, fs, gh, importProtection, localAccess, missingEnvVars, nginxConf, normDbs, panelLog, path, portsLib, prebuild, publication, pushEvents, readBuildProfile, redactUrl, refreshStandardDockerfile, repositoryCompose, resolveServiceDockerfile, runLogged, standardDockerfileType, svc, trashLib, findDockerfiles, isInfraDockerfile, BYPASS_DOCKERFILE } = ctx;
   const appContainers = (...args) => ctx.appContainers(...args);
   const attachDatabase = (...args) => ctx.attachDatabase(...args);
   const autodetectHome = (...args) => ctx.autodetectHome(...args);
@@ -311,10 +311,20 @@ async function deployNow(id, opts = {}) {
         ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR, { modernize: !!((s.buildOptions || (s.name === 'app' && meta.buildOptions) || {}).modernize) });
         // Native build prerequisites also apply to ordinary repo/local rebuilds.
         refreshStandardDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+        try { df = resolveServiceDockerfile(ctxDir, s.dockerfile, s.type, TEMPLATES_DIR); }
+        catch (e) { throw new Error(`service '${s.name}': ${e.message}`); }
+        try {
+          const skipped = findDockerfiles(ctxDir).filter(f => f !== (df && df.file) && isInfraDockerfile(ctxDir, f));
+          if (skipped.length && df) fs.appendFileSync(buildLog, `--- infrastructure recipe bypassed (${skipped.join(', ')}) - supporting service, not the site; building with the ${s.type} template ---\n`);
+        } catch {}
       } else if (/^dockerfile$/i.test(df.file)) {
         // Native build prerequisites also apply to ordinary repo/local rebuilds.
         // Variant recipes are author-owned: never template-refresh them.
         refreshStandardDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+      } else if (df.file === BYPASS_DOCKERFILE) {
+        // Keep a previously seeded template bypass current; the repository
+        // infrastructure recipe stays untouched. Customized bypasses are sacred.
+        if (standardDockerfileType(ctxDir, TEMPLATES_DIR, df.file)) refreshStandardDockerfile(ctxDir, s.type, TEMPLATES_DIR, df.file);
       }
       // Refresh panel-owned PHP images so existing sites gain standard Apache
       // rewrite support. The pre-marker legacy file is recognized only by an

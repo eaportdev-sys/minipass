@@ -5,7 +5,7 @@ const path = require('path');
 const { inventory, sourceFile, isDockerfile } = require('./repository-files');
 const { parseCompose, COMPOSE_FILES } = require('./compose-read');
 const { detectPackageManager } = require('./detect');
-const { resolveServiceDockerfile, standardDockerfileType } = require('./dockerfiles');
+const { resolveServiceDockerfile, standardDockerfileType, isInfraDockerfileText } = require('./dockerfiles');
 const { redact } = require('./panel-log');
 
 function preview(command) {
@@ -44,7 +44,9 @@ function analyze(root, { selection = null, services = [], templatesDir, env = {}
   const issue = (code, message, file = null) => warnings.push({ code, message, file });
   for (const [file, text] of scan.texts) {
     if (!/^\s*\{/.test(text)) refs.push(...references(text, file));
-    if (isDockerfile(text)) candidates.push({ kind: 'dockerfile', file, generated: !!(templatesDir && standardDockerfileType(path.join(root, path.posix.dirname(file)), templatesDir, path.posix.basename(file))) });
+    // Infrastructure recipes (FROM redis, EXPOSE 6379) are supporting
+    // services, never the website: not selectable as the deployment file.
+    if (isDockerfile(text) && !isInfraDockerfileText(text)) candidates.push({ kind: 'dockerfile', file, generated: !!(templatesDir && standardDockerfileType(path.join(root, path.posix.dirname(file)), templatesDir, path.posix.basename(file))) });
     // Content first, names only help expose malformed conventional files.
     if (/(?:^|\n)\s*["']?services["']?\s*:/.test(text) || /"services"\s*:\s*\{/.test(text) || COMPOSE_FILES.includes(path.posix.basename(file))) {
       let topo;

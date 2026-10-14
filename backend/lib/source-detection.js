@@ -1,6 +1,6 @@
 // source-detection: extracted from the original backend without changing route semantics.
 module.exports = function createHelpers(ctx) {
-  const { APPS_DIR, COMPOSE_BIN, RELATIONAL_DBS, TEMPLATES_DIR, TYPE_PORT, appDir, buildProfile, crypto, deploymentPlan, ensureDockerfile, execFileSync, execSync, findDockerfiles, fs, gh, inferPort, isJekyll, nginxConf, path, quotas, refreshStandardDockerfile, repoAnalysis, resolveServiceDockerfile, standardDockerfileType, svc } = ctx;
+  const { APPS_DIR, COMPOSE_BIN, RELATIONAL_DBS, TEMPLATES_DIR, TYPE_PORT, appDir, buildProfile, crypto, deploymentPlan, ensureDockerfile, execFileSync, execSync, findDockerfiles, fs, gh, inferPort, isJekyll, nginxConf, path, quotas, refreshStandardDockerfile, repoAnalysis, resolveServiceDockerfile, standardDockerfileType, BYPASS_DOCKERFILE, svc } = ctx;
   const codeDir = (...args) => ctx.codeDir(...args);
   const envSetManaged = (...args) => ctx.envSetManaged(...args);
   const hostPortsInUse = (...args) => ctx.hostPortsInUse(...args);
@@ -74,11 +74,14 @@ function createLocalPushStage(dir, meta, pushedSha, pushedBranch) {
         if (df) {
           dfName = df.file;
           if (/^dockerfile$/i.test(df.file)) refreshStandardDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+          else if (df.file === BYPASS_DOCKERFILE && standardDockerfileType(ctxDir, TEMPLATES_DIR, df.file)) refreshStandardDockerfile(ctxDir, s.type, TEMPLATES_DIR, df.file);
         } else {
           ensureDockerfile(ctxDir, s.type, TEMPLATES_DIR, { modernize: !!((s.buildOptions || (s.name === 'app' && meta.buildOptions) || {}).modernize) });
           // Upgrade only exact historical Node/React templates, including monorepo
           // services and detached local-push checkouts. Never rewrite custom files.
           refreshStandardDockerfile(ctxDir, s.type, TEMPLATES_DIR);
+          const after = resolveServiceDockerfile(ctxDir, s.dockerfile, s.type, TEMPLATES_DIR);
+          if (after) dfName = after.file;
         }
       } catch (e) { throw new Error(`service '${s.name}': ${e.message}`); }
       if (s.type === 'static' || s.type === 'react') {
