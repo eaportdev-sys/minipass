@@ -2,6 +2,7 @@
 module.exports = function createHelpers(ctx) {
   const { APPS_DIR, COMPOSE_BIN, DOCKER_BIN, LEGACY_PANEL_PHP_DOCKERFILE, TEMPLATES_DIR, appDir, appGitEnv, composeInputs, crypto, deployChildren, deployLocks, deployOps, deploymentPlan, dockerfileProtection, ensureDockerfile, exec, execSync, failureSummary, fs, gh, importProtection, localAccess, missingEnvVars, nginxConf, normDbs, panelLog, path, portsLib, prebuild, publication, pushEvents, readBuildProfile, redactUrl, refreshStandardDockerfile, repositoryCompose, resolveServiceDockerfile, runLogged, standardDockerfileType, svc, trashLib, findDockerfiles, isInfraDockerfile, BYPASS_DOCKERFILE, hasRunnableEntry } = ctx;
   const appContainers = (...args) => ctx.appContainers(...args);
+  const withBuildSlot = (...args) => ctx.withBuildSlot(...args);
   const attachDatabase = (...args) => ctx.attachDatabase(...args);
   const autodetectHome = (...args) => ctx.autodetectHome(...args);
   const checkCancelled = (...args) => ctx.checkCancelled(...args);
@@ -201,7 +202,7 @@ async function deployNow(id, opts = {}) {
   } catch {}
   if (sourcePlan.selected && sourcePlan.selected.kind === 'compose') {
     deployOps.get(id).executor = 'repository-compose';
-    const result = await deployRepositoryCompose(meta, dir, buildCodeDir, sourcePlan, opts, sourceSha);
+    const result = await withBuildSlot(id, dir, () => deployRepositoryCompose(meta, dir, buildCodeDir, sourcePlan, opts, sourceSha));
     if (localStage && localStage.retain) localStage.retain();
     return result;
   }
@@ -496,6 +497,9 @@ async function deployNow(id, opts = {}) {
   const stamp = () => new Date().toISOString();
   // atomic deploy: snapshot running images, build WITHOUT touching containers,
   // swap only on success, health-gate the new containers, roll back on failure.
+  // The whole swap runs inside the global build slot: one site builds at a
+  // time, so concurrent launches queue instead of thrashing the host.
+  await withBuildSlot(id, dir, async () => {
   const snaps = await snapshotImages(id, dir);
   checkCancelled(id);
   const scopeSuffix = scope ? ` ${scope}` : '';
@@ -565,6 +569,7 @@ async function deployNow(id, opts = {}) {
     throw new Error('new containers unhealthy - rolled back: ' + gate.detail);
   }
   await recordDeploy(id, { sha, at: stamp(), status: 'ok', runtime: gate.detail || 'Application containers are running steadily', services: only.length ? only : svc.fullServices(meta, dir).filter(s => s.enabled !== false).map(s => s.name) });
+  }); // end withBuildSlot: swap complete, slot released before landing-path discovery
   // Landing-path discovery is optional follow-up work. Do not hold the deploy
   // lock (and keep the UI pulsing) after the release is already healthy/live.
   autodetectHome(id).catch(e => console.error(id, 'home detection:', e.message));

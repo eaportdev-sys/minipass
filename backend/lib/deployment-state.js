@@ -204,6 +204,47 @@ async function autodetectHome(id) {
   } catch (e) { console.error(id, 'autodetect:', e.message); }
 }
 
+// Global build serialization across all sites. Runtime is already isolated per
+// site (own compose project, network, volumes, host ports); concurrent builds
+// are what thrash a small host (parallel npm installs plus native compiles
+// drove load past 20 with 99s registry stalls). FIFO, one at a time unless
+// MINIPASS_MAX_BUILDS raises it for bigger hosts.
+const buildSlotQueue = [];
+let buildSlotRunning = 0;
+const buildSlotHolders = [];
+function maxBuildSlots() {
+  const n = parseInt(process.env.MINIPASS_MAX_BUILDS || '1', 10);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 4) : 1;
+}
+async function withBuildSlot(id, dir, fn) {
+  const check = () => { if (deployOps.get(id) && deployOps.get(id).cancelled) throw deployCancelledError(); };
+  check();
+  const op = deployOps.get(id);
+  if (buildSlotRunning >= maxBuildSlots()) {
+    const waitingOn = buildSlotHolders.filter(h => h !== id).join(', ') || 'another site';
+    try { fs.appendFileSync(path.join(dir, 'deploy.log'), `--- queued: ${waitingOn} is building (one build at a time) - starting when it finishes ---\n`); } catch {}
+    try { panelLog.logEvent({ level: 'info', area: 'deploy-queue', site: id, message: `Build queued behind ${waitingOn}; one site builds at a time.` }); } catch {}
+    if (op) op.waitingForBuild = true;
+    await new Promise(resolve => buildSlotQueue.push(resolve));
+    if (op) op.waitingForBuild = false;
+    try { fs.appendFileSync(path.join(dir, 'deploy.log'), '--- build slot acquired ---\n'); } catch {}
+    check();
+    // Slot transfers to this waiter; the running count is unchanged.
+  } else {
+    buildSlotRunning++;
+  }
+  if (!buildSlotHolders.includes(id)) buildSlotHolders.push(id);
+  try {
+    return await fn();
+  } finally {
+    const i = buildSlotHolders.indexOf(id);
+    if (i >= 0) buildSlotHolders.splice(i, 1);
+    const next = buildSlotQueue.shift();
+    if (next) next();
+    else buildSlotRunning--;
+  }
+}
+
 function deploy(id, opts = {}) {
   if (lifecycleLocks.has(id)) return Promise.reject(new Error('site lifecycle operation in progress'));
   const epoch = deployEpochs.get(id) || 0;
@@ -261,5 +302,5 @@ function resolveBuildManager(meta, codeDir) {
   if (['npm', 'pnpm', 'yarn', 'bun'].includes(stored)) return stored;
   return 'npm';
 }
-  return { recordDeploy, markDirty, refreshDeploymentPlan, syncProvisionedDomain, autodetectHome, deploy, rebindHostPorts, resolveBuildManager };
+  return { recordDeploy, markDirty, refreshDeploymentPlan, syncProvisionedDomain, autodetectHome, deploy, withBuildSlot, rebindHostPorts, resolveBuildManager };
 };
