@@ -13,6 +13,7 @@ module.exports = function createHelpers(ctx) {
   const currentSha = (...args) => ctx.currentSha(...args);
   const deployCancelledError = (...args) => ctx.deployCancelledError(...args);
   const ensureDatabaseAliases = (...args) => ctx.ensureDatabaseAliases(...args);
+  const fillDatabaseVars = (...args) => ctx.fillDatabaseVars(...args);
   const envSetManaged = (...args) => ctx.envSetManaged(...args);
   const firstSyncClone = (...args) => ctx.firstSyncClone(...args);
   const hasStaleRootService = (...args) => ctx.hasStaleRootService(...args);
@@ -264,9 +265,12 @@ async function deployNow(id, opts = {}) {
       }
     }
     const healed = ensureDatabaseAliases(meta);
+    const filled = fillDatabaseVars(dir, meta);
     if (added.length || healed.length) {
       svc.renderProject({ dir, templatesDir: TEMPLATES_DIR, meta });
-      fs.appendFileSync(buildLog, `--- database wiring: ${added.length ? 'attached ' + added.join(', ') : 'aliases refreshed'}${healed.length ? ' (' + healed.join(', ') + ')' : ''} ---\n`);
+    }
+    if (added.length || healed.length || filled.length) {
+      fs.appendFileSync(buildLog, `--- database wiring: ${added.length ? 'attached ' + added.join(', ') : 'aliases refreshed'}${healed.length ? ' (' + healed.join(', ') + ')' : ''}${filled.length ? ' code-referenced values filled (' + filled.join(', ') + ')' : ''} ---\n`);
     }
   } catch (e) {
     const shaDb = sourceSha || await currentSha(dir);

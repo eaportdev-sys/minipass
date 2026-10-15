@@ -180,7 +180,10 @@ function dbEnv(db, name) {
     compose: `  db:\n    image: ${DB_IMAGES.mariadb}\n    restart: unless-stopped\n    environment:\n      MARIADB_DATABASE: ${name}\n      MARIADB_USER: ${name}\n      MARIADB_PASSWORD: ${appPw}\n      MARIADB_ROOT_PASSWORD: ${rootPw}\n    volumes:\n      - dbdata:/var/lib/mysql`
   };
   if (db === 'mongo') return {
-    lines: [`MONGO_URL=mongodb://${name}:${appPw}@db:27017/${name}`],
+    // The managed account is the database root user, which authenticates
+    // against the admin database. Without authSource the driver tries the
+    // application database and every connection fails.
+    lines: [`MONGO_URL=mongodb://${name}:${appPw}@db:27017/${name}?authSource=admin`],
     compose: `  db:\n    image: ${DB_IMAGES.mongo}\n    restart: unless-stopped\n    environment:\n      MONGO_INITDB_ROOT_USERNAME: ${name}\n      MONGO_INITDB_ROOT_PASSWORD: ${appPw}\n      MONGO_INITDB_DATABASE: ${name}\n    volumes:\n      - dbdata:/data/db`
   };
   if (db === 'redis') return {
@@ -214,9 +217,10 @@ function dbService(db, name, svc, vol) {
     info: { host: svc, port: 3306, name: safe, user: safe, pass: appPw }
   };
   if (db === 'mongo') return {
-    lines: [`MONGO_HOST=${svc}`, `MONGO_PORT=27017`, `MONGO_DB=${safe}`, `MONGO_USER=${safe}`, `MONGO_PASSWORD=${appPw}`, `MONGO_URL=mongodb://${safe}:${appPw}@${svc}:27017/${safe}`],
+    // Root-user model: authenticate against admin (see dbEnv).
+    lines: [`MONGO_HOST=${svc}`, `MONGO_PORT=27017`, `MONGO_DB=${safe}`, `MONGO_USER=${safe}`, `MONGO_PASSWORD=${appPw}`, `MONGO_URL=mongodb://${safe}:${appPw}@${svc}:27017/${safe}?authSource=admin`],
     compose: `  ${svc}:\n    image: ${DB_IMAGES.mongo}\n    restart: unless-stopped\n    environment:\n      MONGO_INITDB_ROOT_USERNAME: ${safe}\n      MONGO_INITDB_ROOT_PASSWORD: ${appPw}\n      MONGO_INITDB_DATABASE: ${safe}\n    volumes:\n      - ${vol}:/data/db`,
-    vol, url: `mongodb://${safe}:${appPw}@${svc}:27017/${safe}`,
+    vol, url: `mongodb://${safe}:${appPw}@${svc}:27017/${safe}?authSource=admin`,
     info: { host: svc, port: 27017, name: safe, user: safe, pass: appPw }
   };
   if (db === 'redis') return {

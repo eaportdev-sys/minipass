@@ -245,11 +245,91 @@ function secureDefault(key, value) {
   return crypto.randomBytes(32).toString('base64url');
 }
 
-// Repositories frequently prefix their database variables (DEV_DB_NAME,
-// APP_DATABASE_USER, etc.). When the semantic suffix is unambiguous, map it to
-// the panel-managed local database credentials rather than retaining example
-// placeholders. Host is mapped only when the repository actually declares a
-// host variable; source code that omits host configuration still needs fixing.
+// Resolve a referenced variable to a managed database value from evidence,
+// never from a hardcoded alias list. Two evidence kinds, in order:
+// 1. The repository's own example value parses as a database URL of an engine
+//    the panel manages -> the managed URL for that engine (but never hijack a
+//    genuinely external host: only empty or local-development values qualify).
+// 2. The variable name carries an engine token plus a role suffix
+//    (HOST/PORT/USER/PASSWORD/NAME/URL/...) -> the matching managed part.
+// Anything else returns null so the unset warning stays honest.
+const DB_ENGINES = [
+  { engine: 'mariadb', tokens: ['MARIADB'] },
+  { engine: 'mysql', tokens: ['MYSQL'] },
+  { engine: 'postgres', tokens: ['POSTGRES', 'POSTGRESQL', 'PG'] },
+  { engine: 'mongo', tokens: ['MONGO', 'MONGODB', 'MONGOOSE', 'ATLAS'] },
+  { engine: 'redis', tokens: ['REDIS'] }
+];
+const DB_URL_SCHEMES = { mongodb: 'mongo', 'mongodb+srv': 'mongo', mysql: 'mysql', mariadb: 'mariadb', postgres: 'postgres', postgresql: 'postgres', redis: 'redis' };
+const DB_ROLE_SUFFIXES = {
+  url: ['URL', 'URI', 'DSN', 'CONNECTION_STRING', 'CONNECTION_URL'],
+  host: ['HOST', 'HOSTNAME', 'SERVER', 'ADDRESS'],
+  port: ['PORT'],
+  user: ['USER', 'USERNAME', 'UID'],
+  pass: ['PASSWORD', 'PASS', 'PASSWD', 'PWD'],
+  name: ['NAME', 'DATABASE', 'DBNAME']
+};
+function engineOfKey(key) {
+  const segments = String(key || '').toUpperCase().split('_').filter(Boolean);
+  if (segments.length < 2) return null;
+  for (const { engine, tokens } of DB_ENGINES) {
+    if (segments.some(s => tokens.includes(s))) return engine;
+  }
+  return null;
+}
+function roleOfKey(key) {
+  const segments = String(key || '').toUpperCase().split('_').filter(Boolean);
+  if (!segments.length) return null;
+  const last = segments[segments.length - 1];
+  for (const [role, suffixes] of Object.entries(DB_ROLE_SUFFIXES)) {
+    if (suffixes.includes(last)) return role;
+  }
+  return null;
+}
+function isLocalUrl(value) {
+  try {
+    const u = new URL(String(value || '').trim());
+    return ['localhost', '127.0.0.1', '::1', ''].includes(u.hostname);
+  } catch { return true; }
+}
+function managedParts(engine, values) {
+  const v = name => {
+    const val = values && values[name];
+    return val == null ? null : String(val);
+  };
+  if (engine === 'mongo') return { url: v('MONGO_URL'), host: v('MONGO_HOST'), port: v('MONGO_PORT'), user: v('MONGO_USER'), pass: v('MONGO_PASSWORD'), name: v('MONGO_DB') };
+  if (engine === 'redis') return { url: v('REDIS_URL'), host: v('REDIS_HOST'), port: v('REDIS_PORT'), pass: v('REDIS_PASSWORD') };
+  const url = v('DATABASE_URL');
+  let urlEngine = null;
+  try { urlEngine = DB_URL_SCHEMES[new URL(url).protocol.replace(/:$/, '')] || null; } catch {}
+  const prefix = { mysql: 'MYSQL', mariadb: 'MARIADB', postgres: 'POSTGRES' }[engine];
+  const single = v('DB_HOST') && !v(`${prefix}_HOST`);
+  const at = part => v(`${prefix}_${part}`) || (single ? v(`DB_${part}`) : null);
+  return {
+    url: urlEngine === engine ? url : null,
+    host: at('HOST'), port: at('PORT'), user: at('USER'), pass: at('PASSWORD'), name: at('DB') || at('NAME')
+  };
+}
+function databaseVarDefault(key, exampleValue, runtimeValues) {
+  const engine = engineOfKey(key);
+  if (!engine) return null;
+  const parts = managedParts(engine, runtimeValues);
+  if (!parts) return null;
+  const example = exampleValue == null ? '' : String(exampleValue).trim();
+  if (example) {
+    let schemeEngine = null;
+    try { schemeEngine = DB_URL_SCHEMES[new URL(example).protocol.replace(/:$/, '')] || null; } catch {}
+    if (schemeEngine) {
+      // A URL-shaped note names its engine explicitly. Honor it only when it
+      // agrees with the variable, and never repoint a real external host.
+      if (schemeEngine !== engine || !isLocalUrl(example)) return null;
+      return parts.url;
+    }
+  }
+  const role = roleOfKey(key);
+  if (!role) return null;
+  return parts[role] || null;
+}
 function databaseAlias(key, runtimeValues) {
   const name = String(key || '').toUpperCase();
   const values = runtimeValues && typeof runtimeValues === 'object' ? runtimeValues : {};
@@ -307,4 +387,4 @@ function correctedValue(key, current, resolved, origins) {
   return originals.includes(value) && resolved.values[key] !== value ? resolved.values[key] : null;
 }
 
-module.exports = { BUILT_INS, parseExample, exampleFiles, exampleDefaults, snapshotDefaults, publishedOrigins, pointsAtFrontend, secureDefault, databaseAlias, resolvedDefaults, correctedValue };
+module.exports = { BUILT_INS, parseExample, exampleFiles, exampleDefaults, snapshotDefaults, publishedOrigins, pointsAtFrontend, secureDefault, databaseAlias, databaseVarDefault, resolvedDefaults, correctedValue };

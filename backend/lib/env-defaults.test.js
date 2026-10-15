@@ -76,6 +76,18 @@ try {
   assert.equal(result.values.DEV_DB_PSW, 'generated-password');
   assert.equal(envDefaults.databaseAlias('DATABASE_HOST', runtime), 'db');
   assert.equal(envDefaults.databaseAlias('DB_NAME', runtime), null);
+  // Evidence-based database variables: any name works, nothing hardcoded.
+  const managed = { MONGO_URL: 'mongodb://u:p@db-mongo:27017/app?authSource=admin', MONGO_HOST: 'db-mongo', MONGO_PORT: '27017', MONGO_USER: 'u', MONGO_PASSWORD: 'p', MONGO_DB: 'app', REDIS_URL: 'redis://:p@db-redis:6379', DATABASE_URL: 'mysql://u:p@db:3306/app', DB_HOST: 'db', DB_PORT: '3306', DB_NAME: 'app', DB_USER: 'u', DB_PASSWORD: 'p' };
+  assert.equal(envDefaults.databaseVarDefault('MONGODB_URI', '', managed), managed.MONGO_URL, 'driver-style URL resolves to the managed URL');
+  assert.equal(envDefaults.databaseVarDefault('ATLAS_URI', '', managed), managed.MONGO_URL);
+  assert.equal(envDefaults.databaseVarDefault('ACME_MONGO_DSN', '', managed), managed.MONGO_URL, 'unknown names resolve by engine token plus role');
+  assert.equal(envDefaults.databaseVarDefault('MONGO_PASSWORD', '', managed), 'p');
+  assert.equal(envDefaults.databaseVarDefault('MONGODB_URI', 'mongodb://localhost:27017/dev', managed), managed.MONGO_URL, 'local example URLs map to managed');
+  assert.equal(envDefaults.databaseVarDefault('MONGODB_URI', 'mongodb+srv://cluster0.example.net/prod', managed), null, 'genuinely external hosts are never hijacked');
+  assert.equal(envDefaults.databaseVarDefault('MONGO_URL', 'postgres://db:5432/x', managed), null, 'cross-engine mismatch stays unresolved');
+  assert.equal(envDefaults.databaseVarDefault('CI', '', managed), null, 'non-database names stay unresolved');
+  assert.equal(envDefaults.databaseVarDefault('SESSION_SECRET', 'change-me', managed), null, 'secrets are not database values');
+  assert.equal(envDefaults.databaseVarDefault('MYSQL_PASSWORD', '', managed), 'p', 'relational parts fall back to shared DB_* values');
   assert.equal(envDefaults.correctedValue('CORS_ORIGIN', 'http://localhost:5173,https://custom.example', result, origins), origins.frontend + ',https://custom.example');
   assert.equal(envDefaults.correctedValue('JWT_SECRET', 'change-this-to-a-random-secret', result, origins), result.values.JWT_SECRET);
   assert.equal(envDefaults.correctedValue('API_SECRET', '', result, origins), 'actual-local-secret');

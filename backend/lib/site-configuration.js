@@ -40,6 +40,56 @@ function dbAliasLines(block) {
   return [`DB_HOST=${block.info.host}`, `DB_PORT=${block.info.port}`, `DB_NAME=${block.info.name}`, `DB_USER=${block.info.user}`, `DB_PASSWORD=${block.info.pass}`, `DATABASE_URL=${block.url}`];
 }
 
+// Fill code-referenced database variables from evidence instead of warning.
+// For every variable the code reads that has no value, the repository's own
+// example values plus the managed database records decide: same-engine local
+// URLs and engine+role names resolve to managed values. Nothing is invented
+// and external hosts are never hijacked; unresolvable names keep the honest
+// unset warning.
+function fillDatabaseVars(dir, meta) {
+  let refs = [];
+  try { refs = require('./env-needs').scanEnvNeeds(dir); } catch { return []; }
+  if (!refs.length) return [];
+  const { exampleDefaults, databaseVarDefault } = require('./env-defaults');
+  let examples = {};
+  try { examples = exampleDefaults(path.join(dir, 'code'), meta.services); } catch {}
+  let current = [];
+  try { current = readEnvVars(path.join(dir, '.env')); } catch {}
+  const runtime = {};
+  for (const v of current) runtime[v.key] = v.value;
+  const filled = [];
+  for (const key of refs) {
+    const have = Object.prototype.hasOwnProperty.call(runtime, key) ? String(runtime[key] || '') : null;
+    if (have != null && have.trim()) continue;
+    const value = databaseVarDefault(key, examples[key], runtime);
+    if (value == null || !String(value).trim()) continue;
+    filled.push(`${key}=${value}`);
+    runtime[key] = value;
+  }
+  if (!filled.length) return [];
+  // envMergeManaged only appends absent keys; rewrite present-but-empty ones
+  // in place so a referenced key with no value still gets its resolved value.
+  const envPath = path.join(dir, '.env');
+  let envText = '';
+  try { envText = fs.readFileSync(envPath, 'utf8'); } catch {}
+  const pending = [];
+  for (const line of filled) {
+    const k = line.split('=')[0];
+    const re = new RegExp(`^${k}=\\s*$`, 'm');
+    if (re.test(envText)) envText = envText.replace(re, () => line);
+    else pending.push(line);
+  }
+  try { fs.writeFileSync(envPath, envText.replace(/\s*$/, '') + (pending.length ? '\n' + pending.join('\n') : '') + '\n'); } catch {}
+  try {
+    let managed = '';
+    try { managed = fs.readFileSync(path.join(dir, '.env.managed'), 'utf8'); } catch {}
+    const haveManaged = new Set(managed.split('\n').map(s => s.trim()).filter(Boolean));
+    const fresh = filled.map(l => l.split('=')[0]).filter(k => !haveManaged.has(k));
+    if (fresh.length) fs.appendFileSync(path.join(dir, '.env.managed'), fresh.join('\n') + '\n');
+  } catch {}
+  return filled.map(l => l.split('=')[0]);
+}
+
 function attachDatabase(meta, type) {
   type = normDbs(type)[0];
   if (!type) throw new Error('unknown database type');
@@ -289,5 +339,5 @@ function parseEnvFile(p) {
   } catch {}
   return out;
 }
-  return { cleanDomain, envMergeManaged, dbAliasLines, attachDatabase, ensureDatabaseAliases, serviceNameFromSubdir, hostPortsInUse, serviceCandidate, suggestedDefaults, managedKeys, envSetManaged, envDeleteKeys, applyEnvDefaults, parseEnvFile };
+  return { cleanDomain, envMergeManaged, dbAliasLines, attachDatabase, ensureDatabaseAliases, fillDatabaseVars, serviceNameFromSubdir, hostPortsInUse, serviceCandidate, suggestedDefaults, managedKeys, envSetManaged, envDeleteKeys, applyEnvDefaults, parseEnvFile };
 };

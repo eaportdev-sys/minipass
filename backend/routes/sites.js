@@ -8,6 +8,7 @@ module.exports = function register(ctx) {
   const detectRepo = (...args) => ctx.detectRepo(...args);
   const deploy = (...args) => ctx.deploy(...args);
   const ensureDatabaseAliases = (...args) => ctx.ensureDatabaseAliases(...args);
+  const fillDatabaseVars = (...args) => ctx.fillDatabaseVars(...args);
   const envSetManaged = (...args) => ctx.envSetManaged(...args);
   const lifecycleError = (...args) => ctx.lifecycleError(...args);
   const load = (...args) => ctx.load(...args);
@@ -170,9 +171,10 @@ app.post('/api/apps', async (req, res) => {
         }
       }
       const healed = ensureDatabaseAliases(meta);
-      if (autoDbs.length || healed.length) {
+      const filled = fillDatabaseVars(created.dir, meta);
+      if (autoDbs.length || healed.length || filled.length) {
         svc.renderProject({ dir: created.dir, templatesDir: TEMPLATES_DIR, meta });
-        panelLog.logEvent({ level: 'info', area: 'create', site: id, message: `database wiring detected: ${autoDbs.join(', ') || 'aliases'}` });
+        panelLog.logEvent({ level: 'info', area: 'create', site: id, message: `database wiring detected: ${autoDbs.join(', ') || 'aliases'}${filled.length ? '; code-referenced values filled (' + filled.join(', ') + ')' : ''}` });
       }
     } catch (e) { console.error(id, 'auto database detection:', e.message); }
     try { fs.unlinkSync(path.join(created.dir, '.pending-create.json')); } catch {}
