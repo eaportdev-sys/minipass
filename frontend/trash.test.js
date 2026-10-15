@@ -10,7 +10,7 @@ let leftSite = false, refreshed = 0, prompt;
 const context = vm.createContext({
   currentApp: 'testsite',
   websiteApps: [{ id: 'testsite', name: 'My website' }], trashApps: [],
-  deletingSiteIds: new Set(),
+  deletingSiteIds: new Set(), deletingTrashIds: new Set(),
   document: { getElementById: () => box },
   safeHtml: text => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
   dbLabel: () => 'postgres',
@@ -33,6 +33,10 @@ async function main() {
   assert(box.innerHTML.includes('retry cleanup'));
   assert(box.innerHTML.includes('disabled>restore'));
   assert(box.innerHTML.includes('&lt;failed cleanup&gt;') && !box.innerHTML.includes('<failed cleanup>'));
+  context.deletingTrashIds.add('testsite');
+  await run('loadTrash()');
+  assert(!box.innerHTML.includes('testsite') && box.innerHTML.includes('Trash is empty'), 'rows being destroyed stay hidden on reload');
+  context.deletingTrashIds.delete('testsite');
   context.fetch = async (url, opts) => ({ json: async () => opts ? { ok: false, destroyed: ['one'], error: 'one cleanup retained', failed: [{ id: 'two' }] } : [{ id: 'two' }] });
   await run('emptyTrash()');
   assert.equal(prompt.requireText, 'empty');

@@ -143,10 +143,12 @@ async function destroySite({ record, trashRoot, images, protectedImages = [], sk
     const containers = lines(await cli.docker(['ps', '-a', '--quiet', '--no-trunc', '--filter', filter]));
     if (containers.some(id => !/^[a-f0-9]{12,64}$/.test(id))) throw new Error('invalid container id');
     if (containers.length) await cli.docker(['container', 'rm', '--force', ...containers]);
+    // One daemon call per resource kind: per-name removal made bulk destroys
+    // pay a round trip for every volume and network on a loaded host.
     for (const kind of ['volume', 'network']) {
       const resources = lines(await cli.docker([kind, 'ls', '--quiet', '--filter', filter]));
       if (resources.some(name => !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name))) throw new Error('invalid resource name');
-      for (const name of resources) await cli.docker([kind, 'rm', name]);
+      if (resources.length) await cli.docker([kind, 'rm', ...resources]);
     }
   });
   let removedImages = 0, sharedImages = 0;
@@ -159,20 +161,28 @@ async function destroySite({ record, trashRoot, images, protectedImages = [], sk
       seen.add(image.id);
       return 1 + depth(byId.get(image.parent), seen);
     };
+    // One daemon listing for the whole loop: per-image full listings made
+    // multi-image destroys pay the slowest query N times on a loaded host.
+    // Removals update the set; external deletes surface as tolerated misses.
+    const available = new Set(lines(await cli.docker(['image', 'ls', '--all', '--no-trunc', '--quiet'])));
+    const gone = err => /no such image/i.test(String((err && err.message) || err));
     for (const image of [...inventory].sort((a, b) => depth(b) - depth(a))) {
       if (!validImage(image.id) || image.project !== record.id) throw new Error('invalid inventory');
       // Recheck existence after earlier removals and any external Docker work.
-      const available = new Set(lines(await cli.docker(['image', 'ls', '--all', '--no-trunc', '--quiet'])));
       if (!available.has(image.id)) continue;
       const current = await inspectImage(cli, image.id);
       const tags = current.tags || [];
       const mine = new Set(image.tags || []);
       const foreign = tags.filter(t => !mine.has(t));
       // An explicit external alias/base image is shared; never delete its ID.
-      for (const tag of tags.filter(t => mine.has(t) && !protect.has(t))) await cli.docker(['image', 'rm', '--no-prune', tag]);
+      for (const tag of tags.filter(t => mine.has(t) && !protect.has(t))) {
+        try { await cli.docker(['image', 'rm', '--no-prune', tag]); }
+        catch (e) { if (!gone(e)) throw e; }
+      }
       if (foreign.length || tags.some(t => protect.has(t))) { sharedImages++; continue; }
-      const stillAvailable = new Set(lines(await cli.docker(['image', 'ls', '--all', '--no-trunc', '--quiet'])));
-      if (stillAvailable.has(image.id)) await cli.docker(['image', 'rm', '--no-prune', image.id]);
+      try { await cli.docker(['image', 'rm', '--no-prune', image.id]); }
+      catch (e) { if (!gone(e)) throw e; }
+      available.delete(image.id);
       removedImages++;
     }
   });

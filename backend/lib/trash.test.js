@@ -64,7 +64,7 @@ function fakeDocker() {
     if (fake.fail === 'image' || containers.some(c => c.image === id)) throw new Error('image in use');
     if ([...images.values()].some(i => i.parent === id)) throw new Error('image has dependent children');
     if (ref === id) images.delete(id);
-    else { info.tags = info.tags.filter(t => t !== ref); if (!info.tags.length) images.delete(id); }
+    else info.tags = info.tags.filter(t => t !== ref);
     return '';
   } };
   return fake;

@@ -17,6 +17,9 @@ let trashApps = [];
 // Sites with a delete request in flight: the card stays gone even when a list
 // refresh or status poll lands before the server finishes compose down.
 let deletingSiteIds = new Set();
+// Trash rows being destroyed: same treatment - slow cleanups must not
+// flicker back when trash is reloaded mid-operation.
+let deletingTrashIds = new Set();
 function siteName(site) { return (site && (site.name || site.id)) || ''; }
 function siteById(id) { return websiteApps.find(a => a.id === id) || trashApps.find(a => a.id === id) || { id }; }
 let websiteVisibleApps = [];

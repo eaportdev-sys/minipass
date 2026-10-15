@@ -176,7 +176,8 @@ async function loadTrash() {
     trashApps = list;
     if (count) { count.style.display = list.length ? '' : 'none'; count.textContent = list.length; }
     if (!box) return;
-    box.innerHTML = list.length ? list.map(t => {
+    const visible = list.filter(t => !deletingTrashIds.has(t.id));
+    box.innerHTML = visible.length ? visible.map(t => {
       const when = (t.deletedAt ? new Date(t.deletedAt).toISOString().replace('T', ' ').slice(0, 19) : '?');
       return `<div class="card appcard"><div class="appcard-layout"><div class="appcard-main">` +
         `<div class="appcard-title"><div><h3>${safeHtml(siteName(t))}</h3><div class="meta">ID: ${safeHtml(t.id)}</div><div class="badges"><span class="badge type">${safeHtml(t.type || '?')}</span><span class="badge">db: ${safeHtml(dbLabel(t))}</span><span class="badge">${safeHtml(trashLeft(t.msLeft))}</span></div></div></div>` +
@@ -232,13 +233,18 @@ async function emptyTrash() {
   });
   if (!ok) return;
   trashProgress(`Destroying ${count} site${count === 1 ? '' : 's'}… this can take minutes, please wait.`);
+  // Hide every row up front: bulk cleanup runs for minutes and a trash reload
+  // mid-operation must not resurrect rows already being destroyed.
+  let bulkIds = [];
+  try { bulkIds = (await (await fetch('/api/trash')).json()).map(t => t.id); } catch {}
+  bulkIds.forEach(id => deletingTrashIds.add(id));
   try {
     const r = await (await fetch('/api/trash', { method: 'DELETE' })).json();
     const base = r.ok ? `trash emptied (${(r.destroyed || []).length} destroyed)` : `${(r.destroyed || []).length} destroyed; ${r.error || 'cleanup failed'}`;
     toast(r.cacheWarning ? `${base} (build-cache prune: ${r.cacheWarning})` : base, !!r.ok);
     loadTrash(); refresh();
   } catch (e) { toast('empty failed: ' + e.message, false); }
-  finally { trashProgress(null); }
+  finally { bulkIds.forEach(id => deletingTrashIds.delete(id)); loadTrash(); trashProgress(null); }
 }
 async function destroyTrash(id) {
   const name = siteName(siteById(id));
@@ -249,12 +255,13 @@ async function destroyTrash(id) {
   });
   if (!ok) return;
   trashProgress('Destroying ' + id + '… this can take a while, please wait.');
+  deletingTrashIds.add(id);
   try {
     const r = await (await fetch('/api/trash/' + id, { method: 'DELETE' })).json();
     toast(r.ok ? (id + ' destroyed') : (r.error || 'failed'), !!r.ok);
     loadTrash(); refresh();
   } catch (e) { toast('destroy failed: ' + e.message, false); }
-  finally { trashProgress(null); }
+  finally { deletingTrashIds.delete(id); loadTrash(); trashProgress(null); }
 }
 async function showLogs() {
   if (!currentApp) { logsEl.textContent = 'open a website first'; return; }
