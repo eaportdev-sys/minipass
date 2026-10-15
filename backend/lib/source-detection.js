@@ -188,14 +188,31 @@ async function detectRepo(repo, { login, token, branch } = {}) {
   const tree = (t.tree || []).filter(e => e.type === 'blob').map(e => e.path);
   let pkg = null;
   const pkgPath = tree.filter(p => /(^|\/)package\.json$/.test(p)).sort((a, b) => a.length - b.length)[0];
+  // An unreadable manifest (rate limit, network) is not evidence of absence:
+  // keep the lenient read. An empty/broken manifest that DID arrive carries
+  // no signal and must not claim a runtime by filename alone.
+  let pkgUnknown = false;
   if (pkgPath) {
+    let raw = null;
     try {
       const blob = await get(`/repos/${m[1]}/${m[2]}/contents/${pkgPath}?ref=${ref}`);
-      if (blob && blob.content) pkg = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8'));
-    } catch {}
+      if (blob && blob.content) raw = Buffer.from(blob.content, 'base64').toString('utf8');
+    } catch { pkgUnknown = true; }
+    if (raw != null && raw !== '') {
+      try { pkg = JSON.parse(raw); } catch { /* broken manifest: no signal */ }
+    }
+    if (raw == null && !pkgUnknown) pkgUnknown = true;
   }
   const { decideType, detectPackageManager, expandWorkspaces, matchWorkspaces, findBackends, findFrontends, findRunnableRoot, sqlDatabaseHints, prismaDatabaseHints, databaseConfigHints } = require('./detect');
   const out = decideType(tree, pkg);
+  if (!out.type && pkgUnknown) {
+    // The manifest exists but its content never arrived (rate limit, network).
+    // Restore the historical lenient read instead of reporting nothing; the
+    // reason says to re-run detection once reads work again.
+    out.type = 'node';
+    out.detected = 'node';
+    out.reason = `${pkgPath} exists but could not be read (rate limit or network) - assuming Node until the manifest loads; re-run detection`;
+  }
   out.packageManager = detectPackageManager({ pkg, files: tree }).manager;
   Object.assign(out, source);
   out.repositorySize = quotas.repositorySize(t);
