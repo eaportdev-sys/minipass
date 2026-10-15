@@ -148,7 +148,9 @@ async function rmApp(id) {
     requireText: name, confirmLabel: 'Move to trash', danger: true
   });
   if (!ok) return;
-  // optimistic: gone from screen instantly, restored on failure
+  // optimistic: gone from screen instantly and kept gone while the slow
+  // server-side stop/move runs; restored only if the delete itself fails
+  deletingSiteIds.add(id);
   const card = document.getElementById('card-' + id);
   if (card) card.remove();
   toast('moving ' + id + ' to trash…');
@@ -158,7 +160,8 @@ async function rmApp(id) {
     toast(r.trashed ? (id + ' in trash — restorable for 48h') : (id + ' deleted'), true);
     if (id === currentApp) backToSites(false); else refresh();
     loadTrash();
-  } catch (e) { toast('delete failed: ' + e.message, false); refresh(); }
+  } catch (e) { toast('delete failed: ' + e.message, false); }
+  finally { deletingSiteIds.delete(id); refresh(); }
 }
 function trashLeft(ms) {
   if (ms == null) return 'time unknown';

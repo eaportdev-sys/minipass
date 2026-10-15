@@ -14,6 +14,9 @@ window.fetch = (...a) => _fetch(...a).then(r => {
 const dbPopupSlots = new Map();
 let websiteApps = [];
 let trashApps = [];
+// Sites with a delete request in flight: the card stays gone even when a list
+// refresh or status poll lands before the server finishes compose down.
+let deletingSiteIds = new Set();
 function siteName(site) { return (site && (site.name || site.id)) || ''; }
 function siteById(id) { return websiteApps.find(a => a.id === id) || trashApps.find(a => a.id === id) || { id }; }
 let websiteVisibleApps = [];

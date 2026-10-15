@@ -10,6 +10,7 @@ let leftSite = false, refreshed = 0, prompt;
 const context = vm.createContext({
   currentApp: 'testsite',
   websiteApps: [{ id: 'testsite', name: 'My website' }], trashApps: [],
+  deletingSiteIds: new Set(),
   document: { getElementById: () => box },
   safeHtml: text => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
   dbLabel: () => 'postgres',
@@ -26,6 +27,7 @@ async function main() {
   assert(prompt.body.includes('Site ID: testsite'));
   assert(!leftSite, 'failed soft delete does not navigate away as if successful');
   assert(refreshed && messages.at(-1).ok === false);
+  assert.equal(context.deletingSiteIds.size, 0, 'failed delete releases the hiding set so refresh shows the truth');
   context.fetch = async () => ({ json: async () => [{ id: 'testsite', type: 'node', deletedAt: Date.now(), msLeft: 0, cleanupStartedAt: Date.now(), cleanupError: '<failed cleanup>' }] });
   await run('loadTrash()');
   assert(box.innerHTML.includes('retry cleanup'));

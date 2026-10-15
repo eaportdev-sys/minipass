@@ -2,7 +2,7 @@ async function refresh() {
   const seq = ++appsRefreshSeq;
   const apps = await (await fetch('/api/apps')).json();
   if (seq !== appsRefreshSeq || !Array.isArray(apps)) return apps;
-  websiteApps = apps;
+  websiteApps = apps.filter(a => !deletingSiteIds.has(a.id));
   const ids = new Set(apps.map(a => a.id));
   for (const id of websiteStates.keys()) if (!ids.has(id)) { websiteStates.delete(id); websiteStateSeq.delete(id); }
   renderWebsites();

@@ -56,8 +56,12 @@ app.delete('/api/apps/:id', async (req, res) => {
       const meta = load().apps.find(a => a.id === req.params.id);
       if (!meta) throw lifecycleError('unknown app', 404);
       const dir = appDir(APPS_DIR, meta.id);
-      const images = await trashLib.rememberImages({ id: meta.id, dir, record: meta, ...trashOptions() });
-      await trashLib.stopSiteTools({ id: meta.id, ...trashOptions() });
+      // Image inventory and admin-tool shutdown are independent: run together
+      // so a loaded Docker daemon is only waited on once, not twice in a row.
+      const [images] = await Promise.all([
+        trashLib.rememberImages({ id: meta.id, dir, record: meta, ...trashOptions() }),
+        trashLib.stopSiteTools({ id: meta.id, ...trashOptions() })
+      ]);
       await sh(`${COMPOSE_BIN} -p ${meta.id} down`, dir);
       let name = meta.id, n = 0;
       while (fs.existsSync(path.join(TRASH_DIR, name))) { n++; name = `${meta.id}-${Date.now()}-${n}`; }
